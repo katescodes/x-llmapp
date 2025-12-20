@@ -197,6 +197,54 @@ def check_platform_no_services_import():
     return violations, temp_allows_used, legacy_allows_used
 
 
+def check_works_tender_no_services_import():
+    """检查 works/tender/** 不应导入 app.services.semantic_outline 或 tender 相关旧 services"""
+    works_tender_dir = Path(__file__).parent.parent.parent / "backend" / "app" / "works" / "tender"
+    
+    # 如果目录不存在（旧路径是 apps/tender），尝试旧路径
+    if not works_tender_dir.exists():
+        works_tender_dir = Path(__file__).parent.parent.parent / "backend" / "app" / "apps" / "tender"
+    
+    if not works_tender_dir.exists():
+        # 如果都不存在，跳过检查
+        return []
+    
+    violations = []
+    
+    # 禁止的 services 导入（tender 专用能力不应回流到 services）
+    forbidden_services = [
+        "app.services.semantic_outline",  # 已迁移到 works/tender/outline
+        "app.services.tender",  # tender业务逻辑不应在services层
+    ]
+    
+    # 扫描所有 Python 文件
+    for py_file in works_tender_dir.rglob("*.py"):
+        if "__pycache__" in str(py_file):
+            continue
+        
+        content = py_file.read_text(encoding='utf-8')
+        rel_path = py_file.relative_to(works_tender_dir.parent.parent.parent)
+        
+        # 查找所有禁止的导入
+        for forbidden in forbidden_services:
+            pattern = rf'from\s+{re.escape(forbidden)}\s+import|import\s+{re.escape(forbidden)}'
+            matches = list(re.finditer(pattern, content))
+            
+            for match in matches:
+                line_start = content.rfind('\n', 0, match.start()) + 1
+                line_end = content.find('\n', match.end())
+                if line_end == -1:
+                    line_end = len(content)
+                line = content[line_start:line_end]
+                
+                violations.append(
+                    f"{rel_path}: works/tender/ 不应导入 {forbidden}（tender专用能力已收口到works/tender）\n"
+                    f"    违规行: {line.strip()}"
+                )
+    
+    return violations
+
+
 def main():
     print("=" * 60)
     print("  Platform/Work 边界检查 (Step 1)")
@@ -241,6 +289,16 @@ def main():
     else:
         print(f"  ✗ FAIL: 发现 {len(platform_violations)} 个platform违规")
         all_violations.extend(platform_violations)
+    print()
+    
+    # 检查4: works/tender/** 不应导入旧services（tender专用能力收口）
+    print("检查4: works/tender/ 不应导入旧services（tender专用能力收口）...")
+    works_tender_violations = check_works_tender_no_services_import()
+    if not works_tender_violations:
+        print("  ✓ PASS: works/tender/ 未导入旧services")
+    else:
+        print(f"  ✗ FAIL: 发现 {len(works_tender_violations)} 个works/tender违规")
+        all_violations.extend(works_tender_violations)
     print()
     
     # 汇总结果
