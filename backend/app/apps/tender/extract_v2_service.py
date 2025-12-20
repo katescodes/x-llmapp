@@ -63,13 +63,22 @@ class ExtractV2Service:
             embedding_provider=embedding_provider,
         )
         
+        # 调试日志：查看实际返回的数据结构
         logger.info(
             f"ExtractV2: extract_project_info done "
             f"evidence={len(result.evidence_chunk_ids)} "
-            f"tech_params={len(result.data.get('technicalParameters', []))} "
-            f"biz_terms={len(result.data.get('businessTerms', []))} "
-            f"scoring_items={len(result.data.get('scoringCriteria', {}).get('items', []))}"
+            f"data_keys={list(result.data.keys()) if isinstance(result.data, dict) else 'NOT_DICT'} "
+            f"data_type={type(result.data).__name__} "
+            f"data_empty={not bool(result.data)}"
         )
+        
+        # 如果 data 是空的，记录警告
+        if not result.data or (isinstance(result.data, dict) and not result.data):
+            logger.warning(
+                f"ExtractV2: extract_project_info returned EMPTY data! "
+                f"project_id={project_id} "
+                f"result.data={result.data}"
+            )
         
         # 4. 返回结果（保持接口兼容）
         return {

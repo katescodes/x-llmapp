@@ -186,7 +186,10 @@ def fetch_project_info(token: str, project_id: str) -> Dict[str, Any]:
         timeout=10
     )
     resp.raise_for_status()
-    return resp.json()
+    result = resp.json()
+    # API 返回的是 {project_id, data_json, evidence_chunk_ids, updated_at}
+    # 我们需要的是 data_json 里面的内容
+    return result.get("data_json", {}) if isinstance(result, dict) else {}
 
 
 def fetch_risks(token: str, project_id: str) -> List[Dict[str, Any]]:

@@ -957,6 +957,17 @@ class TenderService:
                     data = v2_result.get("data") or {}
                     eids = v2_result.get("evidence_chunk_ids") or []
                     trace = v2_result.get("retrieval_trace") or {}
+                    
+                    # A3纠偏：确保四大板块都存在（契约要求）
+                    for key in ['base', 'technical_parameters', 'business_terms', 'scoring_criteria']:
+                        if key not in data:
+                            if key == 'base':
+                                data[key] = {}  # base 是对象
+                            elif key == 'scoring_criteria':
+                                data[key] = {"evaluationMethod": "", "items": []}  # scoring_criteria 是对象
+                            else:
+                                data[key] = []  # 其他是数组
+                    
                     obj = {"data": data, "evidence_chunk_ids": eids}
                     v2_success = True
                     

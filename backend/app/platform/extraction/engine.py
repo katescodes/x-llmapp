@@ -55,7 +55,9 @@ class ExtractionEngine:
         trace_enabled = os.getenv("EXTRACT_TRACE_ENABLED", "true").lower() in ("true", "1", "yes")
         mode = os.getenv("EXTRACT_MODE", "unknown")
         
-        logger.info(f"[ExtractionEngine] START project_id={project_id} run_id={run_id} mode={mode}")
+        # 使用 print 确保能看到输出
+        print(f"[DEBUG ExtractionEngine] START project_id={project_id} llm_type={type(llm).__name__ if llm else 'None'} llm_is_none={llm is None}")
+        logger.info(f"[ExtractionEngine] START project_id={project_id} run_id={run_id} mode={mode} llm={type(llm).__name__ if llm else 'None'}")
         overall_start = time.time()
         
         # 1. 执行检索
@@ -107,7 +109,12 @@ class ExtractionEngine:
         logger.info(f"[ExtractionEngine] BEFORE_LLM project_id={project_id} run_id={run_id} prompt_len={prompt_len} ctx_len={ctx_len}")
         
         llm_start = time.time()
-        out_text = await call_llm(messages, llm, model_id, temperature=spec.temperature)
+        print(f"[DEBUG] About to call LLM: llm={llm} llm_type={type(llm).__name__ if llm else 'None'}")
+        # 确保 max_tokens 足够大（至少 4096）
+        out_text = await call_llm(messages, llm, model_id, temperature=spec.temperature, max_tokens=4096)
+        print(f"[DEBUG] LLM returned: out_len={len(out_text) if out_text else 0}")
+        if out_text:
+            print(f"[DEBUG] LLM output preview: {out_text[:200]}")
         llm_ms = int((time.time() - llm_start) * 1000)
         out_len = len(out_text) if out_text else 0
         logger.info(f"[ExtractionEngine] AFTER_LLM project_id={project_id} run_id={run_id} ms={llm_ms} out_len={out_len}")
@@ -116,12 +123,16 @@ class ExtractionEngine:
         parse_start = time.time()
         try:
             obj = extract_json(out_text)
+            logger.info(f"[ExtractionEngine] JSON_PARSED project_id={project_id} obj_type={type(obj).__name__} obj_keys={list(obj.keys()) if isinstance(obj, dict) else 'NOT_DICT'}")
         except Exception as e:
             logger.warning(f"ExtractionEngine: extract_json failed, trying repair: {e}")
+            logger.warning(f"  out_text preview: {out_text[:500] if out_text else 'EMPTY'}")
             try:
                 obj = repair_json(out_text)
+                logger.info(f"[ExtractionEngine] JSON_REPAIRED project_id={project_id} obj_type={type(obj).__name__}")
             except Exception as e2:
                 logger.error(f"ExtractionEngine: repair_json also failed: {e2}")
+                logger.error(f"  out_text preview: {out_text[:500] if out_text else 'EMPTY'}")
                 obj = {}
         
         parse_ms = int((time.time() - parse_start) * 1000)
@@ -131,6 +142,13 @@ class ExtractionEngine:
         if isinstance(obj, dict):
             data = obj.get("data") or obj
             evidence_chunk_ids = obj.get("evidence_chunk_ids") or []
+            logger.info(
+                f"[ExtractionEngine] EXTRACT_DATA project_id={project_id} "
+                f"obj_has_data_key={'data' in obj} "
+                f"data_type={type(data).__name__} "
+                f"data_keys={list(data.keys()) if isinstance(data, dict) else 'NOT_DICT'} "
+                f"data_len={len(data) if data else 0}"
+            )
         elif isinstance(obj, list):
             # risks等返回list，每个元素可能有自己的evidence_chunk_ids
             data = obj

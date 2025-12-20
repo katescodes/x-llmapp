@@ -34,7 +34,10 @@ async def call_llm(
         RuntimeError: 如果找不到兼容的 LLM 方法
     """
     if not llm_orchestrator:
+        logger.error("[call_llm] LLM orchestrator is None!")
         raise RuntimeError("LLM orchestrator not available")
+    
+    logger.info(f"[call_llm] Attempting to call LLM: orchestrator_type={type(llm_orchestrator).__name__} model_id={model_id}")
     
     # 尝试常见的方法名
     for method_name in ("chat", "complete", "generate", "run", "ask"):
@@ -42,17 +45,23 @@ async def call_llm(
         if not fn:
             continue
         
+        logger.info(f"[call_llm] Trying method: {method_name}")
+        
         try:
             # 尝试 (messages, model_id, temperature) 签名
             res = fn(messages=messages, model_id=model_id, temperature=temperature, **kwargs)
             
+            logger.info(f"[call_llm] Method {method_name} returned: type={type(res).__name__} len={len(str(res)) if res else 0}")
+            
             # 处理返回值
             if isinstance(res, str):
+                logger.info(f"[call_llm] Returning string of length {len(res)}")
                 return res
             if isinstance(res, dict):
                 # 尝试常见的键
                 for k in ("content", "text", "output"):
                     if k in res and isinstance(res[k], str):
+                        logger.info(f"[call_llm] Found key '{k}' with length {len(res[k])}")
                         return res[k]
                 # OpenAI-like 格式
                 if "choices" in res and res["choices"]:
@@ -62,13 +71,16 @@ async def call_llm(
                         if msg and isinstance(msg, dict):
                             cnt = msg.get("content")
                             if isinstance(cnt, str):
+                                logger.info(f"[call_llm] Found OpenAI format content with length {len(cnt)}")
                                 return cnt
             
+            logger.warning(f"[call_llm] LLM returned unexpected format: {type(res)} keys={list(res.keys()) if isinstance(res, dict) else 'N/A'}")
             raise ValueError(f"LLM returned unexpected format: {type(res)}")
             
         except Exception as e:
-            logger.debug(f"LLM method {method_name} failed: {e}")
+            logger.warning(f"[call_llm] LLM method {method_name} failed: {e}")
             continue
     
+    logger.error(f"[call_llm] No compatible LLM method found! Available methods: {[m for m in dir(llm_orchestrator) if not m.startswith('_')]}")
     raise RuntimeError(f"No compatible LLM method found in orchestrator")
 

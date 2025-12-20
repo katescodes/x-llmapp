@@ -39,6 +39,61 @@ class SimpleLLMOrchestrator:
     
     def chat(self, messages: list, model_id: str = None, **kwargs) -> dict:
         """调用 LLM 生成回答（同步版本）"""
+        # 开发环境：如果 MOCK_LLM=true，返回模拟数据
+        import os
+        if os.getenv("MOCK_LLM", "false").lower() in ("true", "1", "yes"):
+            logger.info("[SimpleLLMOrchestrator] MOCK_LLM enabled, returning mock response")
+            # 返回一个符合 prompt 要求的四板块 JSON
+            mock_response = {
+                "data": {
+                    "base": {
+                        "projectName": "测试项目",
+                        "ownerName": "测试招标人",
+                        "agencyName": "测试代理机构",
+                        "bidDeadline": "2024-12-31",
+                        "bidOpeningTime": "2024-12-31 10:00",
+                        "budget": "100万元",
+                        "maxPrice": "",
+                        "bidBond": "2万元",
+                        "schedule": "60个工作日",
+                        "quality": "合格",
+                        "location": "测试地点",
+                        "contact": "张三 13800138000"
+                    },
+                    "technical_parameters": [
+                        {
+                            "category": "技术参数",
+                            "item": "测试项",
+                            "requirement": "测试要求",
+                            "parameters": [],
+                            "evidence_chunk_ids": ["CHUNK_001"]
+                        }
+                    ],
+                    "business_terms": [
+                        {
+                            "term": "付款方式",
+                            "requirement": "合同签订后支付30%",
+                            "evidence_chunk_ids": ["CHUNK_002"]
+                        }
+                    ],
+                    "scoring_criteria": {
+                        "evaluationMethod": "综合评分法",
+                        "items": [
+                            {
+                                "category": "价格",
+                                "item": "投标报价",
+                                "score": "30",
+                                "rule": "最低价得满分",
+                                "evidence_chunk_ids": ["CHUNK_003"]
+                            }
+                        ]
+                    }
+                },
+                "evidence_chunk_ids": ["CHUNK_001", "CHUNK_002", "CHUNK_003"]
+            }
+            import json
+            return {"choices": [{"message": {"content": json.dumps(mock_response, ensure_ascii=False)}}]}
+        
         try:
             # 获取模型配置
             if model_id:
@@ -81,14 +136,20 @@ class SimpleLLMOrchestrator:
                     "messages": messages,
                     "stream": False,
                 }
-                # 应用覆盖参数
+                # 应用覆盖参数（设置合理的默认值）
                 if kwargs:
                     if "temperature" in kwargs:
                         payload["temperature"] = kwargs["temperature"]
                     if "max_tokens" in kwargs:
                         payload["max_tokens"] = kwargs["max_tokens"]
+                    else:
+                        # 默认 4096 以支持长输出
+                        payload["max_tokens"] = 4096
                     if "top_p" in kwargs:
                         payload["top_p"] = kwargs["top_p"]
+                else:
+                    # 没有 kwargs 时也设置默认值
+                    payload["max_tokens"] = 4096
             
             # 准备请求头
             headers = {"Content-Type": "application/json"}
