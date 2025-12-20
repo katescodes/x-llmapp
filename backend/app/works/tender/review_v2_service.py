@@ -1,6 +1,6 @@
 """
-新审核服务 (v2) - Step 8
-基于新检索器的投标文件审核
+新审核服务 (v2) - 配置化驱动
+基于新检索器+spec+prompt的投标文件审核，带MUST_HIT兜底
 """
 import json
 import logging
@@ -10,6 +10,10 @@ from psycopg_pool import ConnectionPool
 
 from app.platform.retrieval.facade import RetrievalFacade
 from app.services.embedding_provider_store import get_embedding_store
+from app.works.tender.extraction_specs.review_v2 import (
+    build_review_spec,
+    get_must_hit_rules,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,39 +55,15 @@ def _extract_json(text: str) -> Any:
 
 
 class ReviewV2Service:
-    """新审核服务 - 使用新检索器"""
-    
-    # 审核提示词（与旧版一致）
-    REVIEW_PROMPT = """你是招投标"投标文件审核员"。你会收到：
-1) 招标文件原文片段（带 CHUNK id）
-2) 投标文件原文片段（带 CHUNK id）
-3) 可选：自定义审核规则文件原文片段（带 CHUNK id，可为空）
-
-请输出严格 JSON 数组：
-[
-  {
-    "dimension": "资格审查",  // 资格审查|报价审查|技术审查|商务审查|工期与质量|文档结构|其他
-    "requirement_text": "招标要求（摘要）",
-    "response_text": "投标响应（摘要）",
-    "result": "pass",  // pass, risk, fail
-    "remark": "原因/建议/缺失点/冲突点",
-    "rigid": false,  // 是否刚性要求
-    "tender_evidence_chunk_ids": ["chunk_xxx"],
-    "bid_evidence_chunk_ids": ["chunk_yyy"]
-  }
-]
-
-规则：
-- 结果含义：pass=明确符合；fail=明确不符合；risk=不确定/缺材料/冲突/需要人工确认
-- 自定义规则文件（如有）与招标要求"叠加"：也要产出对应的审核项（可合并到同维度）
-- evidence_chunk_ids 必须来自上下文 CHUNK id
-- 不要输出除 JSON 以外的任何文字
-"""
+    """新审核服务 - spec+prompt驱动"""
     
     def __init__(self, pool: ConnectionPool, llm_orchestrator: Any = None):
         self.pool = pool
         self.retriever = RetrievalFacade(pool)
         self.llm = llm_orchestrator
+        
+        # 加载spec（queries、prompt、topk等）
+        self.spec = build_review_spec()
     
     async def run_review_v2(
         self,
@@ -95,116 +75,191 @@ class ReviewV2Service:
         run_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        运行审核 (v2)
+        运行审核 (v2) - spec驱动
         
         Returns:
-            List[ReviewItem] - 格式与旧版一致
+            List[ReviewItem] - 格式与旧版一致，但强制包含MUST_HIT规则
         """
         logger.info(f"ReviewV2: run_review start project_id={project_id}")
         
-        # 1. 使用新检索器获取招标文件上下文
+        # 1. 使用spec中的queries和doc_types进行检索
         embedding_provider = get_embedding_store().get_default()
         if not embedding_provider:
             raise ValueError("No embedding provider configured")
         
-        # 检索招标文件相关内容（资格、技术、商务要求）
-        tender_query = "招标要求 资格要求 技术要求 商务要求 评审标准"
-        tender_chunks_objs = await self.retriever.retrieve(
-            query=tender_query,
+        # 合并所有queries为一个检索query（简化版）
+        combined_query = " ".join(self.spec.queries.values())
+        
+        # 检索招标文件+投标文件（spec中的doc_types）
+        all_chunks_objs = await self.retriever.retrieve(
+            query=combined_query,
             project_id=project_id,
-            doc_types=["tender"],
+            doc_types=self.spec.doc_types,  # ["tender", "bid"]
             embedding_provider=embedding_provider,
-            top_k=30,
+            top_k=self.spec.topk,
         )
         
-        if not tender_chunks_objs:
-            logger.warning(f"ReviewV2: no tender chunks found for project_id={project_id}")
-            tender_chunks = []
-        else:
-            tender_chunks = [
-                {
-                    "chunk_id": c.chunk_id,
-                    "text": c.text,
-                    "meta": c.meta
-                }
-                for c in tender_chunks_objs
-            ]
+        # 按doc_type分组
+        tender_chunks = []
+        bid_chunks = []
+        for c in all_chunks_objs:
+            chunk_dict = {
+                "chunk_id": c.chunk_id,
+                "text": c.text,
+                "meta": c.meta
+            }
+            doc_type = c.meta.get("doc_type") if c.meta else None
+            if doc_type == "tender":
+                tender_chunks.append(chunk_dict)
+            elif doc_type == "bid":
+                bid_chunks.append(chunk_dict)
+        
+        logger.info(f"ReviewV2: retrieved {len(tender_chunks)} tender chunks, {len(bid_chunks)} bid chunks")
         
         tender_ctx = _build_marked_context(tender_chunks)
-        
-        # 2. 使用新检索器获取投标文件上下文
-        bid_query = "投标响应 技术方案 商务报价 资格证明"
-        bid_chunks_objs = await self.retriever.retrieve(
-            query=bid_query,
-            project_id=project_id,
-            doc_types=["bid"],
-            embedding_provider=embedding_provider,
-            top_k=30,
-        )
-        
-        if not bid_chunks_objs:
-            logger.warning(f"ReviewV2: no bid chunks found for project_id={project_id}")
-            bid_chunks = []
-        else:
-            bid_chunks = [
-                {
-                    "chunk_id": c.chunk_id,
-                    "text": c.text,
-                    "meta": c.meta
-                }
-                for c in bid_chunks_objs
-            ]
-        
         bid_ctx = _build_marked_context(bid_chunks)
         
-        # 3. 加载自定义规则（如果有）
-        # 注意：这里简化处理，实际应该也使用新检索器
-        # 但由于自定义规则文件较小，暂时保持为空或后续扩展
-        rule_ctx = ""
-        # TODO: 如果需要，可以从 custom_rule 资产中检索
+        # 2. 使用spec中的prompt调用LLM
+        prompt = self.spec.prompt
         
-        # 4. 调用 LLM
-        messages = [
-            {"role": "system", "content": self.REVIEW_PROMPT.strip()},
-            {
-                "role": "user",
-                "content": f"""招标文件原文片段：
-{tender_ctx}
+        # 构建完整的用户消息（prompt + 上下文）
+        user_content = f"""{prompt}
+
+---
+
+招标文件原文片段：
+{tender_ctx or "(无)"}
+
+---
 
 投标文件原文片段：
-{bid_ctx}
-
-自定义审核规则文件原文片段（可为空）：
-{rule_ctx or "(无)"}""",
-            },
+{bid_ctx or "(无)"}
+"""
+        
+        messages = [
+            {"role": "user", "content": user_content},
         ]
         
-        # 使用 model_id 调用 LLM
+        # 调用 LLM
         out_text = await self._call_llm_v2(messages, model_id)
-        arr = _extract_json(out_text)
         
-        if not isinstance(arr, list):
-            raise ValueError("review v2 output not list")
+        # 解析LLM输出
+        try:
+            parsed = _extract_json(out_text)
+            if isinstance(parsed, dict) and "data" in parsed:
+                # 新格式：{"data": {"review_items": [...]}, "evidence_chunk_ids": [...]}
+                review_items = parsed.get("data", {}).get("review_items", [])
+            elif isinstance(parsed, list):
+                # 旧格式：直接是数组（兼容）
+                review_items = parsed
+            else:
+                raise ValueError(f"Unexpected review output format: {type(parsed)}")
+        except Exception as e:
+            logger.error(f"Failed to parse review output: {e}")
+            review_items = []
         
-        # 5. 为所有审核项添加 source 字段
-        for item in arr:
-            if "source" not in item:
-                item["source"] = "compare"
-            
-            # 添加 evidence_spans（基于 meta.page_no）
-            tender_evidence_spans = self._generate_evidence_spans(
-                tender_chunks,
-                item.get("tender_evidence_chunk_ids") or []
-            )
-            bid_evidence_spans = self._generate_evidence_spans(
-                bid_chunks,
-                item.get("bid_evidence_chunk_ids") or []
-            )
-            
-            item["tender_evidence_spans"] = tender_evidence_spans
-            item["bid_evidence_spans"] = bid_evidence_spans
+        # 3. 强制添加MUST_HIT规则（兜底）
+        review_items = self._ensure_must_hit_rules(review_items, tender_chunks, bid_chunks)
+        
+        # 4. 转换为旧格式（tender_review_items表兼容）
+        arr = self._convert_to_legacy_format(review_items, tender_chunks, bid_chunks)
         
         logger.info(f"ReviewV2: run_review done items={len(arr)}")
+        
+        return arr
+    
+    def _ensure_must_hit_rules(
+        self,
+        review_items: List[Dict[str, Any]],
+        tender_chunks: List[Dict[str, Any]],
+        bid_chunks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        确保review_items中包含MUST_HIT规则（兜底）
+        
+        如果LLM已经产出了这些规则，则不重复添加
+        如果LLM没产出，则强制添加
+        """
+        must_hit_rules = get_must_hit_rules()
+        
+        # 检查已存在的rule_id
+        existing_rule_ids = {item.get("rule_id") for item in review_items if item.get("rule_id")}
+        
+        # 添加缺失的MUST_HIT规则
+        for rule in must_hit_rules:
+            if rule["rule_id"] not in existing_rule_ids:
+                # 构造一个最小化的review_item
+                must_hit_item = {
+                    "rule_id": rule["rule_id"],
+                    "title": rule["title"],
+                    "severity": rule["severity"],
+                    "description": rule["description"],
+                    "evidence_chunk_ids": [],  # 兜底规则无具体证据
+                }
+                review_items.append(must_hit_item)
+                logger.info(f"Added MUST_HIT rule: {rule['rule_id']}")
+        
+        return review_items
+    
+    def _convert_to_legacy_format(
+        self,
+        review_items: List[Dict[str, Any]],
+        tender_chunks: List[Dict[str, Any]],
+        bid_chunks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        将新格式的review_items转换为旧格式（tender_review_items表）
+        
+        新格式：{rule_id, title, severity, description, evidence_chunk_ids, suggestion}
+        旧格式：{dimension, requirement_text, response_text, result, remark, rigid, tender_evidence_chunk_ids, bid_evidence_chunk_ids, source, tender_evidence_spans, bid_evidence_spans}
+        """
+        arr = []
+        
+        for item in review_items:
+            # 映射severity -> result
+            severity = item.get("severity", "info")
+            if severity == "error":
+                result = "fail"
+                rigid = True
+            elif severity == "warning":
+                result = "risk"
+                rigid = False
+            else:  # info
+                result = "pass"
+                rigid = False
+            
+            # 映射rule_id -> dimension
+            rule_id = item.get("rule_id", "")
+            if "TECH" in rule_id or "技术" in item.get("title", ""):
+                dimension = "技术审查"
+            elif "BIZ" in rule_id or "商务" in item.get("title", ""):
+                dimension = "商务审查"
+            elif "DOC" in rule_id or "文档" in item.get("title", ""):
+                dimension = "文档结构"
+            elif "QUAL" in rule_id or "资格" in item.get("title", ""):
+                dimension = "资格审查"
+            else:
+                dimension = "其他"
+            
+            # 构造旧格式
+            legacy_item = {
+                "dimension": dimension,
+                "requirement_text": item.get("title", ""),
+                "response_text": item.get("description", ""),
+                "result": result,
+                "remark": item.get("suggestion", "") or item.get("description", ""),
+                "rigid": rigid,
+                "tender_evidence_chunk_ids": [],
+                "bid_evidence_chunk_ids": item.get("evidence_chunk_ids", []),
+                "source": "compare",
+                "tender_evidence_spans": [],
+                "bid_evidence_spans": self._generate_evidence_spans(
+                    bid_chunks,
+                    item.get("evidence_chunk_ids", [])
+                ),
+            }
+            
+            arr.append(legacy_item)
         
         return arr
     
