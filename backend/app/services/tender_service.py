@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from docx import Document
+from docx import Document  # type: ignore[import-untyped]
 from fastapi import UploadFile
 
 from app.config import get_settings, get_feature_flags
