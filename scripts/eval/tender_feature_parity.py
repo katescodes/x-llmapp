@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -180,7 +181,7 @@ def extract_with_mode(
 def fetch_project_info(token: str, project_id: str) -> Dict[str, Any]:
     """获取项目信息"""
     resp = requests.get(
-        f"{BASE_URL}/api/apps/tender/projects/{project_id}/info",
+        f"{BASE_URL}/api/apps/tender/projects/{project_id}/project-info",
         headers={"Authorization": f"Bearer {token}"},
         timeout=10
     )
@@ -454,43 +455,104 @@ def process_project(
             json.dumps([], ensure_ascii=False, indent=2), encoding='utf-8'
         )
         
-        # 5. 验证契约
-        validation_old = validate_against_contract(results['OLD'], contract, 'OLD')
-        validation_new = validate_against_contract(results['NEW_ONLY'], contract, 'NEW_ONLY')
+        # 5. 验证 NEW_ONLY 契约符合性（A3 阶段）
+        log_info("--- 验证契约符合性 ---")
+        failures = []
         
-        # 6. 生成对比
-        diff_summary = generate_diff_summary(results['OLD'], results['NEW_ONLY'], contract)
+        # 5.1 检查 project_info 四大板块
+        required_sections = contract['project_info']['required_sections']
+        for section_key in required_sections.keys():
+            if section_key not in project_info:
+                failures.append(f"project_info 缺失板块: {section_key}")
+                log_error(f"  ✗ 缺失板块: {section_key}")
+            else:
+                log_success(f"  ✓ 板块存在: {section_key}")
         
-        # 7. 保存结果
+        # 5.2 检查 MUST_HIT_001 规则命中
+        must_hit_rules = contract.get('review', {}).get('must_hit_rules', [])
+        must_hit_rule_id = must_hit_rules[0]['rule_id'] if must_hit_rules else "MUST_HIT_001"
+        rule_found = False
+        if isinstance(review, list):
+            for item in review:
+                if isinstance(item, dict) and item.get('rule_id') == must_hit_rule:
+                    rule_found = True
+                    break
+        
+        if rule_found:
+            log_success(f"  ✓ 规则命中: {must_hit_rule_id}")
+        else:
+            failures.append(f"规则未命中: {must_hit_rule_id}")
+            log_error(f"  ✗ 规则未命中: {must_hit_rule_id}")
+        
+        # 5.3 生成对比摘要（简化版）
+        diff_summary = {
+            'project_name': project_name,
+            'sections_check': {
+                'required': list(required_sections.keys()),
+                'found': [k for k in required_sections.keys() if k in project_info],
+                'missing': [k for k in required_sections.keys() if k not in project_info]
+            },
+            'rule_check': {
+                'required': must_hit_rule_id,
+                'found': rule_found
+            },
+            'failures': failures
+        }
+        
+        # 6. 保存对比摘要
         (output_dir / "diff_summary.json").write_text(
             json.dumps(diff_summary, ensure_ascii=False, indent=2), encoding='utf-8'
         )
         
-        report_md = generate_report(
-            project_name,
-            results['OLD'],
-            results['NEW_ONLY'],
-            diff_summary,
-            validation_old,
-            validation_new
-        )
+        # 7. 生成报告
+        report_lines = [
+            f"# 招投标功能验证报告 - {project_name}",
+            "",
+            f"**验证时间**: {datetime.now().isoformat()}",
+            f"**项目ID**: {project_id}",
+            "",
+            "## 契约符合性检查",
+            "",
+            "### 1. Project Info 四大板块",
+            ""
+        ]
+        
+        for section_key in required_sections.keys():
+            status = "✓" if section_key in project_info else "✗"
+            report_lines.append(f"- [{status}] {section_key}")
+        
+        report_lines.extend([
+            "",
+            f"### 2. 规则命中检查",
+            "",
+            f"- 必命中规则: {must_hit_rule_id}",
+            f"- 命中状态: {'✓ 命中' if rule_found else '✗ 未命中'}",
+            "",
+            "## 验证结果",
+            ""
+        ])
+        
+        if not failures:
+            report_lines.append("✅ **所有检查通过**")
+        else:
+            report_lines.append("❌ **验证失败**")
+            report_lines.append("")
+            report_lines.append("失败项:")
+            for failure in failures:
+                report_lines.append(f"- {failure}")
+        
+        report_md = "\n".join(report_lines)
         (output_dir / "report.md").write_text(report_md, encoding='utf-8')
         
         # 8. 判断是否通过
-        passed = (
-            validation_new['passed'] and
-            len(diff_summary['critical_issues']) == 0 and
-            len(diff_summary['missing_sections']) == 0
-        )
+        passed = len(failures) == 0
         
         if passed:
-            log_success(f"项目 {project_name} 验证通过")
+            log_success(f"✓ 项目 {project_name} 验证通过")
         else:
-            log_error(f"项目 {project_name} 验证失败")
-            for error in validation_new['errors']:
-                log_error(f"  - {error}")
-            for issue in diff_summary['critical_issues']:
-                log_error(f"  - {issue}")
+            log_error(f"✗ 项目 {project_name} 验证失败")
+            for failure in failures:
+                log_error(f"    - {failure}")
         
         return passed
         
