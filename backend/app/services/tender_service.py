@@ -797,7 +797,24 @@ class TenderService:
         run_id: Optional[str] = None,
         owner_id: Optional[str] = None,
     ):
-        """抽取项目信息"""
+        """
+        抽取项目信息
+        
+        REMOVED: Only NEW_ONLY mode supported.
+        OLD/SHADOW/PREFER_NEW modes have been deleted.
+        """
+        # 强制检查模式
+        from app.core.cutover import get_cutover_config
+        cutover = get_cutover_config()
+        extract_mode = cutover.get_mode("extract", project_id)
+        
+        if extract_mode.value != "NEW_ONLY":
+            raise RuntimeError(
+                f"[REMOVED] Legacy tender extraction deleted. "
+                f"EXTRACT_MODE={extract_mode.value} is no longer supported. "
+                f"Set EXTRACT_MODE=NEW_ONLY. Method: extract_project_info"
+            )
+        
         # 旁路双写：创建 platform job（如果启用）
         job_id = None
         if self.feature_flags.PLATFORM_JOBS_ENABLED and self.jobs_service and run_id:
@@ -815,57 +832,45 @@ class TenderService:
                 print(f"[WARN] Failed to create platform job: {e}")
         
         try:
-            from app.core.cutover import get_cutover_config
-            cutover = get_cutover_config()
-            extract_mode = cutover.get_mode("extract", project_id)
+            # 只执行 NEW_ONLY 路径
+            import asyncio
+            from app.works.tender.extract_v2_service import ExtractV2Service
+            from app.services.db.postgres import _get_pool
             
-            data = None
-            eids = []
-            obj = None
-            v2_success = False
+            logger.info(f"NEW_ONLY extract_project_info: using v2 for project={project_id}")
+            pool = _get_pool()
+            extract_v2 = ExtractV2Service(pool, self.llm)
             
-            # NEW_ONLY 模式：仅使用 v2，失败则报错
-            if extract_mode.value == "NEW_ONLY":
-                try:
-                    import asyncio
-                    from app.works.tender.extract_v2_service import ExtractV2Service
-                    from app.services.db.postgres import _get_pool
-                    
-                    logger.info(f"NEW_ONLY extract_project_info: using v2 only for project={project_id}")
-                    pool = _get_pool()
-                    extract_v2 = ExtractV2Service(pool, self.llm)
-                    
-                    # 尝试 v2 抽取
-                    v2_result = asyncio.run(extract_v2.extract_project_info_v2(
-                        project_id=project_id,
-                        model_id=model_id,
-                        run_id=run_id
-                    ))
-                    
-                    # v2 成功：使用 v2 结果，写入旧表以保证前端兼容
-                    data = v2_result.get("data") or {}
-                    eids = v2_result.get("evidence_chunk_ids") or []
-                    trace = v2_result.get("retrieval_trace") or {}
-                    obj = {"data": data, "evidence_chunk_ids": eids}
-                    v2_success = True
-                    
-                    # 写入旧表（保证前端兼容）
-                    self.dao.upsert_project_info(project_id, data_json=data, evidence_chunk_ids=eids)
-                    
-                    # 更新运行状态
-                    if run_id:
-                        self.dao.update_run(
-                            run_id, "success", progress=1.0, 
-                            message="ok", 
-                            result_json={
-                                **obj,
-                                "extract_v2_status": "ok",
-                                "extract_mode_used": "NEW_ONLY",
-                                **trace  # 添加 trace 信息
-                            }
-                        )
-                    
-                    logger.info(f"NEW_ONLY extract_project_info: v2 succeeded for project={project_id}")
+            # v2 抽取
+            v2_result = asyncio.run(extract_v2.extract_project_info_v2(
+                project_id=project_id,
+                model_id=model_id,
+                run_id=run_id
+            ))
+            
+            # 使用 v2 结果，写入旧表以保证前端兼容
+            data = v2_result.get("data") or {}
+            eids = v2_result.get("evidence_chunk_ids") or []
+            trace = v2_result.get("retrieval_trace") or {}
+            obj = {"data": data, "evidence_chunk_ids": eids}
+            
+            # 写入旧表（保证前端兼容）
+            self.dao.upsert_project_info(project_id, data_json=data, evidence_chunk_ids=eids)
+            
+            # 更新运行状态
+            if run_id:
+                self.dao.update_run(
+                    run_id, "success", progress=1.0, 
+                    message="ok", 
+                    result_json={
+                        **obj,
+                        "extract_v2_status": "ok",
+                        "extract_mode_used": "NEW_ONLY",
+                        **trace
+                    }
+                )
+            
+            logger.info(f"NEW_ONLY extract_project_info: v2 succeeded for project={project_id}")
                     
                 except Exception as e:
                     # NEW_ONLY 失败：记录并抛错，不允许回退
