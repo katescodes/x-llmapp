@@ -442,11 +442,31 @@ class TenderService:
         data: bytes,
     ) -> str:
         """
-        轻量入库：解析文件 → 分块 → 写入 kb_documents/kb_chunks
+        轻量入库（LEGACY）：解析文件 → 分块 → 写入 kb_documents/kb_chunks
+        
+        ⚠️ DEPRECATED: 仅在 INGEST_MODE=OLD 时使用
+        NEW_ONLY 模式应使用 platform/ingest/v2_service.py (DocStore)
         
         Returns:
             kb_doc_id
         """
+        # Step 6: 防护措施 - NEW_ONLY 禁止写入 KB
+        from app.core.cutover import get_cutover_config
+        cutover = get_cutover_config()
+        ingest_mode = cutover.get_mode("ingest", kb_id)  # kb_id 可作为 project_id
+        
+        if ingest_mode.value == "NEW_ONLY":
+            raise RuntimeError(
+                f"[Step6 Boundary] INGEST_MODE=NEW_ONLY must NOT write to kb_documents/kb_chunks. "
+                f"Use platform/ingest/v2_service.py (DocStore) instead. "
+                f"File: {filename}, kind: {kind}"
+            )
+        
+        logger.warning(
+            f"[LEGACY KB Ingest] Using deprecated kb_documents/kb_chunks path. "
+            f"Consider migrating to DocStore. File: {filename}"
+        )
+        
         # 解析文件内容
         text = _read_text_from_file_bytes(filename, data)
         content_hash = _sha256(data)

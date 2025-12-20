@@ -205,9 +205,93 @@ def check_platform_no_services_import():
     return violations, temp_allows_used
 
 
+def check_newonly_no_kb_writes():
+    """
+    Step 6: 检查 NEW_ONLY 路径不应写入 kb_documents/kb_chunks
+    
+    检查范围：
+    - works/tender/**
+    - platform/ingest/v2_service.py
+    - 任何明确标注为 NEW_ONLY 分支的代码
+    
+    禁止的操作：
+    - create_kb_document
+    - insert_kb_chunks
+    - update_kb_document
+    - kb_dao 写入方法
+    """
+    app_root = Path(__file__).parent.parent.parent / "backend" / "app"
+    
+    # 检查的目标目录和文件
+    check_targets = [
+        app_root / "works" / "tender",
+        app_root / "platform" / "ingest" / "v2_service.py",
+        app_root / "platform" / "extraction",
+    ]
+    
+    violations = []
+    
+    # 禁止的 KB 写入模式
+    forbidden_kb_patterns = [
+        (r'\.create_kb_document\(', 'create_kb_document - NEW_ONLY 应使用 DocStore'),
+        (r'\.insert_kb_chunks\(', 'insert_kb_chunks - NEW_ONLY 应使用 DocStore'),
+        (r'\.update_kb_document\(', 'update_kb_document - NEW_ONLY 应使用 DocStore'),
+        (r'from\s+app\.services\.dao\.kb_dao\s+import', 'kb_dao 导入 - NEW_ONLY 应使用 DocStore DAO'),
+    ]
+    
+    for target in check_targets:
+        if not target.exists():
+            continue
+        
+        # 如果是文件，直接检查
+        if target.is_file():
+            files = [target]
+        else:
+            # 如果是目录，递归查找所有 .py 文件
+            files = list(target.rglob("*.py"))
+        
+        for py_file in files:
+            if "__pycache__" in str(py_file):
+                continue
+            
+            content = py_file.read_text(encoding='utf-8')
+            rel_path = py_file.relative_to(app_root.parent.parent)
+            
+            # 检查每个禁止的模式
+            for pattern, desc in forbidden_kb_patterns:
+                matches = re.finditer(pattern, content)
+                for match in matches:
+                    # 获取匹配行的上下文，检查是否在允许的 OLD/LEGACY 分支中
+                    line_num = content[:match.start()].count('\n') + 1
+                    
+                    # 获取前后 20 行上下文
+                    lines = content.split('\n')
+                    start_ctx = max(0, line_num - 20)
+                    end_ctx = min(len(lines), line_num + 5)
+                    context = '\n'.join(lines[start_ctx:end_ctx])
+                    
+                    # 白名单：如果上下文中有明确的 OLD/LEGACY 标注，则允许
+                    is_legacy_path = any(marker in context for marker in [
+                        'INGEST_MODE=OLD',
+                        'INGEST_MODE == "OLD"',
+                        'ingest_mode.value == "OLD"',
+                        'need_legacy_ingest',
+                        'LEGACY',
+                        '_ingest_to_kb',  # 这个方法本身已经有防护
+                    ])
+                    
+                    if not is_legacy_path:
+                        violations.append(
+                            f"{rel_path}:{line_num}: {desc}\n"
+                            f"    上下文: {lines[line_num-1].strip()}"
+                        )
+    
+    return violations
+
+
 def main():
     print("=" * 60)
-    print("  Platform/Work 边界检查 (Step 5: works/tender)")
+    print("  Platform/Work 边界检查 (Step 6: KB Legacy Quarantine)")
     print("=" * 60)
     print()
     
@@ -245,6 +329,16 @@ def main():
     else:
         print(f"  ✗ FAIL: 发现 {len(platform_violations)} 个platform违规")
         all_violations.extend(platform_violations)
+    print()
+    
+    # 检查4: NEW_ONLY 路径不写入 KB (Step 6)
+    print("检查4: NEW_ONLY 路径不写入 kb_documents/kb_chunks...")
+    kb_violations = check_newonly_no_kb_writes()
+    if not kb_violations:
+        print("  ✓ PASS: NEW_ONLY 路径未写入 KB legacy")
+    else:
+        print(f"  ✗ FAIL: 发现 {len(kb_violations)} 个 KB 写入违规")
+        all_violations.extend(kb_violations)
     print()
     
     # 汇总结果
