@@ -415,37 +415,37 @@ def process_project(
         # 4. 只跑 NEW_ONLY 验证契约（A3 阶段）
         results = {}
         mode = 'NEW_ONLY'
-            log_info(f"--- 运行 {mode} 模式 ---")
-            
-            # 抽取各项数据
-            extract_with_mode(token, project_id, 'project-info', mode)
-            extract_with_mode(token, project_id, 'risks', mode)
-            # extract_with_mode(token, project_id, 'directory', mode)  # 可选
-            extract_with_mode(token, project_id, 'review', mode)
-            
-            # 获取结果
-            project_info = fetch_project_info(token, project_id)
-            risks = fetch_risks(token, project_id)
-            # outline = fetch_outline(token, project_id)
-            review = fetch_review(token, project_id)
-            
-            results[mode] = {
-                'project_info': project_info,
-                'risks': risks,
-                # 'outline': outline,
-                'review': review
-            }
-            
-            # 保存到文件
+        log_info(f"--- 运行 {mode} 模式 ---")
+        
+        # 抽取各项数据
+        extract_with_mode(token, project_id, 'project-info', mode)
+        extract_with_mode(token, project_id, 'risks', mode)
+        # extract_with_mode(token, project_id, 'directory', mode)  # 可选
+        extract_with_mode(token, project_id, 'review', mode)
+        
+        # 获取结果
+        project_info = fetch_project_info(token, project_id)
+        risks = fetch_risks(token, project_id)
+        # outline = fetch_outline(token, project_id)
+        review = fetch_review(token, project_id)
+        
+        results[mode] = {
+            'project_info': project_info,
+            'risks': risks,
+            # 'outline': outline,
+            'review': review
+        }
+        
+        # 保存到文件
         (output_dir / "new_project_info.json").write_text(
-                json.dumps(project_info, ensure_ascii=False, indent=2), encoding='utf-8'
-            )
+            json.dumps(project_info, ensure_ascii=False, indent=2), encoding='utf-8'
+        )
         (output_dir / "new_risks.json").write_text(
-                json.dumps(risks, ensure_ascii=False, indent=2), encoding='utf-8'
-            )
+            json.dumps(risks, ensure_ascii=False, indent=2), encoding='utf-8'
+        )
         (output_dir / "new_review.json").write_text(
-                json.dumps(review, ensure_ascii=False, indent=2), encoding='utf-8'
-            )
+            json.dumps(review, ensure_ascii=False, indent=2), encoding='utf-8'
+        )
         
         # OLD 模式占位（A3 阶段不运行）
         (output_dir / "old_project_info.json").write_text(
@@ -477,7 +477,7 @@ def process_project(
         rule_found = False
         if isinstance(review, list):
             for item in review:
-                if isinstance(item, dict) and item.get('rule_id') == must_hit_rule:
+                if isinstance(item, dict) and item.get('rule_id') == must_hit_rule_id:
                     rule_found = True
                     break
         
