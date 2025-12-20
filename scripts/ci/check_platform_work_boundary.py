@@ -106,6 +106,7 @@ def check_platform_no_services_import():
     
     violations = []
     temp_allows_used = []
+    legacy_allows_used = []
     
     # 显式白名单：精确到文件路径（过渡期临时允许）
     # Step 2+ 会逐步消除这些依赖
@@ -138,6 +139,13 @@ def check_platform_no_services_import():
         ],
     }
     
+    # Legacy Provider 豁免：这些是遗留实现，允许依赖 app.services
+    # 它们在 providers/legacy 下，用于向后兼容，不应影响新架构边界
+    LEGACY_PROVIDER_EXEMPTIONS = [
+        "backend/app/platform/retrieval/providers/legacy/retriever.py",
+        "backend/app/platform/retrieval/providers/legacy/pg_lexical.py",
+    ]
+    
     # 扫描所有 Python 文件
     for py_file in platform_dir.rglob("*.py"):
         if "__pycache__" in str(py_file):
@@ -157,6 +165,12 @@ def check_platform_no_services_import():
             if line_end == -1:
                 line_end = len(content)
             line = content[line_start:line_end]
+            
+            # 检查是否在 Legacy Provider 豁免列表中
+            is_legacy_exempt = rel_path_str in LEGACY_PROVIDER_EXEMPTIONS
+            if is_legacy_exempt:
+                legacy_allows_used.append(f"{rel_path_str} -> {import_path}")
+                continue
             
             # 检查是否在显式白名单中
             is_allowed = False
@@ -180,7 +194,7 @@ def check_platform_no_services_import():
             f"    当前命中项: {temp_allows_used}"
         )
     
-    return violations, temp_allows_used
+    return violations, temp_allows_used, legacy_allows_used
 
 
 def main():
@@ -213,13 +227,17 @@ def main():
     
     # 检查3: platform/ 不应导入 app.services（Step 1.5 显式白名单）
     print("检查3: platform/ 不应导入 app.services（显式白名单模式）...")
-    platform_violations, temp_allows = check_platform_no_services_import()
+    platform_violations, temp_allows, legacy_allows = check_platform_no_services_import()
     if not platform_violations:
         print("  ✓ PASS: platform/ 未违反导入边界")
         if temp_allows:
             print(f"  ⚠ 临时白名单放行 {len(temp_allows)} 项（待后续 Step 消除）:")
             for allow in temp_allows:
                 print(f"    TEMP ALLOW: {allow}")
+        if legacy_allows:
+            print(f"  ℹ Legacy Provider 豁免 {len(legacy_allows)} 项（向后兼容）:")
+            for allow in legacy_allows:
+                print(f"    LEGACY EXEMPT: {allow}")
     else:
         print(f"  ✗ FAIL: 发现 {len(platform_violations)} 个platform违规")
         all_violations.extend(platform_violations)

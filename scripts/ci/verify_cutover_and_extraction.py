@@ -492,7 +492,7 @@ def main():
     log_section("Gate: 招投标功能一致性检查（强制门槛）")
     
     # 检查契约文件是否存在
-    contract_file = repo_root / "backend" / "app" / "apps" / "tender" / "contracts" / "tender_contract_v1.yaml"
+    contract_file = repo_root / "backend" / "app" / "works" / "tender" / "contracts" / "tender_contract_v1.yaml"
     parity_script = repo_root / "scripts" / "eval" / "tender_feature_parity.py"
     
     if not contract_file.exists():

@@ -252,7 +252,10 @@ def check_must_hit_001(token: str, project_id: str) -> bool:
 
 def load_contract() -> Dict[str, Any]:
     """加载功能契约"""
-    contract_path = Path("app/apps/tender/contracts/tender_contract_v1.yaml")
+    # 从脚本目录向上导航到仓库根目录
+    script_dir = Path(__file__).parent
+    repo_root = script_dir.parent.parent
+    contract_path = repo_root / "backend" / "app" / "works" / "tender" / "contracts" / "tender_contract_v1.yaml"
     if not contract_path.exists():
         raise FileNotFoundError(f"Contract not found: {contract_path}")
     
