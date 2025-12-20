@@ -31,12 +31,20 @@ def extract_json(text: str) -> Any:
     
     # 尝试提取 ```json ... ``` 中的内容
     if "```json" in text:
-        start = text.find("```json") + 7
+        start_marker = text.find("```json")
+        # 跳过 ```json 和后面的空白字符（包括换行符）
+        start = start_marker + 7
+        # 查找下一个非空白字符的位置
+        while start < len(text) and text[start] in (' ', '\n', '\r', '\t'):
+            start += 1
         end = text.find("```", start)
         if end > start:
             text = text[start:end].strip()
     elif "```" in text:
         start = text.find("```") + 3
+        # 跳过空白字符
+        while start < len(text) and text[start] in (' ', '\n', '\r', '\t'):
+            start += 1
         end = text.find("```", start)
         if end > start:
             text = text[start:end].strip()
