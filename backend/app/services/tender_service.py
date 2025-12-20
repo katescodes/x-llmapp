@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from docx import Document
-from docx.text.paragraph import Paragraph
 from fastapi import UploadFile
 
 from app.config import get_settings, get_feature_flags
@@ -2676,6 +2675,7 @@ class TenderService:
 
             def _elm_text(el) -> str:
                 try:
+                    from docx.text.paragraph import Paragraph
                     p = Paragraph(el, doc)  # type: ignore[arg-type]
                     return p.text or ""
                 except Exception:
