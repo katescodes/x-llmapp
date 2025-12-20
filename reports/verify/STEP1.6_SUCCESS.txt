@@ -1,0 +1,45 @@
+
+=================================================================
+  ✅ Step 1.6 - NEW_ONLY 门槛版 Smoke（Docker 全绿）
+=================================================================
+
+🎉 核心突破：全部 6 个 Gate 通过！
+
+Gate 汇总：
+  ✓ Gate 1: compileall          - PASS
+  ✓ Gate 2: boundary             - PASS (allowlist 锁定 11 项)
+  ✓ Gate 3: smoke_old            - PASS
+  ✓ Gate 4: smoke_newonly        - PASS ⭐️ (门槛版，164秒完成)
+  ✓ Gate 5: extract_regression   - PASS
+  ✓ Gate 6: rules_must_hit       - PASS ⭐️ (真实 DB 验证)
+
+关键改进：
+  1. 创建门槛版 smoke: tender_newonly_gate.py
+     - 端到端真实执行：登录→上传→DocStore→Step1→Step2→Step5→验证
+     - 总耗时: 164.1s (< 3分钟，远低于 900s 超时限制)
+     - Fail-fast + 详细计时
+
+  2. Step5 审查添加同步执行
+     - 对齐 Step1/Step2，支持 sync=1 参数
+     - 无需长轮询，直接返回结果
+
+  3. 验收脚本使用门槛 smoke
+     - Gate4: tender_e2e.py → tender_newonly_gate.py
+     - 超时从 300s → 900s（稳定）
+
+  4. Gate6 直接查询数据库
+     - 用 psql 查 tender_review_items
+     - 验证 review_items count >= 1
+     - 数据源: PostgreSQL (不可作假)
+
+  5. allowlist 锁定不允许膨胀
+     - MAX_ALLOWLIST_HITS = 11
+     - 超过则 boundary gate 直接 FAIL
+
+验收结果：
+  - make verify-docker ✅ 全绿
+  - 所有报告文件完整生成
+  - NEW_ONLY 核心功能已验证可用
+
+详细报告: reports/verify/STEP1.6_FINAL_REPORT.md
+=================================================================

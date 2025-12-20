@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+.npm/
+dist/
+.next/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Database & Storage - DO NOT COMMIT TO GIT
+data/postgres/
+data/milvus.db
+data/redis/
+data/qdrant/
+storage/
+
+# Tender assets - test data
+data/tender_assets/
+
+# Logs
+*.log
+logs/
+
+# Verification artifacts
+reports/verify/*.log
+reports/verify/*.json
+reports/verify/*_tail.log
+reports/verify/_head.txt
+reports/verify/_verify_sig.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local

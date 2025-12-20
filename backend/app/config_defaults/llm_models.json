@@ -1,0 +1,20 @@
+{
+  "default_name": "本地默认模型",
+  "models": [
+    {
+      "name": "本地默认模型",
+      "base_url": "http://host.docker.internal:8001",
+      "endpoint_path": "/v1/chat/completions",
+      "model": "local-llm",
+      "api_key": null,
+      "temperature": 0.3,
+      "max_tokens": 16000,
+      "top_p": null,
+      "presence_penalty": null,
+      "frequency_penalty": null,
+      "timeout_ms": 30000,
+      "extra_headers": null
+    }
+  ]
+}
+

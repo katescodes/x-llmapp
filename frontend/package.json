@@ -1,0 +1,25 @@
+{
+  "name": "localgpt-search-frontend",
+  "version": "0.2.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "echo \"no lint configured\"",
+    "smoke:tender": "python ../scripts/smoke/tender_e2e.py"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react-swc": "^3.6.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.0"
+  }
+}

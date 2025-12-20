@@ -1,0 +1,45 @@
+{
+  "embedding_config": {
+    "provider": "http",
+    "base_url": "http://host.docker.internal:8081",
+    "endpoint_path": "/v1/embeddings",
+    "api_key": null,
+    "model": "bge-m3",
+    "timeout_ms": 30000,
+    "batch_size": 16,
+    "output_dense": true,
+    "output_sparse": true,
+    "dense_dim": null,
+    "sparse_format": "indices_values"
+  },
+  "search": {
+    "provider": "cse",
+    "mode": "smart",
+    "google_cse_api_key": null,
+    "google_cse_cx": null,
+    "warn": 100,
+    "limit": 500,
+    "max_urls": 20,
+    "results_per_query": 20
+  },
+  "retrieval": {
+    "topk_dense": 20,
+    "topk_sparse": 20,
+    "topk_final": 8,
+    "min_sources": 30,
+    "ranker": "rrf",
+    "rrf_k": 60,
+    "weight_dense": 0.6,
+    "weight_sparse": 0.4
+  },
+  "crawl": {
+    "max_pages": 5,
+    "concurrency": 4,
+    "timeout_sec": 20,
+    "max_retries": 2,
+    "delay_min": 0.6,
+    "delay_max": 1.8,
+    "domain_cooldown": 2.5
+  }
+}
+

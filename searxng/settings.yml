@@ -1,0 +1,27 @@
+use_default_settings: true
+
+search:
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "d5b6cf1de5b637e9f1aac6964fe46a1e0b5d8f302ff628f6ba674fbec6ff1578"
+  public_instance: false
+  limiter: true
+
+valkey:
+  url: valkey://valkey:6379/0
+
+engines:
+  - name: radio browser
+    inactive: true
+  - name: ahmia
+    inactive: true
+  - name: torch
+    inactive: true
+  - name: duckduckgo
+    inactive: true
+  - name: startpage
+    inactive: true
+

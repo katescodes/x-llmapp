@@ -1,0 +1,146 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TemplateSpec",
+  "description": "招投标模板规格定义 - LLM 分析输出",
+  "type": "object",
+  "required": ["version", "language", "base_policy", "style_hints", "outline", "merge_policy", "diagnostics"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^v\\d+$",
+      "description": "规格版本号"
+    },
+    "language": {
+      "type": "string",
+      "pattern": "^[a-z]{2}-[A-Z]{2}$",
+      "description": "语言代码"
+    },
+    "base_policy": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["KEEP_ALL", "KEEP_RANGE", "REBUILD"]
+        },
+        "range_anchor": {
+          "type": "object",
+          "properties": {
+            "start_text": {"type": "string"},
+            "end_text": {"type": "string"},
+            "start_block_id": {"type": "string"},
+            "end_block_id": {"type": "string"}
+          }
+        },
+        "exclude_block_ids": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "description": {"type": "string"}
+      }
+    },
+    "style_hints": {
+      "type": "object",
+      "properties": {
+        "heading1_style": {"type": "string"},
+        "heading2_style": {"type": "string"},
+        "heading3_style": {"type": "string"},
+        "heading4_style": {"type": "string"},
+        "heading5_style": {"type": "string"},
+        "body_style": {"type": "string"},
+        "table_style": {"type": "string"},
+        "numbering_candidate": {"type": "object"},
+        "list_style": {"type": "string"}
+      }
+    },
+    "style_rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["target"],
+        "properties": {
+          "target": {"type": "string"},
+          "font_family": {"type": ["string", "null"]},
+          "font_size_pt": {"type": ["number", "null"]},
+          "bold": {"type": ["boolean", "null"]},
+          "color": {"type": ["string", "null"]},
+          "line_spacing": {"type": ["string", "null"]},
+          "first_line_indent_chars": {"type": ["integer", "null"]},
+          "alignment": {"type": ["string", "null"]},
+          "space_before_pt": {"type": ["number", "null"]},
+          "space_after_pt": {"type": ["number", "null"]}
+        }
+      }
+    },
+    "outline": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/OutlineNode"
+      }
+    },
+    "merge_policy": {
+      "type": "object",
+      "required": ["template_defines_structure", "ai_only_fill_missing"],
+      "properties": {
+        "template_defines_structure": {"type": "boolean"},
+        "ai_only_fill_missing": {"type": "boolean"},
+        "preserve_template_order": {"type": "boolean"},
+        "ai_cannot_reorder": {"type": "boolean"},
+        "allow_ai_add_siblings": {"type": "boolean"},
+        "description": {"type": "string"}
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "required": ["confidence"],
+      "properties": {
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "warnings": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "ignored_as_instructions_block_ids": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "analysis_duration_ms": {"type": "integer"},
+        "llm_model": {"type": "string"}
+      }
+    },
+    "metadata": {
+      "type": "object"
+    }
+  },
+  "definitions": {
+    "OutlineNode": {
+      "type": "object",
+      "required": ["id", "title", "level", "order_no"],
+      "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "level": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "order_no": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "required": {"type": "boolean"},
+        "style_hint": {"type": "string"},
+        "parent_id": {"type": "string"},
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/OutlineNode"
+          }
+        },
+        "metadata": {"type": "object"}
+      }
+    }
+  }
+}

@@ -1,0 +1,147 @@
+services:
+  backend:
+    image: x-llm-backend:local
+    build: ./backend
+    container_name: localgpt-backend
+    restart: unless-stopped
+    init: true
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "9001:8000"
+    volumes:
+      - ./data:/app/data
+      - ./storage:/app/storage
+    environment:
+      - BUILDKIT_PROVENANCE=0
+      - LLM_STORE_PATH=/app/data/llm_models.json
+      - APP_SETTINGS_PATH=/app/data/app_settings.json
+      - SEARCH_USAGE_STORAGE=/app/data/search_usage.json
+      - MILVUS_LITE_PATH=/app/data/milvus.db
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=localgpt
+      - POSTGRES_USER=localgpt
+      - POSTGRES_PASSWORD=localgpt
+      - PLATFORM_JOBS_ENABLED=false
+      - EVIDENCE_SPANS_ENABLED=false
+      - DOCSTORE_DUALWRITE=false
+      - REVIEWCASE_DUALWRITE=true
+      - RULESET_PARSE_ENABLED=true
+      - RULES_EVALUATOR_ENABLED=true
+      # Smoke Test: 启用 Mock LLM 模式（外部 LLM 服务不可用时使用）
+      # 生产环境请移除此行或设置为 false
+      - MOCK_LLM=false
+      # Debug mode (enable /api/_debug endpoints)
+      - DEBUG=true
+      - ENV=dev
+      # Cutover control (all default to OLD, no impact on existing logic)
+      - CUTOVER_SCOPE=project
+      - CUTOVER_PROJECT_IDS=
+      - RETRIEVAL_MODE=NEW_ONLY
+      - INGEST_MODE=NEW_ONLY
+      - EXTRACT_MODE=NEW_ONLY
+      - REVIEW_MODE=NEW_ONLY
+      - RULES_MODE=NEW_ONLY
+      # DocStore & Ingest (Step 2 & Step 4)
+      - DOCSTORE_DUALWRITE=false
+      - MILVUS_COLLECTION_DOCSEG=doc_segments_v1
+      # Extract V2 配置
+      - V2_RETRIEVAL_TOPK_PER_QUERY=30
+      - V2_RETRIEVAL_TOPK_TOTAL=120
+      - EXTRACT_TRACE_ENABLED=true
+      # === Step 10: 异步任务队列 ===
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - ASYNC_INGEST_ENABLED=false
+      - ASYNC_EXTRACT_ENABLED=false
+      - ASYNC_REVIEW_ENABLED=false
+    networks:
+      - localgpt-net
+
+  frontend:
+    image: x-llm-frontend:local
+    build: ./frontend
+    container_name: localgpt-frontend
+    ports:
+      - "6173:5173"
+    environment:
+      - BUILDKIT_PROVENANCE=0
+    depends_on:
+      - backend
+    networks:
+      - localgpt-net
+
+  postgres:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/postgres:15-alpine
+    container_name: localgpt-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=localgpt
+      - POSTGRES_PASSWORD=localgpt
+      - POSTGRES_DB=localgpt
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - localgpt-net
+
+  redis:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/redis:7-alpine
+    container_name: localgpt-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - localgpt-net
+
+  worker:
+    image: x-llm-backend:local
+    build: ./backend
+    container_name: localgpt-worker
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    command: sh -c "sleep 10 && python worker.py"
+    volumes:
+      - ./data:/app/data
+      - ./storage:/app/storage
+    environment:
+      - BUILDKIT_PROVENANCE=0
+      - LLM_STORE_PATH=/app/data/llm_models.json
+      - APP_SETTINGS_PATH=/app/data/app_settings.json
+      - MILVUS_LITE_PATH=/app/data/milvus.db
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=localgpt
+      - POSTGRES_USER=localgpt
+      - POSTGRES_PASSWORD=localgpt
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_SOCKET_CONNECT_TIMEOUT=30
+      - REDIS_SOCKET_TIMEOUT=300
+      - PLATFORM_JOBS_ENABLED=false
+      - DOCSTORE_DUALWRITE=false
+      - REVIEWCASE_DUALWRITE=true
+      - RULESET_PARSE_ENABLED=true
+      - RULES_EVALUATOR_ENABLED=true
+      - CUTOVER_SCOPE=project
+      - CUTOVER_PROJECT_IDS=
+      - RETRIEVAL_MODE=OLD
+      - INGEST_MODE=OLD
+      - EXTRACT_MODE=OLD
+      - REVIEW_MODE=OLD
+      - RULES_MODE=OLD
+      - MILVUS_COLLECTION_DOCSEG=doc_segments_v1
+    networks:
+      - localgpt-net
+
+networks:
+  localgpt-net:
+    name: localgpt-net
+    external: true

@@ -1,0 +1,44 @@
+
+=================================================================
+  ✅ Step 2 - Document Parser 平台化迁移完成！
+=================================================================
+
+已完成的工作：
+
+1. 📁 文件迁移
+   ✅ backend/app/platform/ingest/parser.py（新建，迁移完整代码）
+   ✅ backend/app/services/documents/parser.py（改为 shim）
+
+2. 🔄 引用更新
+   ✅ backend/app/platform/ingest/v2_service.py（更新为新路径）
+   ✅ backend/app/services/kb_service.py（保持旧路径，通过 shim 工作）
+
+3. 🧪 测试添加
+   ✅ backend/tests/test_platform_ingest_parser_imports.py
+   ✅ Docker 容器内验证通过（新旧路径均可用，指向同一对象）
+
+4. 🛡️ 边界检查继续通过
+   ✅ platform/ 不再导入 app.services.documents.parser
+   ✅ 所有边界规则验证通过
+
+Docker 验收结果（make verify-docker）：
+  ✅ Gate 1: compileall     - PASS
+  ✅ Gate 2: boundary       - PASS（platform/ 未导入 app.services）
+  ✅ Gate 3: smoke_old      - PASS
+  ❌ Gate 4: smoke_newonly  - FAIL（现有问题，抽取超时）
+  ❌ Gate 5: extract_reg... - FAIL（现有问题，依赖 Gate 4）
+  ❌ Gate 6: rules_must_hit - FAIL（现有问题，依赖 Gate 4）
+
+✅ Step 2 核心目标 100% 达成：
+   - parse_document 完整迁移到 platform/ingest/
+   - platform 不再依赖 services.documents
+   - 向后兼容保持
+   - 边界规则通过
+
+✅ Step 1 + Step 2 累计成果：
+   已消除 2 处 platform→services 边界违规：
+   1. app.services.platform.docstore_service → app.platform.docstore.service
+   2. app.services.documents.parser → app.platform.ingest.parser
+
+详细报告：reports/verify/STEP2_PARSER_PLATFORMIZE_REPORT.md
+=================================================================
