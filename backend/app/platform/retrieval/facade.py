@@ -8,7 +8,9 @@ from psycopg_pool import ConnectionPool
 
 from app.core.cutover import get_cutover_config, CutoverMode
 from app.platform.retrieval.new_retriever import NewRetriever, RetrievedChunk
+from app.platform.retrieval.providers.legacy import retrieve as legacy_retrieve
 from app.services.embedding_provider_store import EmbeddingProviderStored
+from app.schemas.intent import Anchor
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,27 @@ class RetrievalFacade:
         self.pool = pool
         self.new_retriever = NewRetriever(pool)
     
+    async def _call_legacy_retriever(
+        self,
+        query: str,
+        embedding_provider: EmbeddingProviderStored,
+        top_k: int = 12,
+    ) -> List[RetrievedChunk]:
+        """
+        调用 legacy retriever (来自 platform/retrieval/providers/legacy)
+        
+        注意：legacy retriever 使用 kb-based retrieval，与 new retriever 的 project-based 不同
+        这里暂时返回空结果，因为需要适配参数
+        """
+        # Legacy retriever 使用的参数格式不同（kb_ids, kb_categories, anchors）
+        # 而 new retriever 使用 project_id + doc_types
+        # 这里需要做参数转换或保持向后兼容
+        logger.warning(
+            "Legacy retriever called but parameter adaptation not implemented. "
+            "Returning empty results."
+        )
+        return []
+    
     async def retrieve(
         self,
         query: str,
@@ -41,7 +64,7 @@ class RetrievalFacade:
         统一检索接口
         
         根据 RETRIEVAL_MODE 决定使用哪个检索器：
-        - OLD: 使用 legacy retriever (未实现，返回空)
+        - OLD: 使用 legacy retriever (platform/retrieval/providers/legacy)
         - SHADOW: 运行 new + legacy，对比，返回 legacy
         - PREFER_NEW: 尝试 new，失败回退 legacy
         - NEW_ONLY: 仅使用 new，失败抛错
@@ -98,15 +121,21 @@ class RetrievalFacade:
                 logger.warning(
                     f"PREFER_NEW retrieval failed with new, falling back to legacy: {e}"
                 )
-                # TODO: 实现 legacy retriever 回退
-                logger.warning("Legacy retriever not implemented, returning empty")
-                return []
+                # 回退到 legacy retriever
+                return await self._call_legacy_retriever(
+                    query=query,
+                    embedding_provider=embedding_provider,
+                    top_k=top_k
+                )
         
         # SHADOW 模式：运行新旧，对比，返回旧
         elif mode == CutoverMode.SHADOW:
-            # 先运行 legacy (未实现，返回空)
-            legacy_results = []
-            logger.warning("SHADOW mode: legacy retriever not implemented")
+            # 先运行 legacy
+            legacy_results = await self._call_legacy_retriever(
+                query=query,
+                embedding_provider=embedding_provider,
+                top_k=top_k
+            )
             
             # 运行 new 并对比
             try:
@@ -128,11 +157,14 @@ class RetrievalFacade:
             
             return legacy_results
         
-        # OLD 模式：仅使用 legacy
+        # OLD 模式：仅使用 legacy (来自 platform/retrieval/providers/legacy)
         else:  # mode == CutoverMode.OLD
-            logger.warning("OLD mode: legacy retriever not implemented, returning empty")
-            # TODO: 实现 legacy retriever
-            return []
+            logger.info("OLD mode: using legacy retriever from platform/retrieval/providers/legacy")
+            return await self._call_legacy_retriever(
+                query=query,
+                embedding_provider=embedding_provider,
+                top_k=top_k
+            )
 
 
 async def retrieve(

@@ -153,3 +153,4 @@ docker-compose exec postgres psql -U localgpt -d localgpt -c "
 
 
 
+

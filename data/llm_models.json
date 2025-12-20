@@ -1,23 +1,23 @@
 {
   "models": [
     {
-      "name": "本地默认模型",
-      "base_url": "http://host.docker.internal:8001",
-      "endpoint_path": "/v1/chat/completions",
-      "model": "local-llm",
-      "api_key": null,
-      "temperature": 0.3,
+      "name": "xaiyglinkercom-mje1932e",
+      "base_url": "https://xai.yglinker.com:50443",
+      "endpoint_path": "/711/v1/chat/completions",
+      "model": "gpt-oss-120b",
+      "api_key": "gptoss120b-yagoo",
+      "temperature": 0.7,
       "max_tokens": 16000,
       "top_p": null,
       "presence_penalty": null,
       "frequency_penalty": null,
       "timeout_ms": 30000,
       "extra_headers": null,
-      "id": "5a947c1f-1e37-4c24-815d-c6a468ef09c4",
-      "created_at": "2025-12-20T08:04:57.652032",
-      "updated_at": "2025-12-20T08:04:57.652039",
+      "id": "fcd1f843-d3dd-4305-ab78-ab2fce884a26",
+      "created_at": "2025-12-20T08:25:05.384947",
+      "updated_at": "2025-12-20T08:25:05.384955",
       "is_default": true
     }
   ],
-  "default_model_id": "5a947c1f-1e37-4c24-815d-c6a468ef09c4"
+  "default_model_id": "fcd1f843-d3dd-4305-ab78-ab2fce884a26"
 }

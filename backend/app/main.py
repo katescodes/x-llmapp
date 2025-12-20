@@ -167,10 +167,13 @@ class SimpleLLMOrchestrator:
                 headers["Authorization"] = f"Bearer {model.api_key}"
             
             # 发送同步请求（增加超时时间到300秒，用于处理大文本）
-            with httpx.Client(timeout=300.0) as client:
+            # 注意：verify=False 用于跳过SSL证书验证（自签名证书）
+            logger.info(f"[SimpleLLMOrchestrator] Calling REAL LLM: endpoint={endpoint} model={model.model}")
+            with httpx.Client(timeout=300.0, verify=False) as client:
                 response = client.post(endpoint, json=payload, headers=headers)
                 response.raise_for_status()
                 result = response.json()
+            logger.info(f"[SimpleLLMOrchestrator] REAL LLM returned: status={response.status_code} content_length={len(response.text)}")
             
             # 返回统一格式
             if "choices" in result:

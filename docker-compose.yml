@@ -33,7 +33,7 @@ services:
       # Smoke Test: 启用 Mock LLM 模式（外部 LLM 服务不可用时使用）
       # 生产环境请移除此行或设置为 false
       # SAFETY: MOCK_LLM 只在 DEBUG=true 时生效
-      - MOCK_LLM=true
+      - MOCK_LLM=false
       # Debug mode (enable /api/_debug endpoints)
       - DEBUG=true
       - ENV=dev
@@ -114,7 +114,8 @@ services:
       - BUILDKIT_PROVENANCE=0
       - LLM_STORE_PATH=/app/data/llm_models.json
       - APP_SETTINGS_PATH=/app/data/app_settings.json
-      - MILVUS_LITE_PATH=/app/data/milvus.db
+      # Worker uses separate Milvus DB to avoid file lock conflicts
+      - MILVUS_LITE_PATH=/app/data/milvus_worker.db
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=localgpt

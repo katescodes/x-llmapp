@@ -229,3 +229,4 @@ watch -n 60 gpustat
 - ASR API 服务日志
 - 进程占用情况（`ps aux | grep 2886328`）
 
+

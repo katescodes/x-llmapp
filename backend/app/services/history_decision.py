@@ -15,7 +15,7 @@ from app.services.embedding_provider_store import EmbeddingProviderStored
 from app.services.logging.request_logger import get_request_logger, safe_preview
 logger = logging.getLogger(__name__)
 from app.services.prompt_templates import HISTORY_DECISION_SYSTEM_PROMPT
-from app.services.retrieval.retriever import retrieve
+from app.platform.retrieval.providers.legacy.retriever import retrieve
 
 LLMCall = Callable[[str, str, Sequence[Message]], Awaitable[str]]
 
