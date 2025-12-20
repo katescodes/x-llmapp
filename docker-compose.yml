@@ -44,8 +44,8 @@ services:
       - CUTOVER_PROJECT_IDS=
       - RETRIEVAL_MODE=NEW_ONLY
       - INGEST_MODE=NEW_ONLY
-      # Legacy APIs (disabled by default, set to true to enable deprecated endpoints)
-      - LEGACY_TENDER_APIS_ENABLED=false
+      # Legacy APIs have been removed
+      # - LEGACY_TENDER_APIS_ENABLED=false  # (removed)
       - EXTRACT_MODE=NEW_ONLY
       - REVIEW_MODE=NEW_ONLY
       - RULES_MODE=NEW_ONLY
@@ -138,11 +138,11 @@ services:
       - RULES_EVALUATOR_ENABLED=true
       - CUTOVER_SCOPE=project
       - CUTOVER_PROJECT_IDS=
-      - RETRIEVAL_MODE=OLD
-      - INGEST_MODE=OLD
-      - EXTRACT_MODE=OLD
-      - REVIEW_MODE=OLD
-      - RULES_MODE=OLD
+      - RETRIEVAL_MODE=NEW_ONLY
+      - INGEST_MODE=NEW_ONLY
+      - EXTRACT_MODE=NEW_ONLY
+      - REVIEW_MODE=NEW_ONLY
+      - RULES_MODE=NEW_ONLY
       - MILVUS_COLLECTION_DOCSEG=doc_segments_v1
     networks:
       - localgpt-net

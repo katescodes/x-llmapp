@@ -21,6 +21,7 @@ class ExtractionSpec:
     抽取任务规格说明
     
     包含了一次抽取所需的所有配置：
+    - task_type: 任务类型（可选，用于日志）
     - prompt: 系统提示词
     - queries: 检索查询（可以是单个字符串、列表或字典）
     - schema: 期望的输出 schema（用于验证，可选）
@@ -30,10 +31,12 @@ class ExtractionSpec:
     """
     prompt: str
     queries: Union[str, List[str], Dict[str, str]]
+    task_type: str = "extraction"
     topk_per_query: int = 30
     topk_total: int = 120
     doc_types: List[str] = field(default_factory=lambda: ["tender"])
     schema: Optional[Dict[str, Any]] = None
+    schema_model: Optional[Any] = None
     temperature: float = 0.0
 
 

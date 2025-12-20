@@ -124,25 +124,54 @@ class NewRetriever:
     def _get_project_doc_versions(
         self, project_id: str, doc_types: Optional[List[str]]
     ) -> List[str]:
-        """从 tender_project_assets 获取 doc_version_ids"""
+        """从项目资产表获取 doc_version_ids，支持 tender 和 declare 项目"""
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
-                # 构建 SQL 查询
-                sql = """
-                    SELECT DISTINCT meta_json->>'doc_version_id' as doc_version_id
-                    FROM tender_project_assets
-                    WHERE project_id = %s
-                      AND meta_json->>'doc_version_id' IS NOT NULL
-                """
-                params = [project_id]
-                
-                if doc_types:
-                    sql += " AND kind = ANY(%s)"
-                    params.append(doc_types)
-                
-                cur.execute(sql, params)
-                rows = cur.fetchall()
-                return [row[0] for row in rows if row[0]]
+                # 根据 project_id 前缀判断使用哪个表
+                if project_id.startswith("declare_proj_"):
+                    # 申报书项目：使用 declare_assets 表
+                    # 注意：declare_assets 的 kind 字段存储的是 'notice', 'company', 'tech'
+                    # 而 extraction specs 传入的是 'declare_notice', 'declare_company' 等
+                    # 需要去除 'declare_' 前缀
+                    mapped_kinds = None
+                    if doc_types:
+                        mapped_kinds = [
+                            dt.replace("declare_", "") if dt.startswith("declare_") else dt
+                            for dt in doc_types
+                        ]
+                    
+                    sql = """
+                        SELECT DISTINCT doc_version_id
+                        FROM declare_assets
+                        WHERE project_id = %s
+                          AND doc_version_id IS NOT NULL
+                    """
+                    params = [project_id]
+                    
+                    if mapped_kinds:
+                        sql += " AND kind = ANY(%s)"
+                        params.append(mapped_kinds)
+                    
+                    cur.execute(sql, params)
+                    rows = cur.fetchall()
+                    return [row[0] for row in rows if row[0]]
+                else:
+                    # 招投标项目：使用 tender_project_assets 表
+                    sql = """
+                        SELECT DISTINCT meta_json->>'doc_version_id' as doc_version_id
+                        FROM tender_project_assets
+                        WHERE project_id = %s
+                          AND meta_json->>'doc_version_id' IS NOT NULL
+                    """
+                    params = [project_id]
+                    
+                    if doc_types:
+                        sql += " AND kind = ANY(%s)"
+                        params.append(doc_types)
+                    
+                    cur.execute(sql, params)
+                    rows = cur.fetchall()
+                    return [row[0] for row in rows if row[0]]
     
     async def _search_dense(
         self,

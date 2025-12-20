@@ -5,12 +5,13 @@ import KnowledgeBaseManager from "./components/KnowledgeBaseManager";
 import RecordingsList from "./components/RecordingsList";
 import LoginPage from "./components/LoginPage";
 import TenderWorkspace from "./components/TenderWorkspace";
+import DeclareWorkspace from "./components/DeclareWorkspace";
 import FormatTemplatesPage from "./components/FormatTemplatesPage";
 import DebugPanel from "./components/DebugPanel";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { usePermission } from "./hooks/usePermission";
 
-type Page = "chat" | "settings" | "kb" | "recordings" | "tender" | "format-templates";
+type Page = "chat" | "settings" | "kb" | "recordings" | "tender" | "declare" | "format-templates";
 
 const MainApp: React.FC = () => {
   const { user, logout, isLoading } = useAuth();
@@ -110,6 +111,19 @@ const MainApp: React.FC = () => {
           🧾 招投标
         </button>
         <button
+          onClick={() => setCurrentPage("declare")}
+          style={{
+            padding: "8px 16px",
+            border: "none",
+            background: currentPage === "declare" ? "rgba(79, 70, 229, 0.2)" : "transparent",
+            color: "#e5e7eb",
+            borderRadius: "6px",
+            cursor: "pointer"
+          }}
+        >
+          📝 申报书
+        </button>
+        <button
           onClick={() => setCurrentPage("recordings")}
           style={{
             padding: "8px 16px",
@@ -196,6 +210,12 @@ const MainApp: React.FC = () => {
           aria-hidden={currentPage !== "tender"}
         >
           <TenderWorkspace />
+        </div>
+        <div
+          style={pageContainerStyle(currentPage === "declare")}
+          aria-hidden={currentPage !== "declare"}
+        >
+          <DeclareWorkspace />
         </div>
         <div
           style={pageContainerStyle(currentPage === "format-templates")}

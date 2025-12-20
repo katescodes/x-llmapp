@@ -883,6 +883,11 @@ export default function TenderWorkspace() {
 
   // -------------------- 副作用 --------------------
 
+  // 监控 viewMode 变化
+  useEffect(() => {
+    console.log('viewMode 已改变为:', viewMode);
+  }, [viewMode]);
+
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
@@ -960,7 +965,10 @@ export default function TenderWorkspace() {
           {/* 模板管理入口 */}
           <div style={{ padding: '0 16px', marginBottom: '16px' }}>
             <button
-              onClick={() => setViewMode("formatTemplates")}
+              onClick={() => {
+                console.log('模板管理按钮被点击，切换到formatTemplates视图');
+                setViewMode("formatTemplates");
+              }}
               className="sidebar-btn"
               style={{ 
                 width: '100%',
@@ -978,6 +986,8 @@ export default function TenderWorkspace() {
                 justifyContent: 'center',
                 gap: '8px',
                 boxShadow: '0 2px 8px rgba(102, 126, 234, 0.3)',
+                zIndex: 10,
+                position: 'relative',
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.transform = 'translateY(-1px)';
@@ -1084,7 +1094,10 @@ export default function TenderWorkspace() {
             {/* 工作区内容 */}
             <div className="kb-detail">
               {viewMode === "formatTemplates" ? (
-                <FormatTemplatesPage embedded onBack={() => setViewMode("projectInfo")} />
+                <>
+                  {console.log('渲染FormatTemplatesPage组件')}
+                  <FormatTemplatesPage embedded onBack={() => setViewMode("projectInfo")} />
+                </>
               ) : (
                 <>
               {/* 项目内上传区 */}

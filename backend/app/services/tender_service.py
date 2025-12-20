@@ -1051,45 +1051,9 @@ class TenderService:
                 if run_id:
                     self.dao.update_run(run_id, "success", progress=1.0, message="ok", result_json=arr)
             
-            # SHADOW 模式：旧逻辑先跑，再跑 v2 对比
-            if extract_mode.value == "SHADOW":
-                try:
-                    import asyncio
-                    from app.works.tender.extract_v2_service import ExtractV2Service
-                    from app.works.tender.extract_diff import compare_risks
-                    from app.core.shadow_diff import ShadowDiffLogger
-                    from app.services.db.postgres import _get_pool
-                    
-                    pool = _get_pool()
-                    extract_v2 = ExtractV2Service(pool, self.llm)
-                    
-                    # 运行 v2 抽取
-                    v2_result = asyncio.run(extract_v2.extract_risks_v2(
-                        project_id=project_id,
-                        model_id=model_id,
-                        run_id=run_id
-                    ))
-                    
-                    # 对比结果
-                    diff = compare_risks(arr, v2_result)
-                    
-                    # 记录差异
-                    ShadowDiffLogger.log(
-                        kind="extract_risks",
-                        entity_id=project_id,
-                        old_result={"risks": arr},
-                        new_result={"risks": v2_result},
-                        diff_summary=diff
-                    )
-                    
-                    logger.info(
-                        f"SHADOW extract_risks: project_id={project_id} "
-                        f"old_count={len(arr)} new_count={len(v2_result)} "
-                        f"has_diff={diff.get('has_significant_diff', False)}"
-                    )
-                except Exception as e:
-                    # SHADOW 模式：v2 失败不影响主流程
-                    logger.error(f"SHADOW extract_risks v2 failed: {e}", exc_info=True)
+            # SHADOW 模式已删除 - extract_diff.py 已移除
+            # if extract_mode.value == "SHADOW":
+            #     ... (SHADOW mode code removed)
             
             # 旁路双写：更新 job 成功（如果启用）
             if job_id and self.jobs_service:
@@ -1193,12 +1157,9 @@ class TenderService:
         nodes_sorted = sorted(nodes, key=lambda n: (n.get("level", 99), n.get("order_no", 0)))
         nodes_with_tree = self._build_directory_tree(nodes_sorted)
         
-        # 6. 保存(版本化)
-        version_id = self.dao.create_directory_version(project_id, source="tender", run_id=run_id)
-        self.dao.upsert_directory_nodes(version_id, nodes_with_tree)
-        self.dao.set_active_directory_version(project_id, version_id)
-        
-        logger.info(f"[generate_directory] Saved {len(nodes_with_tree)} nodes to version {version_id}")
+        # 6. 保存（使用replace_directory）
+        self.dao.replace_directory(project_id, nodes_with_tree)
+        logger.info(f"[generate_directory] Saved {len(nodes_with_tree)} nodes")
         
         # 7. 自动抽取范本(保留)
         try:
@@ -2317,48 +2278,9 @@ class TenderService:
                         }
                     )
             
-            # SHADOW 模式 - 同时跑 v2 审核并对比
-            elif review_mode.value == "SHADOW":
-                try:
-                    import asyncio
-                    from app.works.tender.review_v2_service import ReviewV2Service
-                    from app.works.tender.review_diff import compare_review_results
-                    from app.core.shadow_diff import ShadowDiffLogger
-                    from app.services.db.postgres import _get_pool
-                    
-                    pool = _get_pool()
-                    review_v2 = ReviewV2Service(pool, self.llm)
-                    
-                    # 运行 v2 审核
-                    v2_results = asyncio.run(review_v2.run_review_v2(
-                        project_id=project_id,
-                        model_id=model_id,
-                        custom_rule_asset_ids=custom_rule_asset_ids,
-                        bidder_name=bidder_name,
-                        bid_asset_ids=bid_asset_ids,
-                        run_id=run_id
-                    ))
-                    
-                    # 对比结果
-                    diff = compare_review_results(arr, v2_results)
-                    
-                    # 记录差异
-                    ShadowDiffLogger.log(
-                        kind="review_run",
-                        project_id=project_id,
-                        old_summary={"count": len(arr), "dimension_dist": diff.get("dimension_distribution", {}).get("old", {})},
-                        new_summary={"count": len(v2_results), "dimension_dist": diff.get("dimension_distribution", {}).get("new", {})},
-                        diff_json=diff
-                    )
-                    
-                    logger.info(
-                        f"SHADOW review_run: project_id={project_id} "
-                        f"old_count={len(arr)} new_count={len(v2_results)} "
-                        f"has_diff={diff.get('has_significant_diff', False)}"
-                    )
-                except Exception as e:
-                    # SHADOW 模式：v2 失败不影响主流程
-                    logger.error(f"SHADOW review_run v2 failed: {e}", exc_info=True)
+            # SHADOW 模式已删除 - review_diff.py 已移除
+            # elif review_mode.value == "SHADOW":
+            #     ... (SHADOW mode code removed)
             
             # 旁路双写：ReviewCase（如果启用）
             case_id = None

@@ -20,6 +20,7 @@ from .routers import (
     tender,
     tender_snippets,
     debug,
+    declare,
 )
 from .services.db.postgres import init_db
 from .services.llm_client import get_default_llm_model
@@ -262,15 +263,13 @@ app.include_router(kb.router)
 app.include_router(kb_category.router)
 app.include_router(tender.router)
 app.include_router(tender_snippets.router)
+app.include_router(declare.router)
 app.include_router(export.router)
 app.include_router(template_analysis.router)
 
-# Legacy tender APIs (disabled by default)
-import os
-if os.getenv("LEGACY_TENDER_APIS_ENABLED", "false").lower() in ("true", "1", "yes"):
-    logger.warning("LEGACY_TENDER_APIS_ENABLED=true, mounting legacy tender APIs (deprecated)")
-    from app.routers.legacy.tender_legacy import router as tender_legacy_router
-    app.include_router(tender_legacy_router, prefix="/api/apps/tender/_legacy", tags=["tender-legacy"])
+# Legacy tender APIs 已删除
+# if os.getenv("LEGACY_TENDER_APIS_ENABLED", "false").lower() in ("true", "1", "yes"):
+#     ... (legacy APIs removed)
 
 
 @app.get("/")

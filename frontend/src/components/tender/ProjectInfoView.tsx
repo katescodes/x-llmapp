@@ -29,8 +29,12 @@ function asArray(v: any): any[] {
 export default function ProjectInfoView({ info, onEvidence }: Props) {
   const [showRaw, setShowRaw] = useState(false);
 
+  // 从 data_json 中提取数据（兼容新旧格式）
+  const dataJson = info?.data_json || info || {};
+  const baseInfo = dataJson?.base || dataJson;
+
   const technical = useMemo(() => {
-    const arr = asArray(info?.technicalParameters);
+    const arr = asArray(dataJson?.technical_parameters || dataJson?.technicalParameters);
     return arr.map((x, idx) => ({
       category: String(x?.category || ""),
       item: String(x?.item || ""),
@@ -39,20 +43,20 @@ export default function ProjectInfoView({ info, onEvidence }: Props) {
       evidence: asArray(x?.evidence_chunk_ids),
       _idx: idx,
     }));
-  }, [info]);
+  }, [dataJson]);
 
   const business = useMemo(() => {
-    const arr = asArray(info?.businessTerms);
+    const arr = asArray(dataJson?.business_terms || dataJson?.businessTerms);
     return arr.map((x, idx) => ({
       term: String(x?.term || ""),
       requirement: String(x?.requirement || ""),
       evidence: asArray(x?.evidence_chunk_ids),
       _idx: idx,
     }));
-  }, [info]);
+  }, [dataJson]);
 
   const scoring = useMemo(() => {
-    const sc = info?.scoringCriteria || {};
+    const sc = dataJson?.scoring_criteria || dataJson?.scoringCriteria || {};
     const items = asArray(sc?.items).map((x, idx) => ({
       category: String(x?.category || ""),
       item: String(x?.item || ""),
@@ -65,7 +69,7 @@ export default function ProjectInfoView({ info, onEvidence }: Props) {
       evaluationMethod: String(sc?.evaluationMethod || ""),
       items,
     };
-  }, [info]);
+  }, [dataJson]);
 
   const showEvidenceBtn = (ids: any[]) =>
     onEvidence && ids && ids.length > 0 ? (
@@ -88,7 +92,7 @@ export default function ProjectInfoView({ info, onEvidence }: Props) {
         {!showRaw ? (
           <div className="tender-kv-grid" style={{ marginTop: 12 }}>
             {BASIC_FIELDS.map((f) => {
-              const v = info?.[f.k];
+              const v = baseInfo?.[f.k];
               const text = (v === null || v === undefined || String(v).trim() === "") ? "—" : String(v);
               return (
                 <div key={f.k} className="tender-kv-item">
