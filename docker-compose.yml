@@ -42,6 +42,8 @@ services:
       - CUTOVER_PROJECT_IDS=
       - RETRIEVAL_MODE=NEW_ONLY
       - INGEST_MODE=NEW_ONLY
+      # Legacy APIs (disabled by default, set to true to enable deprecated endpoints)
+      - LEGACY_TENDER_APIS_ENABLED=false
       - EXTRACT_MODE=NEW_ONLY
       - REVIEW_MODE=NEW_ONLY
       - RULES_MODE=NEW_ONLY

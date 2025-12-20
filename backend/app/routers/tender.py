@@ -160,11 +160,8 @@ def delete_project(project_id: str, req: ProjectDeleteRequest, request: Request,
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/projects/{project_id}/documents")
-def list_legacy_documents(project_id: str, request: Request):
-    """列出项目文档绑定（兼容旧 API）"""
-    dao = TenderDAO(_get_pool(request))
-    return dao.list_project_documents(project_id)
+# REMOVED: list_legacy_documents endpoint moved to routers/legacy/tender_legacy.py
+# To re-enable, set LEGACY_TENDER_APIS_ENABLED=true
 
 
 # ==================== 资产管理 ====================

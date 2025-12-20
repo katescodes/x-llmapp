@@ -442,57 +442,19 @@ class TenderService:
         data: bytes,
     ) -> str:
         """
-        轻量入库（LEGACY）：解析文件 → 分块 → 写入 kb_documents/kb_chunks
+        REMOVED: Legacy KB ingest path deleted.
         
-        ⚠️ DEPRECATED: 仅在 INGEST_MODE=OLD 时使用
-        NEW_ONLY 模式应使用 platform/ingest/v2_service.py (DocStore)
+        This method previously wrote to kb_documents/kb_chunks (deprecated tables).
+        All ingest must now go through platform/ingest/v2_service.py (DocStore).
         
-        Returns:
-            kb_doc_id
+        If you see this error, you are using OLD/SHADOW mode which is no longer supported.
+        Set INGEST_MODE=NEW_ONLY in your environment.
         """
-        # Step 6: 防护措施 - NEW_ONLY 禁止写入 KB
-        from app.core.cutover import get_cutover_config
-        cutover = get_cutover_config()
-        ingest_mode = cutover.get_mode("ingest", kb_id)  # kb_id 可作为 project_id
-        
-        if ingest_mode.value == "NEW_ONLY":
-            raise RuntimeError(
-                f"[Step6 Boundary] INGEST_MODE=NEW_ONLY must NOT write to kb_documents/kb_chunks. "
-                f"Use platform/ingest/v2_service.py (DocStore) instead. "
-                f"File: {filename}, kind: {kind}"
-            )
-        
-        logger.warning(
-            f"[LEGACY KB Ingest] Using deprecated kb_documents/kb_chunks path. "
-            f"Consider migrating to DocStore. File: {filename}"
+        raise RuntimeError(
+            f"[REMOVED] Legacy tender pipeline (_ingest_to_kb) has been deleted. "
+            f"NEW_ONLY mode is required. Use platform/ingest/v2_service.py (DocStore). "
+            f"File: {filename}, kind: {kind}"
         )
-        
-        # 解析文件内容
-        text = _read_text_from_file_bytes(filename, data)
-        content_hash = _sha256(data)
-
-        # 创建文档记录
-        meta = {"kind": kind, "bidder_name": bidder_name or ""}
-        doc_id = self.dao.create_kb_document(
-            kb_id=kb_id,
-            filename=filename,
-            content_hash=content_hash,
-            meta_json=meta,
-        )
-
-        # 分块并插入
-        chunks = []
-        parts = _chunk_text(text, max_chars=1200, overlap=150)
-        for i, part in enumerate(parts, start=1):
-            chunks.append({
-                "title": filename,
-                "url": "",
-                "position": i,
-                "content": part,
-            })
-
-        self.dao.insert_kb_chunks(kb_id=kb_id, doc_id=doc_id, chunks=chunks)
-        return doc_id
 
     def _load_context_by_assets(
         self,
@@ -595,10 +557,8 @@ class TenderService:
                 tpl_meta = self._parse_template_meta(storage_path)
             
             # Step 4: 新入库逻辑（cutover 控制）
-            # 根据 cutover 模式决定入库策略
+            # 只支持 NEW_ONLY 模式，删除OLD/SHADOW/PREFER_NEW分支
             ingest_v2_result = None
-            v2_success = False
-            need_legacy_ingest = True  # 默认需要旧入库
             
             if kind in ("tender", "bid", "custom_rule"):
                 from app.core.cutover import get_cutover_config
@@ -606,142 +566,51 @@ class TenderService:
                 ingest_mode = cutover.get_mode("ingest", project_id)
                 tpl_meta["ingest_mode_used"] = ingest_mode.value
                 
-                # PREFER_NEW 或 NEW_ONLY: 先尝试新入库
-                if ingest_mode.value in ("PREFER_NEW", "NEW_ONLY"):
-                    try:
-                        from app.platform.ingest.v2_service import IngestV2Service
-                        from app.services.db.postgres import _get_pool
-                        pool = _get_pool()
-                        ingest_v2 = IngestV2Service(pool)
-                        
-                        # 确保 storage_path 存在（用于新入库）
-                        if not storage_path:
-                            storage_path = os.path.join(base_dir, f"{kind}_{uuid.uuid4().hex}_{filename}")
-                            with open(storage_path, "wb") as w:
-                                w.write(b)
-                        
-                        temp_asset_id = f"temp_{uuid.uuid4().hex}"
-                        
-                        ingest_v2_result = await ingest_v2.ingest_asset_v2(
-                            project_id=project_id,
-                            asset_id=temp_asset_id,
-                            file_bytes=b,
-                            filename=filename,
-                            doc_type=kind,
-                            owner_id=proj.get("owner_id"),
-                            storage_path=storage_path,
-                        )
-                        
-                        # 新入库成功
-                        tpl_meta["doc_version_id"] = ingest_v2_result.doc_version_id
-                        tpl_meta["ingest_v2_status"] = "success"
-                        tpl_meta["ingest_v2_segments"] = ingest_v2_result.segment_count
-                        v2_success = True
-                        
-                        logger.info(
-                            f"IngestV2 {ingest_mode.value} success: "
-                            f"doc_version_id={ingest_v2_result.doc_version_id} "
-                            f"segments={ingest_v2_result.segment_count}"
-                        )
-                        
-                        # PREFER_NEW 成功后默认不跑旧入库（可通过开关控制）
-                        if ingest_mode.value == "PREFER_NEW":
-                            need_legacy_ingest = False
-                            tpl_meta["ingest_v2_fallback_to_legacy"] = False
-                        # NEW_ONLY 永远不跑旧入库
-                        elif ingest_mode.value == "NEW_ONLY":
-                            need_legacy_ingest = False
-                        
-                    except Exception as e:
-                        logger.error(f"IngestV2 {ingest_mode.value} failed: {e}", exc_info=True)
-                        
-                        if ingest_mode.value == "NEW_ONLY":
-                            # NEW_ONLY 失败直接抛错
-                            tpl_meta["ingest_v2_status"] = "failed"
-                            tpl_meta["ingest_v2_error"] = str(e)
-                            raise ValueError(f"IngestV2 NEW_ONLY failed: {e}") from e
-            else:
-                            # PREFER_NEW 失败回退旧入库
-                            logger.warning(f"IngestV2 PREFER_NEW failed, fallback to legacy ingest: {e}")
-                            tpl_meta["ingest_v2_status"] = "failed_fallback"
-                            tpl_meta["ingest_v2_error"] = str(e)
-                            tpl_meta["ingest_v2_fallback_to_legacy"] = True
-                            need_legacy_ingest = True
-            
-            # 执行旧入库（如果需要）
-            if need_legacy_ingest and kind in ("tender", "bid", "custom_rule"):
-                # tender/bid/custom_rule：入库到 KB
-                kb_doc_id = self._ingest_to_kb(
-                    kb_id=kb_id,
-                    filename=filename,
-                    kind=kind,
-                    bidder_name=bidder_name,
-                    data=b,
-                )
-                
-                logger.info(f"Legacy ingest done: kb_doc_id={kb_doc_id}")
-
-                # 兼容旧 API：tender/bid 也写入 tender_project_documents
-                if kind in ("tender", "bid"):
-                    role = "tender" if kind == "tender" else "bid"
-                    self.dao.create_project_document_binding(
-                        project_id, role, kb_doc_id, bidder_name, filename
+                # 强制要求 NEW_ONLY
+                if ingest_mode.value != "NEW_ONLY":
+                    raise RuntimeError(
+                        f"[REMOVED] Legacy tender pipeline deleted. "
+                        f"INGEST_MODE={ingest_mode.value} is no longer supported. "
+                        f"Set INGEST_MODE=NEW_ONLY. File: {filename}"
                     )
-
-                # 新增：tender/bid/custom_rule 也落盘，供范本抽取/预览/导出使用
+                
+                # 只走 NEW_ONLY 路径
+                from app.platform.ingest.v2_service import IngestV2Service
+                from app.services.db.postgres import _get_pool
+                pool = _get_pool()
+                ingest_v2 = IngestV2Service(pool)
+                
+                # 确保 storage_path 存在
                 if not storage_path:
                     storage_path = os.path.join(base_dir, f"{kind}_{uuid.uuid4().hex}_{filename}")
                     with open(storage_path, "wb") as w:
                         w.write(b)
-            
-            # SHADOW 模式：旧入库成功后，同步跑新入库（失败不影响主流程）
-            if kind in ("tender", "bid", "custom_rule") and not v2_success:
-                from app.core.cutover import get_cutover_config
-                cutover = get_cutover_config()
-                ingest_mode = cutover.get_mode("ingest", project_id)
                 
-                if ingest_mode.value == "SHADOW":
-                    try:
-                        from app.platform.ingest.v2_service import IngestV2Service
-                        from app.services.db.postgres import _get_pool
-                        pool = _get_pool()
-                        ingest_v2 = IngestV2Service(pool)
-                        
-                        # 确保 storage_path 存在
-                        if not storage_path:
-                            storage_path = os.path.join(base_dir, f"{kind}_{uuid.uuid4().hex}_{filename}")
-                            with open(storage_path, "wb") as w:
-                                w.write(b)
-                        
-                        temp_asset_id = f"temp_{uuid.uuid4().hex}"
-                        
-                        ingest_v2_result = await ingest_v2.ingest_asset_v2(
-                            project_id=project_id,
-                            asset_id=temp_asset_id,
-                            file_bytes=b,
-                            filename=filename,
-                            doc_type=kind,
-                            owner_id=proj.get("owner_id"),
-                            storage_path=storage_path,
-                        )
-                        
-                        # 记录到 meta_json
-                        tpl_meta["doc_version_id"] = ingest_v2_result.doc_version_id
-                        tpl_meta["ingest_v2_status"] = "success"
-                        tpl_meta["ingest_v2_segments"] = ingest_v2_result.segment_count
-                        tpl_meta["ingest_mode_used"] = "SHADOW"
-                        
-                        logger.info(
-                            f"IngestV2 SHADOW success: "
-                            f"doc_version_id={ingest_v2_result.doc_version_id} "
-                            f"segments={ingest_v2_result.segment_count}"
-                        )
-                    except Exception as e:
-                        # SHADOW 模式：新入库失败仅记录，不影响主流程
-                        logger.error(f"IngestV2 SHADOW failed: {e}", exc_info=True)
-                        tpl_meta["ingest_v2_status"] = "failed"
-                        tpl_meta["ingest_v2_error"] = str(e)
-                        tpl_meta["ingest_mode_used"] = "SHADOW"
+                temp_asset_id = f"temp_{uuid.uuid4().hex}"
+                
+                ingest_v2_result = await ingest_v2.ingest_asset_v2(
+                    project_id=project_id,
+                    asset_id=temp_asset_id,
+                    file_bytes=b,
+                    filename=filename,
+                    doc_type=kind,
+                    owner_id=proj.get("owner_id"),
+                    storage_path=storage_path,
+                )
+                
+                # 新入库成功
+                tpl_meta["doc_version_id"] = ingest_v2_result.doc_version_id
+                tpl_meta["ingest_v2_status"] = "success"
+                tpl_meta["ingest_v2_segments"] = ingest_v2_result.segment_count
+                
+                logger.info(
+                    f"IngestV2 NEW_ONLY success: "
+                    f"doc_version_id={ingest_v2_result.doc_version_id} "
+                    f"segments={ingest_v2_result.segment_count}"
+                )
+            
+            # REMOVED: SHADOW mode ingest deleted (lines 612-659)
+            # NEW_ONLY is now the only supported mode
             
             # 旧双写逻辑（兼容 Step 2，如果 DOCSTORE_DUALWRITE=true 且未被 v2 覆盖）
             if self.feature_flags.DOCSTORE_DUALWRITE and "doc_version_id" not in tpl_meta:

@@ -1,4 +1,0 @@
-"""
-Tender Extraction Specs
-"""
-

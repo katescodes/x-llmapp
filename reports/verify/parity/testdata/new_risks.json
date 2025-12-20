@@ -1,0 +1,193 @@
+[
+  {
+    "id": "risk_3919d5087cb340a5bed57a30e5265b83",
+    "project_id": "tp_50db3c3d47624340b18d02312c856a9a",
+    "risk_type": "mustReject",
+    "title": "未按要求提供《开标一览表》",
+    "description": "投标文件未按招标文件规定的格式填写《开标一览表》，或内容与投标文件不一致，导致投标文件被视为无效。",
+    "suggestion": "严格按照招标文件模板填写《开标一览表》，确保格式、内容、签章完整一致后再提交。",
+    "severity": "critical",
+    "tags": [
+      "格式",
+      "开标一览表"
+    ],
+    "evidence_chunk_ids": [
+      "seg_52a10f9eacd0d440fabd826d0ce4a513a"
+    ],
+    "evidence_spans": null
+  },
+  {
+    "id": "risk_d906b4e322a9475c8f55b2ecbc5ec191",
+    "project_id": "tp_50db3c3d47624340b18d02312c856a9a",
+    "risk_type": "mustReject",
+    "title": "未在规定时间内完成电子投标文件解密",
+    "description": "投标文件提交后，投标人未在30分钟内完成远程解密，系统将视为投标文件无效并不予受理。",
+    "suggestion": "提交投标文件后立即进行解密操作，预先检查网络和系统状态，确保在30分钟窗口内完成。",
+    "severity": "critical",
+    "tags": [
+      "解密",
+      "电子投标"
+    ],
+    "evidence_chunk_ids": [
+      "seg_4a10f9eacd0d440fabd826d0ce4a513a"
+    ],
+    "evidence_spans": null
+  },
+  {
+    "id": "risk_ffe38edeb3d14156b1155fc28c7ebd11",
+    "project_id": "tp_50db3c3d47624340b18d02312c856a9a",
+    "risk_type": "mustReject",
+    "title": "未使用CA证书进行电子投标文件签章",
+    "description": "系统提交的电子投标文件未使用投标人CA锁完成签章，导致文件被认定为无效。",
+    "suggestion": "在提交前使用合法有效的CA证书对电子投标文件进行签章，并保存签章成功的系统提示。",
+    "severity": "critical",
+    "tags": [
+      "CA证书",
+      "电子投标",
+      "签章"
+    ],
+    "evidence_chunk_ids": [
+      "seg_06306c19888d4d9db33c125a6656e895"
+    ],
+    "evidence_spans": null
+  },
+  {
+    "id": "risk_d0d291bb7fc34344a6252962870be5b1",
+    "project_id": "tp_50db3c3d47624340b18d02312c856a9a",
+    "risk_type": "mustReject",
+    "title": "未提供有效的资格证书或证件",
+    "description": "投标文件中缺少营业执照、法定代表人身份证明、资质证书等必备材料，或所提供的证件已过期。",
+    "suggestion": "检查并确保所有资格证书、营业执照、法定代表人身份证明等在有效期内，并按要求提供扫描件。",
+    "severity": "critical",
+    "tags": [
+      "资格",
+      "证书",
+      "有效期"
+    ],
+    "evidence_chunk_ids": [
+      "seg_13b9c9ba733e14339a00cc53fb566a20a"
+    ],
+    "evidence_spans": null
+  },
+  {
+    "id": "risk_fc524a36e70a47209847cc873dd1117b",
+    "project_id": "tp_50db3c3d47624340b18d02312c856a9a",
+    "risk_type": "mustReject",
+    "title": "投标人存在不良信用记录",
+    "description": "投标人或其法定代表人、项目负责人被列入失信被执行人、经营异常、重大税收违法或行贿犯罪档案等不良信用记录。",
+    "suggestion": "在投标前通过“信用中国”平台核查信用记录，确保不存在上述不良记录；如有异常需提前整改或更换投标主体。",
+    "severity": "critical",
+    "tags": [
+      "信用",
+      "不良记录"
+    ],
+    "evidence_chunk_ids": [
+      "seg_26c3c5405d4842cbb812af09d867b203"
+    ],
+    "evidence_spans": null
+  },
+  {
+    "id": "risk_126df3631856407cb93e2f4f987d7b51",
+    "project_id": "tp_50db3c3d47624340b18d02312c856a9a",
+    "risk_type": "mustReject",
+    "title": "未按要求提供进口货物的原产地及海关文件",
+    "description": "若投标货物来源于境外，未提供原产地证明、海关完税证明、商检证明等文件，导致不符合强制性要求。",
+    "suggestion": "对所有进口设备准备齐全的原产地证书、海关完税单、商检报告及中文翻译件，并随投标文件一起提交。",
+    "severity": "critical",
+    "tags": [
+      "进口",
+      "原产地",
+      "海关"
+    ],
+    "evidence_chunk_ids": [
+      "seg_1934ab1905c84ac9af8a0f70ffcc1fe2"
+    ],
+    "evidence_spans": null
+  },
+  {
+    "id": "risk_03da9dd56d8c4639a3a275ad58d3537a",
+    "project_id": "tp_50db3c3d47624340b18d02312c856a9a",
+    "risk_type": "mustReject",
+    "title": "未对招标文件中的技术参数作完整响应",
+    "description": "投标文件对招标文件中标注为“★”或“█”的技术参数出现负偏离或未提供相应技术证明文件。",
+    "suggestion": "逐项核对技术参数，确保全部满足或提供合格的技术证明、检测报告，避免负偏离。",
+    "severity": "critical",
+    "tags": [
+      "技术参数",
+      "响应"
+    ],
+    "evidence_chunk_ids": [
+      "seg_19b9c9eacd0d440fabd826d0ce4a513a"
+    ],
+    "evidence_spans": null
+  },
+  {
+    "id": "risk_d50812a3a50f4fd082e9964adadc499d",
+    "project_id": "tp_50db3c3d47624340b18d02312c856a9a",
+    "risk_type": "mustReject",
+    "title": "投标文件未加盖统一对外公章或未按要求加盖联合体专用章",
+    "description": "投标文件中要求加盖的地方未加盖投标人统一对外公章，或联合体投标未使用牵头人统一盖章，导致文件无效。",
+    "suggestion": "确认所有需盖章的页面使用统一对外公章；联合体投标时，所有盖章均由牵头人完成并加盖其公章。",
+    "severity": "critical",
+    "tags": [
+      "盖章",
+      "联合体"
+    ],
+    "evidence_chunk_ids": [
+      "seg_b83c9ba733e14339a00cc53fb566a20a"
+    ],
+    "evidence_spans": null
+  },
+  {
+    "id": "risk_bf05ac77fbee44c5b3cf448c8ea97654",
+    "project_id": "tp_50db3c3d47624340b18d02312c856a9a",
+    "risk_type": "mustReject",
+    "title": "包装未封闭、未防潮导致设备损坏",
+    "description": "交付设备的包装未进行封闭保护或防潮处理，导致运输途中受潮、腐蚀或变形。",
+    "suggestion": "采用符合要求的木箱包装并在所有开口处进行封闭防潮处理，包装外标注防潮、搬运注意事项。",
+    "severity": "critical",
+    "tags": [
+      "包装",
+      "防潮",
+      "运输"
+    ],
+    "evidence_chunk_ids": [
+      "seg_985b8b7f33e14692a5d2160ba7134eb1"
+    ],
+    "evidence_spans": null
+  },
+  {
+    "id": "risk_1f7b53e444b74a26b31c16d42e921185",
+    "project_id": "tp_50db3c3d47624340b18d02312c856a9a",
+    "risk_type": "other",
+    "title": "投标文件需使用简体中文并统一计量单位",
+    "description": "投标文件中出现英文或其他语言文字、或使用非中华人民共和国法定计量单位，可能被评委会拒收。",
+    "suggestion": "所有文字统一使用简体中文，计量单位采用国家法定单位；如需使用外文，提供中文翻译。",
+    "severity": "high",
+    "tags": [
+      "语言",
+      "计量单位"
+    ],
+    "evidence_chunk_ids": [
+      "seg_66c3c5405d4842cbb812af09d867b203"
+    ],
+    "evidence_spans": null
+  },
+  {
+    "id": "risk_a15aca762b994e73b86a5ec71a49b333",
+    "project_id": "tp_50db3c3d47624340b18d02312c856a9a",
+    "risk_type": "other",
+    "title": "投标文件未在规定时间内提交或提交后未完成撤回/修改",
+    "description": "投标文件提交截止时间后仍未完成提交或在截止前撤回后未重新上传，导致投标无效。",
+    "suggestion": "提前完成投标文件编制，确保在截止时间前完成提交；如需撤回，务必在截止前重新上传完整文件。",
+    "severity": "high",
+    "tags": [
+      "提交时间",
+      "撤回"
+    ],
+    "evidence_chunk_ids": [
+      "seg_06306c19888d4d9db33c125a6656e895"
+    ],
+    "evidence_spans": null
+  }
+]

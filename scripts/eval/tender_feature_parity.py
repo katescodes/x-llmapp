@@ -480,7 +480,7 @@ def process_project(
         rule_found = False
         if isinstance(review, list):
             for item in review:
-                if isinstance(item, dict) and item.get('rule_id') == must_hit_rule:
+                if isinstance(item, dict) and item.get('rule_id') == must_hit_rule_id:
                     rule_found = True
                     break
         
