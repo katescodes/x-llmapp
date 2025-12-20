@@ -74,8 +74,52 @@ def main():
         return 1
     print()
     
-    # Step 3: 运行验收脚本
-    print("Step 3: 运行完整验收...")
+    # Step 3: 运行边界检查
+    print("Step 3: 运行边界检查...")
+    ret = run_cmd([
+        "python",
+        "scripts/ci/check_platform_work_boundary.py"
+    ])
+    if ret != 0:
+        print("✗ 边界检查失败")
+        return 1
+    print("✓ 边界检查通过")
+    print()
+    
+    # Step 4: 运行 pytest（关键测试）
+    print("Step 4: 运行 pytest（关键测试）...")
+    ret, stdout, stderr = run_cmd([
+        "docker-compose", "exec", "-T", "backend",
+        "pytest", "-q", "/repo/backend/tests/test_tender_outline_imports.py",
+        "/repo/backend/tests/test_newonly_never_writes_kb.py"
+    ], capture=True)
+    
+    print(stdout)
+    if stderr:
+        print("STDERR:", stderr)
+    
+    if ret != 0:
+        print("✗ pytest 失败")
+        # 导出日志
+        print("导出 docker logs...")
+        for service in ["backend", "worker", "postgres", "redis"]:
+            log_file = reports_dir / f"docker_{service}_pytest_fail.log"
+            ret_code, sout, serr = run_cmd(
+                ["docker-compose", "logs", service, "--tail", "300"],
+                capture=True
+            )
+            with open(log_file, 'w') as f:
+                f.write(sout)
+                if serr:
+                    f.write("\n=== STDERR ===\n")
+                    f.write(serr)
+            print(f"  {log_file}")
+        return 1
+    print("✓ pytest 通过")
+    print()
+    
+    # Step 5: 运行完整验收
+    print("Step 5: 运行完整验收...")
     ret = run_cmd([
         "python",
         "scripts/ci/verify_cutover_and_extraction.py"

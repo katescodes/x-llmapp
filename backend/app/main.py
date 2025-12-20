@@ -35,11 +35,34 @@ app = FastAPI(title="亿林亿问 Backend", version="0.2.0")
 
 # LLM Orchestrator 包装器 - 用于 TenderService
 class SimpleLLMOrchestrator:
-    """简单的 LLM orchestrator 包装器，兼容 TenderService 的 duck typing 接口"""
+    """
+    简单的 LLM orchestrator 包装器，兼容 TenderService 的 duck typing 接口
+    
+    支持两种模式：
+    1. MOCK 模式（MOCK_LLM=true + DEBUG=true）：返回模拟数据，不访问外部服务
+    2. REAL 模式：调用真实 LLM（通过 llm_models 表配置）
+    
+    初始化策略（可降级）：
+    - MOCK 模式：无需任何外部依赖，直接返回 mock 数据
+    - REAL 模式：依赖 llm_models 表配置，如果配置缺失，在调用时抛出明确错误
+    """
     
     def chat(self, messages: list, model_id: str = None, **kwargs) -> dict:
-        """调用 LLM 生成回答（同步版本）"""
-        # 开发环境：如果 MOCK_LLM=true，返回模拟数据
+        """
+        调用 LLM 生成回答（同步版本）
+        
+        Args:
+            messages: 消息列表 [{"role": "user", "content": "..."}]
+            model_id: 可选的模型 ID
+            **kwargs: 其他参数（temperature, max_tokens, top_p 等）
+        
+        Returns:
+            OpenAI 格式的响应: {"choices": [{"message": {"content": "..."}}]}
+        
+        Raises:
+            RuntimeError: 当 LLM 调用失败时
+        """
+        # 检查 MOCK_LLM 模式
         # 安全检查：MOCK_LLM 只在 DEBUG=true 时允许生效
         import os
         mock_llm_enabled = os.getenv("MOCK_LLM", "false").lower() in ("true", "1", "yes")
@@ -52,6 +75,7 @@ class SimpleLLMOrchestrator:
             else:
                 logger.info("[SimpleLLMOrchestrator] MOCK_LLM enabled, returning mock response")
         
+        # MOCK 模式：返回模拟数据（不访问任何外部服务，不查询 DB）
         if mock_llm_enabled:
             # 返回一个符合 prompt 要求的四板块 JSON
             mock_response = {
@@ -104,8 +128,9 @@ class SimpleLLMOrchestrator:
             import json
             return {"choices": [{"message": {"content": json.dumps(mock_response, ensure_ascii=False)}}]}
         
+        # REAL 模式：调用真实 LLM
         try:
-            # 获取模型配置
+            # 获取模型配置（依赖 llm_models 表）
             if model_id:
                 from app.services.llm_client import get_llm_model_by_id
                 model = get_llm_model_by_id(model_id)
@@ -113,12 +138,23 @@ class SimpleLLMOrchestrator:
                 model = get_default_llm_model()
             
             if not model:
-                logger.error("No LLM model available")
-                return {"choices": [{"message": {"content": "Error: No LLM model configured"}}]}
+                error_msg = (
+                    "No LLM model configured. "
+                    "Please ensure llm_models table has at least one active model. "
+                    "Alternatively, set MOCK_LLM=true and DEBUG=true for testing."
+                )
+                logger.error(f"[SimpleLLMOrchestrator] {error_msg}")
+                raise RuntimeError(error_msg)
             
             # 构建请求 URL
             base_url = model.base_url.rstrip("/")
             endpoint_path = model.endpoint_path or "/v1/chat/completions"
+            
+            # 单点兜底：确保 max_tokens 有合理默认值
+            # 如果调用方没传 max_tokens，默认给 4096
+            if "max_tokens" not in kwargs:
+                kwargs["max_tokens"] = 4096
+                logger.debug(f"[SimpleLLMOrchestrator] max_tokens not provided, defaulting to 4096")
             
             # 判断请求类型
             if "ollama" in base_url.lower():
@@ -130,14 +166,13 @@ class SimpleLLMOrchestrator:
                     "stream": False,
                 }
                 # 应用覆盖参数
-                if kwargs:
-                    options = {}
-                    if "temperature" in kwargs:
-                        options["temperature"] = kwargs["temperature"]
-                    if "max_tokens" in kwargs:
-                        options["num_predict"] = kwargs["max_tokens"]
-                    if options:
-                        payload["options"] = options
+                options = {}
+                if "temperature" in kwargs:
+                    options["temperature"] = kwargs["temperature"]
+                if "max_tokens" in kwargs:
+                    options["num_predict"] = kwargs["max_tokens"]
+                if options:
+                    payload["options"] = options
             else:
                 # OpenAI 兼容格式
                 endpoint = f"{base_url}{endpoint_path}"
@@ -146,20 +181,13 @@ class SimpleLLMOrchestrator:
                     "messages": messages,
                     "stream": False,
                 }
-                # 应用覆盖参数（设置合理的默认值）
-                if kwargs:
-                    if "temperature" in kwargs:
-                        payload["temperature"] = kwargs["temperature"]
-                    if "max_tokens" in kwargs:
-                        payload["max_tokens"] = kwargs["max_tokens"]
-                    else:
-                        # 默认 4096 以支持长输出
-                        payload["max_tokens"] = 4096
-                    if "top_p" in kwargs:
-                        payload["top_p"] = kwargs["top_p"]
-                else:
-                    # 没有 kwargs 时也设置默认值
-                    payload["max_tokens"] = 4096
+                # 应用覆盖参数
+                if "temperature" in kwargs:
+                    payload["temperature"] = kwargs["temperature"]
+                if "max_tokens" in kwargs:
+                    payload["max_tokens"] = kwargs["max_tokens"]
+                if "top_p" in kwargs:
+                    payload["top_p"] = kwargs["top_p"]
             
             # 准备请求头
             headers = {"Content-Type": "application/json"}
@@ -168,7 +196,7 @@ class SimpleLLMOrchestrator:
             
             # 发送同步请求（增加超时时间到300秒，用于处理大文本）
             # 注意：verify=False 用于跳过SSL证书验证（自签名证书）
-            logger.info(f"[SimpleLLMOrchestrator] Calling REAL LLM: endpoint={endpoint} model={model.model}")
+            logger.info(f"[SimpleLLMOrchestrator] Calling REAL LLM: endpoint={endpoint} model={model.model} max_tokens={kwargs.get('max_tokens', 'default')}")
             with httpx.Client(timeout=300.0, verify=False) as client:
                 response = client.post(endpoint, json=payload, headers=headers)
                 response.raise_for_status()
@@ -191,8 +219,8 @@ class SimpleLLMOrchestrator:
                 return {"choices": [{"message": {"content": str(result)}}]}
                 
         except Exception as e:
-            logger.error(f"LLM call failed: {e}", exc_info=True)
-            # 抛出异常而不是返回错误消息，让上层捕获
+            logger.error(f"[SimpleLLMOrchestrator] LLM call failed: {e}", exc_info=True)
+            # 抛出异常而不是返回错误消息，让上层捕获并记录详细日志
             raise RuntimeError(f"LLM call failed: {str(e)}") from e
     
     # 为兼容性提供别名
@@ -242,7 +270,7 @@ import os
 if os.getenv("LEGACY_TENDER_APIS_ENABLED", "false").lower() in ("true", "1", "yes"):
     logger.warning("LEGACY_TENDER_APIS_ENABLED=true, mounting legacy tender APIs (deprecated)")
     from app.routers.legacy.tender_legacy import router as tender_legacy_router
-    app.include_router(tender_legacy_router, prefix="/api/apps/tender", tags=["tender-legacy"])
+    app.include_router(tender_legacy_router, prefix="/api/apps/tender/_legacy", tags=["tender-legacy"])
 
 
 @app.get("/")

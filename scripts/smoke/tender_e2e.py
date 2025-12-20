@@ -25,9 +25,14 @@
     RULES_FILE: 自定义规则文件路径（可选）
     FORMAT_TEMPLATE_FILE: 格式模板文件路径（可选）
     SKIP_OPTIONAL: 跳过可选步骤（默认: false）
+    SMOKE_STEPS: 指定运行的步骤（逗号分隔，如: upload,project_info,risks,outline,review）
+    SMOKE_TIMEOUT: 总体超时时间（秒，默认: 600）
 
 使用方式：
     python scripts/smoke/tender_e2e.py
+    
+    # 只运行部分步骤（Step 10 建议）
+    SMOKE_STEPS=upload,project_info,risks,outline,review python scripts/smoke/tender_e2e.py
 """
 import os
 import sys
@@ -47,6 +52,8 @@ RULES_FILE = os.getenv("RULES_FILE", "testdata/rules.yaml")
 FORMAT_TEMPLATE_FILE = os.getenv("FORMAT_TEMPLATE_FILE", "")
 SKIP_OPTIONAL = os.getenv("SKIP_OPTIONAL", "false").lower() in ("true", "1", "yes")
 SMOKE_STRICT_NEWONLY = os.getenv("SMOKE_STRICT_NEWONLY", "false").lower() in ("true", "1", "yes")
+SMOKE_STEPS = os.getenv("SMOKE_STEPS", "").strip()  # 逗号分隔的步骤列表
+SMOKE_TIMEOUT = int(os.getenv("SMOKE_TIMEOUT", "600"))  # 总体超时（秒）
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -523,7 +530,23 @@ def main():
     log_info(f"Tender File: {TENDER_FILE}")
     log_info(f"Bid File: {BID_FILE}")
     log_info(f"Skip Optional: {SKIP_OPTIONAL}")
+    log_info(f"Timeout: {SMOKE_TIMEOUT}s")
+    
+    # 解析步骤过滤
+    enabled_steps = set()
+    if SMOKE_STEPS:
+        enabled_steps = set(s.strip().lower() for s in SMOKE_STEPS.split(","))
+        log_info(f"Enabled Steps: {', '.join(enabled_steps)}")
+    else:
+        log_info("Running ALL steps (no filter)")
+    
     print()
+    
+    def should_run(step_name: str) -> bool:
+        """检查是否应该运行该步骤"""
+        if not enabled_steps:
+            return True  # 没有过滤，运行所有步骤
+        return step_name.lower() in enabled_steps
     
     # 获取 token
     token = TOKEN
@@ -534,45 +557,80 @@ def main():
     
     print()
     
+    start_time = time.time()
+    
     try:
-        # Step 0: 创建项目
+        # Step 0: 创建项目（总是运行）
         project_id = create_project(token)
         print()
         
         # 上传招标文件
-        upload_tender_file(token, project_id, TENDER_FILE)
-        print()
+        if should_run("upload"):
+            upload_tender_file(token, project_id, TENDER_FILE)
+            print()
+        else:
+            log_info("⊗ 跳过: 上传招标文件")
+            print()
         
         # Step 1: 提取项目信息
-        extract_project_info(token, project_id)
-        print()
+        if should_run("project_info"):
+            extract_project_info(token, project_id)
+            print()
+        else:
+            log_info("⊗ 跳过: 提取项目信息")
+            print()
         
         # Step 2: 提取风险
-        extract_risks(token, project_id)
-        print()
+        if should_run("risks"):
+            extract_risks(token, project_id)
+            print()
+        else:
+            log_info("⊗ 跳过: 提取风险")
+            print()
         
         # Step 3: 生成目录
-        generate_directory(token, project_id)
-        print()
+        if should_run("outline"):
+            generate_directory(token, project_id)
+            print()
+        else:
+            log_info("⊗ 跳过: 生成目录")
+            print()
         
         # Step 3.2: 自动填充样例（可选）
-        auto_fill_samples(token, project_id)
-        print()
+        if should_run("autofill") and not SKIP_OPTIONAL:
+            auto_fill_samples(token, project_id)
+            print()
+        else:
+            log_info("⊗ 跳过: 自动填充样例")
+            print()
         
         # 上传投标文件
-        upload_bid_file(token, project_id, BID_FILE)
-        print()
+        if should_run("upload_bid"):
+            upload_bid_file(token, project_id, BID_FILE)
+            print()
+        else:
+            log_info("⊗ 跳过: 上传投标文件")
+            print()
         
         # Step 5: 运行审查
-        run_review(token, project_id)
-        print()
+        if should_run("review"):
+            run_review(token, project_id)
+            print()
+        else:
+            log_info("⊗ 跳过: 运行审查")
+            print()
         
         # 导出 DOCX
-        export_docx(token, project_id)
-        print()
+        if should_run("export"):
+            export_docx(token, project_id)
+            print()
+        else:
+            log_info("⊗ 跳过: 导出 DOCX")
+            print()
         
-        # 清理
-        cleanup_project(token, project_id)
+        # 清理（总是运行，除非禁用）
+        if not os.getenv("SKIP_CLEANUP", "").lower() in ("true", "1"):
+            cleanup_project(token, project_id)
         
         # 严格验证模式（NEW_ONLY 不可作假门槛）
         if SMOKE_STRICT_NEWONLY:
@@ -580,6 +638,13 @@ def main():
             log_info("  严格验证模式: SMOKE_STRICT_NEWONLY=true")
             log_info("=" * 60 + "\n")
             run_strict_newonly_tests(token)
+        
+        # 检查超时
+        elapsed_time = int(time.time() - start_time)
+        if elapsed_time > SMOKE_TIMEOUT:
+            log_warning(f"\n⚠ 测试耗时 {elapsed_time}s 超过限制 {SMOKE_TIMEOUT}s")
+        else:
+            log_success(f"\n✓ 测试耗时: {elapsed_time}s (限制: {SMOKE_TIMEOUT}s)")
         
         print(f"\n{GREEN}{'=' * 60}{RESET}")
         print(f"{GREEN}  ✓ 所有测试通过！{RESET}")

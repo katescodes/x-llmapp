@@ -109,15 +109,66 @@ class ExtractionEngine:
         logger.info(f"[ExtractionEngine] BEFORE_LLM project_id={project_id} run_id={run_id} prompt_len={prompt_len} ctx_len={ctx_len}")
         
         llm_start = time.time()
-        print(f"[DEBUG] About to call LLM: llm={llm} llm_type={type(llm).__name__ if llm else 'None'}")
-        # 确保 max_tokens 足够大（至少 4096）
-        out_text = await call_llm(messages, llm, model_id, temperature=spec.temperature, max_tokens=4096)
-        print(f"[DEBUG] LLM returned: out_len={len(out_text) if out_text else 0}")
-        if out_text:
-            print(f"[DEBUG] LLM output preview: {out_text[:200]}")
-        llm_ms = int((time.time() - llm_start) * 1000)
-        out_len = len(out_text) if out_text else 0
-        logger.info(f"[ExtractionEngine] AFTER_LLM project_id={project_id} run_id={run_id} ms={llm_ms} out_len={out_len}")
+        
+        try:
+            print(f"[DEBUG] About to call LLM: llm={llm} llm_type={type(llm).__name__ if llm else 'None'}")
+            
+            # 确保 max_tokens 足够大（至少 4096）
+            out_text = await call_llm(
+                messages,
+                llm,
+                model_id,
+                temperature=spec.temperature,
+                max_tokens=4096
+            )
+            
+            llm_ms = int((time.time() - llm_start) * 1000)
+            out_len = len(out_text) if out_text else 0
+            
+            print(f"[DEBUG] LLM returned: out_len={out_len}")
+            if out_text:
+                print(f"[DEBUG] LLM output preview: {out_text[:200]}")
+            
+            logger.info(
+                f"[ExtractionEngine] AFTER_LLM project_id={project_id} run_id={run_id} "
+                f"ms={llm_ms} out_len={out_len} mode={mode}"
+            )
+            
+        except Exception as llm_error:
+            llm_ms = int((time.time() - llm_start) * 1000)
+            error_type = type(llm_error).__name__
+            error_msg = str(llm_error)
+            
+            # 立刻落日志证据（包含所有关键信息）
+            logger.error(
+                f"[ExtractionEngine] LLM_CALL_FAILED project_id={project_id} run_id={run_id}\n"
+                f"  mode={mode}\n"
+                f"  task_type={spec.__class__.__name__ if hasattr(spec, '__class__') else 'unknown'}\n"
+                f"  model_id={model_id or 'default'}\n"
+                f"  llm_type={type(llm).__name__ if llm else 'None'}\n"
+                f"  timeout_ms={llm_ms}\n"
+                f"  temperature={spec.temperature}\n"
+                f"  prompt_len={prompt_len}\n"
+                f"  ctx_len={ctx_len}\n"
+                f"  error_type={error_type}\n"
+                f"  error_msg={error_msg}\n"
+                f"  payload_preview={{messages_count={len(messages)}, first_msg_len={len(messages[0]['content']) if messages else 0}}}"
+            )
+            
+            # 打印 payload（去敏）
+            payload_safe = {
+                "messages_count": len(messages),
+                "system_prompt_len": len(messages[0]["content"]) if len(messages) > 0 else 0,
+                "user_content_len": len(messages[1]["content"]) if len(messages) > 1 else 0,
+                "temperature": spec.temperature,
+                "max_tokens": 4096,
+            }
+            logger.error(f"[ExtractionEngine] LLM_PAYLOAD_SAFE: {payload_safe}")
+            
+            # 重新抛出异常，让上层处理
+            raise RuntimeError(
+                f"LLM call failed for project_id={project_id} run_id={run_id}: {error_type}: {error_msg}"
+            ) from llm_error
         
         # 4. 解析 JSON
         parse_start = time.time()

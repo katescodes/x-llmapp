@@ -199,14 +199,39 @@ def check_platform_no_services_import():
 
 def check_works_tender_no_services_import():
     """检查 works/tender/** 不应导入 app.services.semantic_outline 或 tender 相关旧 services"""
-    works_tender_dir = Path(__file__).parent.parent.parent / "backend" / "app" / "works" / "tender"
+    # 动态查找 repo root
+    script_path = Path(__file__).resolve()
+    repo_root = None
     
-    # 如果目录不存在（旧路径是 apps/tender），尝试旧路径
-    if not works_tender_dir.exists():
-        works_tender_dir = Path(__file__).parent.parent.parent / "backend" / "app" / "apps" / "tender"
+    # 向上查找 repo root（存在 docker-compose.yml 或 backend/ 目录）
+    for parent in script_path.parents:
+        if (parent / "docker-compose.yml").exists() or (parent / "backend").exists():
+            repo_root = parent
+            break
     
-    if not works_tender_dir.exists():
-        # 如果都不存在，跳过检查
+    if not repo_root:
+        print("  ⚠️ 警告: 无法找到 repo root，跳过 Check4")
+        return []
+    
+    # 尝试多个可能的路径（兼容宿主机和容器）
+    possible_paths = [
+        repo_root / "backend" / "app" / "works" / "tender",  # 标准路径
+        repo_root / "app" / "works" / "tender",  # 容器内路径
+        repo_root / "backend" / "app" / "apps" / "tender",  # 旧路径（兼容）
+    ]
+    
+    works_tender_dir = None
+    for path in possible_paths:
+        if path.exists():
+            works_tender_dir = path
+            print(f"  ℹ️ 找到 works/tender 目录: {path}")
+            break
+    
+    if not works_tender_dir:
+        print(f"  ⚠️ 警告: works/tender 目录不存在于以下路径:")
+        for path in possible_paths:
+            print(f"    - {path} (存在: {path.exists()})")
+        print("  跳过 Check4")
         return []
     
     violations = []
@@ -223,7 +248,12 @@ def check_works_tender_no_services_import():
             continue
         
         content = py_file.read_text(encoding='utf-8')
-        rel_path = py_file.relative_to(works_tender_dir.parent.parent.parent)
+        # 使用相对于 repo_root 的路径，更容易理解
+        try:
+            rel_path = py_file.relative_to(repo_root)
+        except ValueError:
+            # 如果无法计算相对路径，使用绝对路径
+            rel_path = py_file
         
         # 查找所有禁止的导入
         for forbidden in forbidden_services:

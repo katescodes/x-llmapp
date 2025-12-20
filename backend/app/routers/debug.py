@@ -319,52 +319,111 @@ def check_llm_availability():
     检查 LLM 可用性
     
     用于诊断 LLM 连接问题
-    仅在 DEBUG=true 时可用
-    """
-    if not (DEBUG or ENV == "dev"):
-        raise HTTPException(
-            status_code=403,
-            detail="LLM ping endpoint only available in DEBUG mode"
-        )
     
-    from fastapi import Request
+    行为：
+    - MOCK_LLM=true：直接返回 mock 模式（不访问 DB，不访问外部）
+    - 否则：发送最小请求（max_tokens=16，timeout=10s），返回真实调用信息
+    
+    返回：
+    {
+        "ok": true/false,
+        "mode": "mock"/"real",
+        "model": "模型名称",  # 仅 real 模式
+        "latency_ms": 123,  # 仅 real 模式
+        "error": "错误信息"  # 仅失败时
+    }
+    """
+    import time
     import logging
+    import traceback
     
     logger = logging.getLogger(__name__)
     
+    # 检查 MOCK_LLM 模式
+    mock_llm_enabled = os.getenv("MOCK_LLM", "false").lower() in ("true", "1", "yes")
+    debug_enabled = os.getenv("DEBUG", "false").lower() in ("true", "1", "yes")
+    
+    # MOCK_LLM 只在 DEBUG=true 时生效
+    if mock_llm_enabled and not debug_enabled:
+        logger.warning("[LLM Ping] MOCK_LLM=true but DEBUG=false, treating as real mode")
+        mock_llm_enabled = False
+    
+    # MOCK 模式：直接返回成功（不访问任何资源）
+    if mock_llm_enabled:
+        logger.info("[LLM Ping] MOCK_LLM=true, returning mock success")
+        return {
+            "ok": True,
+            "mode": "mock",
+            "message": "MOCK_LLM enabled, no real LLM call made"
+        }
+    
+    # REAL 模式：发送最小测试请求
     try:
-        # 获取 LLM orchestrator (和实际业务代码一样)
+        start_time = time.time()
+        
+        # 获取 LLM orchestrator（不依赖 llm_models 表查询，只用已初始化的实例）
         from ..main import app
         llm_orchestrator = app.state.llm_orchestrator
         
-        # 测试调用
+        if not llm_orchestrator:
+            logger.error("[LLM Ping] llm_orchestrator not initialized")
+            return {
+                "ok": False,
+                "mode": "real",
+                "error": "LLM orchestrator not initialized in app.state"
+            }
+        
+        # 最小测试请求（max_tokens=16，减少延迟）
         test_messages = [
-            {"role": "user", "content": "Hello, respond with OK"}
+            {"role": "user", "content": "Respond with: OK"}
         ]
         
-        result = llm_orchestrator.chat(messages=test_messages)
+        logger.info("[LLM Ping] Sending minimal test request (max_tokens=16)")
+        result = llm_orchestrator.chat(
+            messages=test_messages,
+            max_tokens=16  # 最小化响应，加快测试速度
+        )
         
-        # 检查是否是 mock 响应
-        is_mock = os.getenv("MOCK_LLM", "false").lower() in ("true", "1", "yes")
+        latency_ms = int((time.time() - start_time) * 1000)
         
-        # 提取响应片段
-        content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-        snippet = content[:200] if content else "(empty)"
+        # 提取响应和模型信息
+        content = ""
+        model = "unknown"
+        
+        if isinstance(result, dict):
+            # OpenAI 格式
+            if "choices" in result and result["choices"]:
+                msg = result["choices"][0].get("message", {})
+                if msg:
+                    content = msg.get("content", "")
+            if "model" in result:
+                model = result["model"]
+        
+        content_len = len(content) if content else 0
+        logger.info(f"[LLM Ping] Success: latency={latency_ms}ms model={model} content_len={content_len}")
         
         return {
             "ok": True,
-            "mock_mode": is_mock,
-            "response_snippet": snippet,
-            "error": None
+            "mode": "real",
+            "model": model,
+            "latency_ms": latency_ms,
+            "response_snippet": content[:100] if content else "(empty)"
         }
         
     except Exception as e:
-        logger.exception("LLM ping failed")
+        latency_ms = int((time.time() - start_time) * 1000) if 'start_time' in locals() else 0
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        stack_trace = traceback.format_exc()
+        
+        logger.error(f"[LLM Ping] Failed: {error_msg}")
+        logger.error(f"[LLM Ping] Stack trace:\n{stack_trace}")
+        
         return {
             "ok": False,
-            "mock_mode": os.getenv("MOCK_LLM", "false").lower() in ("true", "1", "yes"),
-            "response_snippet": None,
-            "error": f"{type(e).__name__}: {str(e)}"
+            "mode": "real",
+            "latency_ms": latency_ms,
+            "error": error_msg,
+            "stack": stack_trace
         }
 
 

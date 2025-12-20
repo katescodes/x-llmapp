@@ -3825,7 +3825,6 @@ class TenderService:
             max_depth=max_depth,
             llm_orchestrator=self.llm,
         )
-        }
 
     def _flatten_outline_nodes(
         self,

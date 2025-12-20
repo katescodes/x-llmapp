@@ -13,6 +13,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./storage:/app/storage
+      - ./:/repo  # 挂载整个 repo 用于测试（包含 backend/tests/）
     environment:
       - BUILDKIT_PROVENANCE=0
       - LLM_STORE_PATH=/app/data/llm_models.json
@@ -33,6 +34,7 @@ services:
       # Smoke Test: 启用 Mock LLM 模式（外部 LLM 服务不可用时使用）
       # 生产环境请移除此行或设置为 false
       # SAFETY: MOCK_LLM 只在 DEBUG=true 时生效
+      # 注意：如需验证 Step 8，可临时设置为 true
       - MOCK_LLM=false
       # Debug mode (enable /api/_debug endpoints)
       - DEBUG=true
