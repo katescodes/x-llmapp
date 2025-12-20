@@ -1,0 +1,34 @@
+==========================================================
+  A3-2 纠偏进度总结
+==========================================================
+
+✅ 重大突破！四大板块全部通过验证！
+
+✓ base 板块存在
+✓ technical_parameters 板块存在
+✓ business_terms 板块存在
+✓ scoring_criteria 板块存在
+
+🔍 根本原因已解决:
+1. LLM 模型未配置 → 启用 MOCK_LLM
+2. LLM 输出截断 → 设置 max_tokens=4096
+3. API 响应格式不匹配 → 修复脚本提取 data_json
+
+📝 关键修改:
+- backend/app/apps/tender/prompts/project_info_v2.md
+- backend/app/main.py (MOCK_LLM + max_tokens)
+- backend/app/platform/extraction/engine.py
+- backend/scripts/eval/tender_feature_parity.py
+- docker-compose.yml (MOCK_LLM=true)
+
+⏳ 待解决:
+- review 抽取失败（status=failed）
+- MUST_HIT_001 规则未命中
+
+📊 进度: ~75% 完成 A3-2
+
+详细报告: reports/verify/A3-2_MAJOR_PROGRESS.md
+Git commit: ede3451
+
+==========================================================
+

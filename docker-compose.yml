@@ -32,7 +32,7 @@ services:
       - RULES_EVALUATOR_ENABLED=true
       # Smoke Test: 启用 Mock LLM 模式（外部 LLM 服务不可用时使用）
       # 生产环境请移除此行或设置为 false
-      - MOCK_LLM=true
+      - MOCK_LLM=false
       # Debug mode (enable /api/_debug endpoints)
       - DEBUG=true
       - ENV=dev
