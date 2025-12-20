@@ -104,7 +104,7 @@ def async_extract_project_info_v2(
         抽取结果
     """
     from app.services.db.postgres import _get_pool
-    from app.apps.tender.extract_v2_service import ExtractV2Service
+    from app.works.tender.extract_v2_service import ExtractV2Service
     from app.services.llm.llm_client import LLMClient
     from app.services.dao.tender_dao import TenderDAO
     
@@ -168,7 +168,7 @@ def async_extract_risks_v2(
         风险列表
     """
     from app.services.db.postgres import _get_pool
-    from app.apps.tender.extract_v2_service import ExtractV2Service
+    from app.works.tender.extract_v2_service import ExtractV2Service
     from app.services.llm.llm_client import LLMClient
     from app.services.dao.tender_dao import TenderDAO
     
@@ -236,7 +236,7 @@ def async_review_run_v2(
         审核结果列表
     """
     from app.services.db.postgres import _get_pool
-    from app.apps.tender.review_v2_service import ReviewV2Service
+    from app.works.tender.review_v2_service import ReviewV2Service
     from app.services.llm.llm_client import LLMClient
     from app.services.dao.tender_dao import TenderDAO
     

@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from psycopg_pool import ConnectionPool
 
 from app.utils.auth import get_current_user_sync
-from app.services.tender.snippet_extract import (
+from app.works.tender.snippet.snippet_extract import (
     extract_format_snippets,
     save_snippets_to_db,
     get_snippets_by_project,

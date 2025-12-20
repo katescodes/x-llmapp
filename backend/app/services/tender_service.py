@@ -939,7 +939,7 @@ class TenderService:
             if extract_mode.value == "NEW_ONLY":
                 try:
                     import asyncio
-                    from app.apps.tender.extract_v2_service import ExtractV2Service
+                    from app.works.tender.extract_v2_service import ExtractV2Service
                     from app.services.db.postgres import _get_pool
                     
                     logger.info(f"NEW_ONLY extract_project_info: using v2 only for project={project_id}")
@@ -1005,7 +1005,7 @@ class TenderService:
             elif extract_mode.value == "PREFER_NEW":
                 try:
                     import asyncio
-                    from app.apps.tender.extract_v2_service import ExtractV2Service
+                    from app.works.tender.extract_v2_service import ExtractV2Service
                     from app.services.db.postgres import _get_pool
                     
                     logger.info(f"PREFER_NEW extract_project_info: trying v2 for project={project_id}")
@@ -1071,8 +1071,8 @@ class TenderService:
             if extract_mode.value == "SHADOW":
                 try:
                     import asyncio
-                    from app.apps.tender.extract_v2_service import ExtractV2Service
-                    from app.apps.tender.extract_diff import compare_project_info
+                    from app.works.tender.extract_v2_service import ExtractV2Service
+                    from app.works.tender.extract_diff import compare_project_info
                     from app.core.shadow_diff import ShadowDiffLogger
                     from app.services.db.postgres import _get_pool
                     
@@ -1163,7 +1163,7 @@ class TenderService:
             if extract_mode.value == "NEW_ONLY":
                 try:
                     import asyncio
-                    from app.apps.tender.extract_v2_service import ExtractV2Service
+                    from app.works.tender.extract_v2_service import ExtractV2Service
                     from app.services.db.postgres import _get_pool
                     
                     logger.info(f"NEW_ONLY extract_risks: using v2 only for project={project_id}")
@@ -1228,7 +1228,7 @@ class TenderService:
             elif extract_mode.value == "PREFER_NEW":
                 try:
                     import asyncio
-                    from app.apps.tender.extract_v2_service import ExtractV2Service
+                    from app.works.tender.extract_v2_service import ExtractV2Service
                     from app.services.db.postgres import _get_pool
                     
                     logger.info(f"PREFER_NEW extract_risks: trying v2 for project={project_id}")
@@ -1291,8 +1291,8 @@ class TenderService:
             if extract_mode.value == "SHADOW":
                 try:
                     import asyncio
-                    from app.apps.tender.extract_v2_service import ExtractV2Service
-                    from app.apps.tender.extract_diff import compare_risks
+                    from app.works.tender.extract_v2_service import ExtractV2Service
+                    from app.works.tender.extract_diff import compare_risks
                     from app.core.shadow_diff import ShadowDiffLogger
                     from app.services.db.postgres import _get_pool
                     
@@ -2378,7 +2378,7 @@ class TenderService:
             if review_mode.value == "NEW_ONLY":
                 try:
                     import asyncio
-                    from app.apps.tender.review_v2_service import ReviewV2Service
+                    from app.works.tender.review_v2_service import ReviewV2Service
                     from app.services.db.postgres import _get_pool
                     
                     logger.info(f"NEW_ONLY review_run: using v2 only for project={project_id}")
@@ -2444,7 +2444,7 @@ class TenderService:
                 v2_success = False
                 try:
                     import asyncio
-                    from app.apps.tender.review_v2_service import ReviewV2Service
+                    from app.works.tender.review_v2_service import ReviewV2Service
                     from app.services.db.postgres import _get_pool
                     
                     logger.info(f"PREFER_NEW review_run: trying v2 for project={project_id}")
@@ -2495,8 +2495,8 @@ class TenderService:
             elif review_mode.value == "SHADOW":
                 try:
                     import asyncio
-                    from app.apps.tender.review_v2_service import ReviewV2Service
-                    from app.apps.tender.review_diff import compare_review_results
+                    from app.works.tender.review_v2_service import ReviewV2Service
+                    from app.works.tender.review_diff import compare_review_results
                     from app.core.shadow_diff import ShadowDiffLogger
                     from app.services.db.postgres import _get_pool
                     

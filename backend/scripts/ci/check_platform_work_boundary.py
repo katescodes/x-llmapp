@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 平台/Work 边界检查脚本
-确保 apps/** (Work层) 不包含通用平台逻辑，不直接访问底层实现
+确保 apps/** 和 works/** (Work层) 不包含通用平台逻辑，不直接访问底层实现
 """
 import re
 import sys
@@ -10,7 +10,12 @@ from pathlib import Path
 
 def check_forbidden_imports():
     """检查 Work 层是否违反导入边界规则"""
-    apps_dir = Path(__file__).parent.parent.parent / "backend" / "app" / "apps"
+    # Step 5: 同时检查 apps 和 works 目录
+    app_root = Path(__file__).parent.parent.parent / "backend" / "app"
+    work_dirs = [
+        app_root / "apps",
+        app_root / "works",
+    ]
     
     violations = []
     
@@ -37,6 +42,10 @@ def check_forbidden_imports():
          'import psycopg - 检索实现不应在Work层，应使用DAO或平台API'),
         (r'from\s+psycopg\s+import', 
          'from psycopg - 检索实现不应在Work层，应使用DAO或平台API'),
+        
+        # Step 5: 禁止 works/** 导入 services/tender（应使用 works/tender 内部模块）
+        (r'from\s+app\.services\.tender\.', 
+         'from app.services.tender - works/** 应使用内部模块或 shim'),
     ]
     
     # 允许的导入模式（白名单）
@@ -45,32 +54,41 @@ def check_forbidden_imports():
         r'from\s+app\.platform\.[\w\.]+\.engine\s+import',  # 允许导入公开的 engine
         r'from\s+app\.platform\.extraction\.',  # 允许导入 extraction 平台
         r'from\s+app\.services\.embedding_provider_store\s+import',  # 允许导入 embedding store（公开服务）
+        r'from\s+app\.services\.dao\.',  # 允许导入 DAO（作为过渡）
     ]
     
-    # 扫描所有Python文件
-    for py_file in apps_dir.rglob("*.py"):
-        if "__pycache__" in str(py_file):
+    # 扫描所有 Work 目录的 Python 文件
+    for work_dir in work_dirs:
+        if not work_dir.exists():
             continue
-        
-        content = py_file.read_text(encoding='utf-8')
-        rel_path = py_file.relative_to(apps_dir.parent.parent.parent)
-        
-        for pattern, desc in forbidden_import_patterns:
-            matches = re.finditer(pattern, content)
-            for match in matches:
-                # 检查是否在允许列表中
-                line = content[content.rfind('\n', 0, match.start())+1:match.end()]
-                is_allowed = any(re.search(allow_pattern, line) for allow_pattern in allowed_import_patterns)
-                
-                if not is_allowed:
-                    violations.append(f"{rel_path}: {desc}")
+            
+        for py_file in work_dir.rglob("*.py"):
+            if "__pycache__" in str(py_file):
+                continue
+            
+            content = py_file.read_text(encoding='utf-8')
+            rel_path = py_file.relative_to(app_root.parent.parent)
+            
+            for pattern, desc in forbidden_import_patterns:
+                matches = re.finditer(pattern, content)
+                for match in matches:
+                    # 检查是否在允许列表中
+                    line = content[content.rfind('\n', 0, match.start())+1:match.end()]
+                    is_allowed = any(re.search(allow_pattern, line) for allow_pattern in allowed_import_patterns)
+                    
+                    if not is_allowed:
+                        violations.append(f"{rel_path}: {desc}")
     
     return violations
 
 
 def check_tender_boundary():
-    """检查 tender 目录是否违反边界规则（保留原有逻辑）"""
-    tender_dir = Path(__file__).parent.parent.parent / "backend" / "app" / "apps" / "tender"
+    """检查 tender 目录是否违反边界规则（Step 5: 检查 works/tender）"""
+    app_root = Path(__file__).parent.parent.parent / "backend" / "app"
+    tender_dirs = [
+        app_root / "apps" / "tender",
+        app_root / "works" / "tender",
+    ]
     
     violations = []
     
@@ -85,17 +103,21 @@ def check_tender_boundary():
         (r'for\s+query_name\s*,\s*query_text\s+in\s+queries', '多query循环 - 应在platform.extraction.engine中'),
     ]
     
-    # 扫描所有Python文件
-    for py_file in tender_dir.rglob("*.py"):
-        if "__pycache__" in str(py_file):
+    # 扫描所有 tender 目录的 Python 文件
+    for tender_dir in tender_dirs:
+        if not tender_dir.exists():
             continue
-        
-        content = py_file.read_text(encoding='utf-8')
-        rel_path = py_file.relative_to(tender_dir.parent.parent.parent)
-        
-        for pattern, desc in forbidden_patterns:
-            if re.search(pattern, content):
-                violations.append(f"{rel_path}: {desc}")
+            
+        for py_file in tender_dir.rglob("*.py"):
+            if "__pycache__" in str(py_file):
+                continue
+            
+            content = py_file.read_text(encoding='utf-8')
+            rel_path = py_file.relative_to(app_root.parent.parent)
+            
+            for pattern, desc in forbidden_patterns:
+                if re.search(pattern, content):
+                    violations.append(f"{rel_path}: {desc}")
     
     return violations
 
@@ -185,14 +207,14 @@ def check_platform_no_services_import():
 
 def main():
     print("=" * 60)
-    print("  Platform/Work 边界检查 (Step 1)")
+    print("  Platform/Work 边界检查 (Step 5: works/tender)")
     print("=" * 60)
     print()
     
     all_violations = []
     
-    # 检查1: 禁止的导入边界
-    print("检查1: Work层导入边界...")
+    # 检查1: 禁止的导入边界（apps + works）
+    print("检查1: Work层导入边界（apps + works）...")
     import_violations = check_forbidden_imports()
     if not import_violations:
         print("  ✓ PASS: Work层未违反导入边界")
@@ -201,11 +223,11 @@ def main():
         all_violations.extend(import_violations)
     print()
     
-    # 检查2: tender 目录边界（原有检查）
-    print("检查2: apps/tender 边界...")
+    # 检查2: tender 目录边界（apps/tender + works/tender）
+    print("检查2: tender 边界（apps + works）...")
     tender_violations = check_tender_boundary()
     if not tender_violations:
-        print("  ✓ PASS: apps/tender 不包含通用抽取逻辑")
+        print("  ✓ PASS: tender 不包含通用抽取逻辑")
     else:
         print(f"  ✗ FAIL: 发现 {len(tender_violations)} 个tender违规")
         all_violations.extend(tender_violations)

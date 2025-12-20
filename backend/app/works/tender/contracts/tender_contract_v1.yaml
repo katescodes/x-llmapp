@@ -1,0 +1,219 @@
+# 招投标能力定义契约 v1.0
+# 用于验收 OLD vs NEW_ONLY 功能一致性（机器可验收）
+#
+# 本契约定义了招投标系统四大核心能力的最小字段集
+# 任何实现（OLD/NEW_ONLY）必须满足本契约要求
+
+version: "1.0"
+name: "招投标能力契约"
+description: "定义招投标系统四大核心能力的验收标准"
+
+# ============================================================
+# 能力 1：基本信息抽取（含四大板块）
+# ============================================================
+project_info:
+  description: "项目基本信息抽取，必须包含四大板块"
+  
+  # 必须包含的板块（key 必须存在，允许空数组/空对象，但不允许 null 或缺失）
+  required_sections:
+    base:
+      description: "基础信息板块"
+      required_fields:
+        - project_name        # 项目名称
+        - project_number      # 项目编号
+        - budget              # 预算金额
+        - purchaser           # 采购人/招标人
+        - agency              # 代理机构
+        - contact_person      # 联系人
+        - contact_phone       # 联系电话
+        - bid_deadline        # 投标截止时间
+        - opening_time        # 开标时间
+        - opening_location    # 开标地点
+      optional_fields:
+        - procurement_method  # 采购方式
+        - project_address     # 项目地址
+        - construction_period # 工期
+    
+    technical_parameters:
+      description: "技术参数板块（技术规格/功能/性能指标）"
+      schema:
+        type: array
+        items:
+          required_fields:
+            - name            # 参数名称
+            - value           # 参数值/要求
+          optional_fields:
+            - category        # 参数分类
+            - unit            # 单位
+            - evidence_chunk_ids  # 证据片段ID
+      min_items: 0          # 允许为空，但 key 必须存在
+    
+    business_terms:
+      description: "商务条款板块（付款/验收/质保/交付/违约等）"
+      schema:
+        type: array
+        items:
+          required_fields:
+            - clause_type     # 条款类型（payment/acceptance/warranty/delivery/penalty）
+            - content         # 条款内容
+          optional_fields:
+            - clause_title    # 条款标题
+            - evidence_chunk_ids  # 证据片段ID
+      min_items: 0          # 允许为空，但 key 必须存在
+    
+    scoring_criteria:
+      description: "评分标准板块（评标办法/分值/权重/加分项）"
+      schema:
+        type: array
+        items:
+          required_fields:
+            - criterion_name  # 评分项名称
+            - score           # 分值
+          optional_fields:
+            - weight          # 权重
+            - criterion_type  # 评分类型（technical/business/price）
+            - description     # 评分说明
+            - evidence_chunk_ids  # 证据片段ID
+      min_items: 0          # 允许为空，但 key 必须存在
+  
+  # 验收规则
+  validation_rules:
+    - rule: "必须包含 base/technical_parameters/business_terms/scoring_criteria 四个 key"
+      severity: "CRITICAL"
+    - rule: "base 中至少 5 个 required_fields 非空"
+      severity: "HIGH"
+    - rule: "technical_parameters/business_terms/scoring_criteria 允许为空数组，但不允许缺失"
+      severity: "CRITICAL"
+
+# ============================================================
+# 能力 2：风险识别
+# ============================================================
+risks:
+  description: "招投标风险识别"
+  
+  schema:
+    type: array
+    items:
+      required_fields:
+        - risk_type         # 风险类型（legal/technical/business/compliance）
+        - title             # 风险标题
+        - severity          # 严重程度（high/medium/low）
+        - description       # 风险描述
+        - evidence_chunk_ids  # 证据片段ID（至少1个）
+      optional_fields:
+        - tags              # 风险标签
+        - recommendation    # 建议措施
+        - impact            # 影响分析
+  
+  min_items: 0              # 允许无风险，但 schema 必须满足
+  
+  validation_rules:
+    - rule: "每个 risk 必须有 evidence_chunk_ids 且长度 >= 1"
+      severity: "HIGH"
+    - rule: "risk_type 必须在枚举范围内"
+      severity: "MEDIUM"
+
+# ============================================================
+# 能力 3：自动生成目录（语义大纲）
+# ============================================================
+outline:
+  description: "自动生成语义大纲/目录树"
+  
+  schema:
+    type: array
+    items:
+      required_fields:
+        - title             # 节点标题
+        - level             # 层级（1/2/3...）
+        - order_no          # 序号
+      optional_fields:
+        - parent_id         # 父节点ID
+        - node_type         # 节点类型（chapter/section/subsection）
+        - page_range        # 页码范围
+        - evidence_chunk_ids  # 关联片段ID
+  
+  min_items: 1              # 至少要有1个顶级节点
+  
+  validation_rules:
+    - rule: "必须有 level=1 的顶级节点"
+      severity: "CRITICAL"
+    - rule: "order_no 必须能体现顺序"
+      severity: "HIGH"
+
+# ============================================================
+# 能力 4：审核与规则（含 MUST_HIT_001 必命中）
+# ============================================================
+review:
+  description: "审核与规则评估"
+  
+  schema:
+    type: array
+    items:
+      required_fields:
+        - dimension         # 审核维度
+        - result            # 审核结果/决策
+        - reason            # 原因说明
+        - evidence_chunk_ids  # 证据片段ID
+      optional_fields:
+        - rule_id           # 规则ID（如果是规则命中）
+        - severity          # 严重程度
+        - is_hard           # 是否硬性条款
+  
+  min_items: 0              # 允许无审核项，但 schema 必须满足
+  
+  # 必命中规则
+  must_hit_rules:
+    - rule_id: "MUST_HIT_001"
+      description: "招标人必须明确（强制规则）"
+      check_method: "DB_FIRST_THEN_API"  # 优先查数据库，失败则走 API
+      validation: "必须在 review items 中找到 rule_id='MUST_HIT_001'"
+      severity: "CRITICAL"
+  
+  validation_rules:
+    - rule: "MUST_HIT_001 必须命中（DB或API任一验证通过）"
+      severity: "CRITICAL"
+    - rule: "每个 review item 必须有 evidence_chunk_ids"
+      severity: "HIGH"
+
+# ============================================================
+# 全局验收标准
+# ============================================================
+global_validation:
+  description: "跨能力的全局验收规则"
+  
+  rules:
+    - rule: "所有 evidence_chunk_ids 必须是有效的 doc_segments.id"
+      severity: "MEDIUM"
+      check: "可选检查（需连接 DB）"
+    
+    - rule: "NEW_ONLY 输出不允许比 OLD 缺失关键字段"
+      severity: "HIGH"
+      check: "对比脚本必须验证"
+    
+    - rule: "契约定义的 required_fields 缺失率 < 20%"
+      severity: "HIGH"
+      check: "对比脚本计算缺失率"
+
+# ============================================================
+# 使用说明
+# ============================================================
+usage:
+  description: |
+    本契约文件用于 scripts/eval/tender_feature_parity.py 验收脚本。
+    
+    验收流程：
+    1. 脚本读取本契约
+    2. 对同一项目分别跑 OLD 和 NEW_ONLY
+    3. 对比输出是否满足契约要求
+    4. 生成 diff_summary.json 和 report.md
+    
+    验收判据：
+    - NEW_ONLY 必须包含所有 required_sections
+    - MUST_HIT_001 必须命中
+    - 关键字段缺失率 < 20%
+    
+    纠偏原则：
+    - 只能改实现和映射
+    - 不能降低契约要求
+    - 不能删除 required_fields
+
