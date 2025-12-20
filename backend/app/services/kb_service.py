@@ -5,7 +5,7 @@ import logging
 from typing import List, Optional
 
 from .dao import kb_dao
-from .documents.parser import parse_document
+from ..platform.ingest.parser import parse_document
 from .embedding.http_embedding_client import embed_texts
 from .embedding_provider_store import get_embedding_store
 from .segmenter.chunker import chunk_document

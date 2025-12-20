@@ -49,7 +49,7 @@ from ..services.logging.request_logger import (
 )
 from ..services.google_search import filter_chinese_entries, google_search_multi
 from ..services.rag_service import retrieve_context
-from ..services.retrieval.retriever import retrieve
+from ..platform.retrieval.providers.legacy.retriever import retrieve
 from ..services.search_usage import usage_manager
 from ..services.segmenter.chunker import chunk_document
 from ..services.settings_store import load_settings

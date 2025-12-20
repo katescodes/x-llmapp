@@ -1052,6 +1052,234 @@ class TenderDAO:
         
         if not updates:
             return self.get_format_template(template_id) or {}
+    
+    def set_format_template_storage(
+        self,
+        template_id: str,
+        storage_path: str,
+        sha256: Optional[str] = None
+    ) -> None:
+        """
+        设置格式模板的文件存储路径和 SHA256
+        
+        Args:
+            template_id: 模板ID
+            storage_path: 存储路径
+            sha256: 文件 SHA256（可选）
+        """
+        if sha256:
+            self._execute(
+                """
+                UPDATE format_templates
+                SET template_storage_path=%s,
+                    template_sha256=%s,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (storage_path, sha256, template_id),
+            )
+        else:
+            self._execute(
+                """
+                UPDATE format_templates
+                SET template_storage_path=%s,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (storage_path, template_id),
+            )
+    
+    def set_format_template_analysis(
+        self,
+        template_id: str,
+        status: str,
+        analysis_json: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None
+    ) -> None:
+        """
+        设置格式模板的分析结果
+        
+        Args:
+            template_id: 模板ID
+            status: 分析状态 (PENDING/SUCCESS/FAILED)
+            analysis_json: 分析结果JSON
+            error: 错误信息（失败时）
+        """
+        self._execute(
+            """
+            UPDATE format_templates
+            SET analysis_status=%s,
+                analysis_json=%s::jsonb,
+                analysis_error=%s,
+                analysis_updated_at=NOW(),
+                updated_at=NOW()
+            WHERE id=%s
+            """,
+            (
+                status,
+                json.dumps(analysis_json or {}, ensure_ascii=False) if analysis_json else None,
+                error,
+                template_id,
+            ),
+        )
+    
+    def set_format_template_parse(
+        self,
+        template_id: str,
+        status: str,
+        parse_json: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+        preview_docx_path: Optional[str] = None,
+        preview_pdf_path: Optional[str] = None
+    ) -> None:
+        """
+        设置格式模板的解析结果
+        
+        Args:
+            template_id: 模板ID
+            status: 解析状态 (PENDING/SUCCESS/FAILED)
+            parse_json: 解析结果JSON
+            error: 错误信息（失败时）
+            preview_docx_path: 预览DOCX路径
+            preview_pdf_path: 预览PDF路径
+        """
+        self._execute(
+            """
+            UPDATE format_templates
+            SET parse_status=%s,
+                parse_result_json=%s::jsonb,
+                parse_error=%s,
+                parse_updated_at=NOW(),
+                preview_docx_path=%s,
+                preview_pdf_path=%s,
+                updated_at=NOW()
+            WHERE id=%s
+            """,
+            (
+                status,
+                json.dumps(parse_json or {}, ensure_ascii=False),
+                error,
+                preview_docx_path,
+                preview_pdf_path,
+                template_id,
+            ),
+        )
+    
+    def set_directory_root_format_template(
+        self,
+        project_id: str,
+        template_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        设置项目目录根节点的格式模板ID
+        
+        逻辑：
+        1. 查找根节点（parent_id IS NULL 或 level=1 且最小 order_no）
+        2. 合并 meta_json，写入 format_template_id
+        
+        Args:
+            project_id: 项目ID
+            template_id: 模板ID
+            
+        Returns:
+            更新后的根节点，如果找不到返回 None
+        """
+        # 1. 查找根节点
+        root = self._fetchone(
+            """
+            SELECT * FROM tender_directory_nodes
+            WHERE project_id=%s AND parent_id IS NULL
+            ORDER BY order_no ASC
+            LIMIT 1
+            """,
+            (project_id,),
+        )
+        
+        if not root:
+            # 降级：查找 level=1 的第一个节点
+            root = self._fetchone(
+                """
+                SELECT * FROM tender_directory_nodes
+                WHERE project_id=%s AND level=1
+                ORDER BY order_no ASC
+                LIMIT 1
+                """,
+                (project_id,),
+            )
+        
+        if not root:
+            return None
+        
+        # 2. 合并 meta_json
+        meta_json = root.get("meta_json") or {}
+        if isinstance(meta_json, str):
+            try:
+                meta_json = json.loads(meta_json)
+            except Exception:
+                meta_json = {}
+        
+        meta_json["format_template_id"] = template_id
+        
+        # 3. 更新节点
+        updated = self._fetchone(
+            """
+            UPDATE tender_directory_nodes
+            SET meta_json=%s::jsonb,
+                updated_at=NOW()
+            WHERE id=%s
+            RETURNING *
+            """,
+            (json.dumps(meta_json, ensure_ascii=False), root["id"]),
+        )
+        
+        return updated
+    
+    def get_directory_root_format_template(
+        self,
+        project_id: str
+    ) -> Optional[str]:
+        """
+        获取项目目录根节点绑定的格式模板ID
+        
+        Args:
+            project_id: 项目ID
+            
+        Returns:
+            模板ID，如果未绑定返回 None
+        """
+        root = self._fetchone(
+            """
+            SELECT meta_json FROM tender_directory_nodes
+            WHERE project_id=%s AND parent_id IS NULL
+            ORDER BY order_no ASC
+            LIMIT 1
+            """,
+            (project_id,),
+        )
+        
+        if not root:
+            # 降级：查找 level=1 的第一个节点
+            root = self._fetchone(
+                """
+                SELECT meta_json FROM tender_directory_nodes
+                WHERE project_id=%s AND level=1
+                ORDER BY order_no ASC
+                LIMIT 1
+                """,
+                (project_id,),
+            )
+        
+        if not root:
+            return None
+        
+        meta_json = root.get("meta_json") or {}
+        if isinstance(meta_json, str):
+            try:
+                meta_json = json.loads(meta_json)
+            except Exception:
+                return None
+        
+        return meta_json.get("format_template_id")
         
         updates.append("updated_at=NOW()")
         sql = f"UPDATE format_templates SET {', '.join(updates)} WHERE id=%s RETURNING *"

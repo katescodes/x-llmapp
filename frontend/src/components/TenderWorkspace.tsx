@@ -177,10 +177,10 @@ export default function TenderWorkspace() {
   const [formatDownloadUrl, setFormatDownloadUrl] = useState<string>("");
 
   // 轻量 Toast（不引入第三方库）
-  const [toast, setToast] = useState<{ kind: 'success' | 'error'; msg: string } | null>(null);
-  const showToast = useCallback((kind: 'success' | 'error', msg: string) => {
-    setToast({ kind, msg });
-    window.setTimeout(() => setToast(null), 3500);
+  const [toast, setToast] = useState<{ kind: 'success' | 'error' | 'warning'; msg: string; detail?: string } | null>(null);
+  const showToast = useCallback((kind: 'success' | 'error' | 'warning', msg: string, detail?: string) => {
+    setToast({ kind, msg, detail });
+    window.setTimeout(() => setToast(null), kind === 'error' ? 5000 : 3500); // 错误提示显示更久
   }, []);
   
   // Step5: 审核（改为选择规则文件资产）
@@ -697,19 +697,48 @@ export default function TenderWorkspace() {
         await loadBodiesForAllNodes(nodes);
       }
 
-      // ✅ 内嵌格式预览：切换到格式预览Tab + 写入URL
+      // ✅ 内嵌格式预览：切换到格式预览Tab + 写入URL（带 fallback）
       const ts = Date.now();
-      setFormatPreviewUrl(data.preview_pdf_url ? `${data.preview_pdf_url}${data.preview_pdf_url.includes("?") ? "&" : "?"}ts=${ts}` : "");
-      setFormatDownloadUrl(data.download_docx_url || "");
+      
+      // Fallback: 如果后端未返回 URL，自动构造格式预览端点
+      const fallbackPreviewUrl = `/api/apps/tender/projects/${currentProject.id}/directory/format-preview?format=pdf&format_template_id=${selectedFormatTemplateId}`;
+      const fallbackDownloadUrl = `/api/apps/tender/projects/${currentProject.id}/directory/format-preview?format=docx&format_template_id=${selectedFormatTemplateId}`;
+      
+      const previewUrl = data.preview_pdf_url || fallbackPreviewUrl;
+      const downloadUrl = data.download_docx_url || fallbackDownloadUrl;
+      
+      setFormatPreviewUrl(previewUrl ? `${previewUrl}${previewUrl.includes("?") ? "&" : "?"}ts=${ts}` : "");
+      setFormatDownloadUrl(downloadUrl);
       setPreviewMode("format"); // ✅ 套用后直接切到"格式预览"
 
       // 记录选择
       localStorage.setItem(`tender.formatTemplateId.${currentProject.id}`, selectedFormatTemplateId);
       await loadSelectedTemplateSpec(selectedFormatTemplateId);
+      
+      // 成功提示
+      showToast('success', '格式模板套用成功！预览已更新');
 
     } catch (err: any) {
       console.error("[applyFormatTemplate] 错误详情:", err);
-      alert(`套用失败: ${err?.message || err}`);
+      
+      // 提取详细错误信息
+      const errorDetail = err?.response?.data?.detail 
+        || err?.response?.data?.message 
+        || err?.message 
+        || String(err);
+      
+      const errorStatus = err?.response?.status;
+      const errorTitle = errorStatus 
+        ? `套用格式失败 (HTTP ${errorStatus})`
+        : `套用格式失败`;
+      
+      // 使用增强的 toast 显示错误（带详细信息）
+      showToast('error', errorTitle, errorDetail);
+      
+      // 如果是后端返回的结构化错误，打印完整信息供调试
+      if (err?.response?.data) {
+        console.error("[applyFormatTemplate] 后端返回:", err.response.data);
+      }
     } finally {
       setApplyingFormat(false);
     }
@@ -941,19 +970,48 @@ export default function TenderWorkspace() {
             top: 16,
             right: 16,
             zIndex: 9999,
-            maxWidth: 420,
-            padding: "10px 12px",
+            maxWidth: 480,
+            padding: "12px 16px",
             borderRadius: 10,
-            background: toast.kind === "success" ? "rgba(16,185,129,0.92)" : "rgba(239,68,68,0.92)",
+            background: 
+              toast.kind === "success" ? "rgba(16,185,129,0.95)" : 
+              toast.kind === "warning" ? "rgba(245,158,11,0.95)" :
+              "rgba(239,68,68,0.95)",
             color: "#fff",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
             fontSize: 14,
-            lineHeight: 1.4,
-            pointerEvents: "none",
+            lineHeight: 1.5,
+            pointerEvents: "auto",
+            cursor: "pointer",
           }}
+          onClick={() => setToast(null)}
           aria-live="polite"
+          title="点击关闭"
         >
-          {toast.msg}
+          <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+            <span style={{ fontSize: "18px", flexShrink: 0 }}>
+              {toast.kind === "success" ? "✅" : toast.kind === "warning" ? "⚠️" : "❌"}
+            </span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 500, marginBottom: toast.detail ? "4px" : 0 }}>
+                {toast.msg}
+              </div>
+              {toast.detail && (
+                <div style={{ 
+                  fontSize: "12px", 
+                  opacity: 0.9, 
+                  marginTop: "4px",
+                  padding: "6px 8px",
+                  background: "rgba(0,0,0,0.15)",
+                  borderRadius: "4px",
+                  fontFamily: "monospace",
+                  wordBreak: "break-word"
+                }}>
+                  {toast.detail}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
       {/* 左侧边栏：项目列表 */}
@@ -1457,11 +1515,46 @@ export default function TenderWorkspace() {
                           </div>
                         ) : (
                           <div style={{ height: "72vh", border: "1px solid #eee", borderRadius: 8, overflow: "hidden" }}>
-                            <iframe
-                              title="格式预览"
-                              src={formatPreviewUrl}
-                              style={{ width: "100%", height: "100%", border: "none" }}
-                            />
+                            {formatPreviewUrl ? (
+                              <iframe
+                                title="格式预览"
+                                src={formatPreviewUrl}
+                                style={{ width: "100%", height: "100%", border: "none" }}
+                              />
+                            ) : (
+                              <div style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                height: "100%",
+                                color: "#64748b",
+                                padding: "32px"
+                              }}>
+                                <div style={{ fontSize: "48px", marginBottom: "16px" }}>📄</div>
+                                <div style={{ fontSize: "18px", fontWeight: 500, marginBottom: "8px", color: "#334155" }}>
+                                  暂无格式预览
+                                </div>
+                                <div style={{ fontSize: "14px", marginBottom: "24px", textAlign: "center", maxWidth: "400px", lineHeight: "1.6" }}>
+                                  请先在左侧选择格式模板，然后点击「自动套用格式」生成预览
+                                  {selectedFormatTemplateId && (
+                                    <div style={{ marginTop: "8px", color: "#94a3b8" }}>
+                                      （后端可能未返回 preview_pdf_url，或 fallback 端点未实现）
+                                    </div>
+                                  )}
+                                </div>
+                                {selectedFormatTemplateId && (
+                                  <button
+                                    className="kb-create-form"
+                                    onClick={applyFormatTemplate}
+                                    disabled={applyingFormat}
+                                    style={{ width: "auto" }}
+                                  >
+                                    {applyingFormat ? "生成中..." : "🔄 重新生成预览"}
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>

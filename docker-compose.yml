@@ -38,6 +38,9 @@ services:
       - MOCK_LLM=false
       # Debug mode (enable /api/_debug endpoints)
       - DEBUG=true
+      # Format Templates Storage
+      - TENDER_FORMAT_TEMPLATES_DIR=/app/storage/tender/format_templates
+      - TENDER_RENDERS_DIR=/app/storage/tender/renders
       - ENV=dev
       # Cutover control (all default to OLD, no impact on existing logic)
       - CUTOVER_SCOPE=project

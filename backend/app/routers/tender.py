@@ -41,6 +41,10 @@ from app.utils.evidence_mapper import chunks_to_span_refs
 # 创建路由器
 router = APIRouter(prefix="/api/apps/tender", tags=["tender"])
 
+# 导入格式模板子路由
+from . import format_templates
+router.include_router(format_templates.router)
+
 def _serialize_directory_nodes(flat_nodes: List[dict]) -> List[dict]:
     """
     将 service/dao 返回的目录节点（扁平，可能带 bodyMeta/meta_json）序列化为前端使用的格式。
@@ -1092,7 +1096,39 @@ class FormatTemplateOut(BaseModel):
     updated_at: str
 
 
-@router.post("/format-templates", response_model=FormatTemplateOut)
+# ==================== 格式模板 Work 辅助函数 ====================
+
+def _get_format_templates_work(request: Request) -> Any:
+    """获取格式模板 Work 实例"""
+    from app.works.tender.format_templates import FormatTemplatesWork
+    
+    pool = _get_pool(request)
+    llm_orchestrator = getattr(request.app.state, 'llm_orchestrator', None)
+    
+    return FormatTemplatesWork(
+        pool=pool,
+        llm_orchestrator=llm_orchestrator,
+        storage_dir="storage/templates"
+    )
+
+
+# ==================== 格式模板 CRUD API ====================
+
+@router.get("/format-templates", response_model=List[FormatTemplateOut])
+def list_format_templates(
+    request: Request,
+    user=Depends(get_current_user_sync)
+):
+    """
+    列出格式模板
+    
+    返回当前用户的模板和所有公开模板
+    """
+    work = _get_format_templates_work(request)
+    templates = work.list_templates(owner_id=user.user_id)
+    return templates
+
+
 async def create_format_template(
     name: str = Form(...),
     description: Optional[str] = Form(None),
@@ -1103,10 +1139,10 @@ async def create_format_template(
     user=Depends(get_current_user_sync)
 ):
     """
-    创建格式模板（使用新的分析流程）
+    创建格式模板（使用 Work 层）
     
-    新分析流程：
-    1. 样式解析（必须，规则推断）- 优先识别 +标题1~5、++正文
+    流程：
+    1. 样式解析（必须）- 识别标题和正文样式
     2. Blocks提取（必须）- 提取文档结构
     3. LLM分析（可选）- 仅在传入 model_id 时执行
     
@@ -1115,136 +1151,62 @@ async def create_format_template(
         description: 模板描述
         is_public: 是否公开
         file: Word 文档文件
-        model_id: LLM模型ID（可选，如 gpt-oss-120b）
+        model_id: LLM模型ID（可选）
     """
-    import json
     import logging
-    import os
-    import uuid
-    from pathlib import Path
     
     logger = logging.getLogger(__name__)
     
     if not file.filename.endswith((".docx", ".doc")):
         raise HTTPException(status_code=400, detail="Only .docx files are supported")
     
-    # 1. 读取并保存文件
+    # 读取文件
     docx_bytes = await file.read()
     
-    # 保存到 storage
-    storage_dir = Path("storage/templates")
-    storage_dir.mkdir(parents=True, exist_ok=True)
-    
-    file_id = uuid.uuid4().hex
-    storage_path = storage_dir / f"{file_id}_{file.filename}"
-    
-    with open(storage_path, "wb") as f:
-        f.write(docx_bytes)
-    
-    logger.info(f"模板文件已保存: {storage_path}")
-    
-    # 2. 样式解析（必须）
-    from app.services.template.template_style_analyzer import (
-        extract_style_profile,
-        infer_role_mapping
-    )
+    # 调用 Work 层
+    work = _get_format_templates_work(request)
     
     try:
-        style_profile = extract_style_profile(str(storage_path))
-        role_mapping = infer_role_mapping(style_profile)
-        logger.info(f"样式解析完成: {len(style_profile.get('styles', []))} 个样式")
+        result = await work.create_template(
+            name=name,
+            docx_bytes=docx_bytes,
+            filename=file.filename,
+            owner_id=user.user_id,
+            description=description,
+            is_public=is_public,
+            model_id=model_id
+        )
+        
+        logger.info(f"模板创建成功: template_id={result.template_id}, status={result.analysis_status}")
+        
+        # 返回完整的模板对象
+        template = work.get_template(result.template_id)
+        return template
+        
     except Exception as e:
-        logger.error(f"样式解析失败: {e}")
-        # 使用默认映射
-        from app.services.template.template_style_analyzer import get_fallback_role_mapping
-        style_profile = {"styles": [], "hasNumbering": False}
-        role_mapping = get_fallback_role_mapping()
-    
-    # 3. 提取 blocks（必须）
-    from app.services.template.docx_blocks import extract_doc_blocks
-    
-    try:
-        blocks = extract_doc_blocks(str(storage_path))
-        logger.info(f"提取文档块: {len(blocks)} 个块")
-    except Exception as e:
-        logger.error(f"提取blocks失败: {e}")
-        blocks = []
-    
-    # 4. LLM 分析（可选，仅在传入 model_id 时执行）
-    apply_assets = None
-    if model_id:
-        logger.info(f"启用 LLM 分析: model_id={model_id}")
-        try:
-            from app.services.template.template_applyassets_llm import (
-                build_applyassets_prompt,
-                validate_applyassets
-            )
-            from app.services.llm_client import llm_json
-            
-            prompt = build_applyassets_prompt(name, blocks)
-            llm_result = llm_json(prompt, model_id=model_id, temperature=0.0)
-            apply_assets = validate_applyassets(llm_result, blocks)
-            logger.info(f"LLM 分析完成: confidence={apply_assets.get('policy', {}).get('confidence', 0)}")
-        except Exception as e:
-            logger.warning(f"LLM 分析失败，使用默认策略: {e}")
-            from app.services.template.template_applyassets_llm import get_fallback_apply_assets
-            apply_assets = get_fallback_apply_assets()
-    else:
-        logger.info("未启用 LLM 分析（model_id 为空）")
-        from app.services.template.template_applyassets_llm import get_fallback_apply_assets
-        apply_assets = get_fallback_apply_assets()
-    
-    # 5. 构建 analysis_json
-    analysis_json = {
-        "styleProfile": style_profile,
-        "roleMapping": role_mapping,
-        "applyAssets": apply_assets,
-        "blocks": blocks[:100]  # 只保留前100个块
-    }
-    
-    # 6. 创建模板记录
-    dao = TenderDAO(_get_pool(request))
-    template_id = dao.create_format_template(
-        name=name,
-        description=description,
-        style_config={},
-        owner_id=user.user_id,
-        is_public=is_public
-    )["id"]
-    
-    # 7. 更新存储路径和分析结果
-    dao._execute(
-        """
-        UPDATE format_templates
-        SET template_storage_path = %s,
-            analysis_json = %s,
-            template_sha256 = %s
-        WHERE id = %s
-        """,
-        (str(storage_path), json.dumps(analysis_json), file_id, template_id)
-    )
-    
-    logger.info(f"模板创建完成: template_id={template_id}, llm_enabled={bool(model_id)}")
-    
-    # 8. 返回模板记录
-    template = dao.get_format_template(template_id)
-    return template
+        logger.error(f"创建格式模板失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"创建失败: {str(e)}")
 
 
-@router.get("/format-templates", response_model=List[FormatTemplateOut])
-def list_format_templates(request: Request, user=Depends(get_current_user_sync)):
-    """列出格式模板"""
-    dao = TenderDAO(_get_pool(request))
-    return dao.list_format_templates(owner_id=user.user_id)
-
-
-@router.get("/format-templates/{template_id}")
-def get_format_template(template_id: str, request: Request):
-    """获取格式模板详情"""
-    dao = TenderDAO(_get_pool(request))
-    template = dao.get_format_template(template_id)
+@router.get("/format-templates/{template_id}", response_model=FormatTemplateOut)
+def get_format_template(
+    template_id: str,
+    request: Request,
+    user=Depends(get_current_user_sync)
+):
+    """
+    获取格式模板详情
+    """
+    work = _get_format_templates_work(request)
+    template = work.get_template(template_id)
+    
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
+    
+    # 权限检查
+    if template.owner_id != user.user_id and not template.is_public:
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
     return template
 
 
@@ -1256,13 +1218,34 @@ class FormatTemplateUpdateReq(BaseModel):
 
 
 @router.put("/format-templates/{template_id}", response_model=FormatTemplateOut)
-def update_format_template(template_id: str, req: FormatTemplateUpdateReq, request: Request, user=Depends(get_current_user_sync)):
-    """更新格式模板元数据"""
-    svc = _svc(request)
+def update_format_template(
+    template_id: str,
+    req: FormatTemplateUpdateReq,
+    request: Request,
+    user=Depends(get_current_user_sync)
+):
+    """
+    更新格式模板元数据
+    """
+    work = _get_format_templates_work(request)
+    
+    # 权限检查
+    template = work.get_template(template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if template.owner_id != user.user_id:
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
     try:
-        updated = svc.update_format_template_meta(template_id, req.name, req.description, req.is_public)
+        from app.works.tender.format_templates.types import FormatTemplateUpdateReq as WorkUpdateReq
+        work_req = WorkUpdateReq(
+            name=req.name,
+            description=req.description,
+            is_public=req.is_public
+        )
+        updated = work.update_template(template_id, work_req)
         return updated
-    except ValueError as e:
+    except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
