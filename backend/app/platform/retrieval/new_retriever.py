@@ -9,7 +9,7 @@ from psycopg_pool import ConnectionPool
 
 from app.services.embedding.http_embedding_client import embed_texts
 from app.services.embedding_provider_store import EmbeddingProviderStored
-from app.services.vectorstore.milvus_docseg_store import milvus_docseg_store
+from app.platform.vectorstore.milvus_docseg_store import milvus_docseg_store
 from app.services.retrieval.rrf import rrf_fuse
 
 logger = logging.getLogger(__name__)

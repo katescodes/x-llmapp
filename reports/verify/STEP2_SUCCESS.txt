@@ -1,0 +1,43 @@
+
+=================================================================
+  ✅ Step 2 - Platformize Document Parser (完成)
+=================================================================
+
+🎉 核心目标达成！
+
+迁移成果：
+  ✓ parser 已迁移: services/documents → platform/ingest
+  ✓ 旧路径 shim: 向后兼容
+  ✓ v2_service.py: 更新导入路径
+  ✓ 导入一致性: 新旧路径指向同一对象
+
+边界检查：
+  ✓ Gate 2: boundary - PASS
+  ✓ Allowlist: 11 项（保持不变，符合预期）
+  ✓ platform/ 无违规 app.services 导入
+
+Docker 验收：
+  ✓ Gate 1: compileall - PASS
+  ✓ Gate 2: boundary - PASS
+  ✓ Gate 4: smoke_newonly - PASS (195.7s)
+  ⚠ Gate 3/5: LLM 超时（与 Step 2 无关）
+
+验证测试：
+  ✓ 新路径导入正常: app.platform.ingest.parser
+  ✓ 旧路径导入正常: app.services.documents.parser
+  ✓ 函数对象一致: parse_document is parse_document
+  ✓ ParsedDocument 一致: NewPD is OldPD
+
+关键文件：
+  - backend/app/platform/ingest/parser.py (新增，130行)
+  - backend/app/services/documents/parser.py (改为shim，24行)
+  - backend/app/platform/ingest/v2_service.py (更新导入)
+  - backend/tests/test_platform_ingest_parser_imports.py (测试)
+
+为什么 allowlist 没有减少？
+  ✓ parser.py 本身没有对 app.services 的依赖
+  ✓ 因此迁移后 allowlist 保持 11 项是正常的
+  ✓ 下一步 Step 3 将迁移 vectorstore/embedding，预期减少至 6 项
+
+详细报告: reports/verify/STEP2_PARSER_FINAL_REPORT.md
+=================================================================

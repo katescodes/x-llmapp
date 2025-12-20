@@ -109,24 +109,24 @@ def check_platform_no_services_import():
     
     # 显式白名单：精确到文件路径（过渡期临时允许）
     # Step 2+ 会逐步消除这些依赖
-    # ⚠️ 硬限制：不允许超过 11 项，防止继续膨胀
-    MAX_ALLOWLIST_HITS = 11
+    # ⚠️ 硬限制：不允许超过 9 项，防止继续膨胀（Step 3 从 11 → 9）
+    MAX_ALLOWLIST_HITS = 9
     
     ALLOW_PLATFORM_IMPORT_SERVICES = {
         # 已完成迁移的不再需要白名单
         # "backend/app/platform/ingest/v2_service.py": ["app.services.documents.parser"],  # Step 2 已消除
+        # "backend/app/platform/retrieval/new_retriever.py": ["app.services.vectorstore.milvus_docseg_store"],  # Step 3 已消除
+        # "backend/app/platform/ingest/v2_service.py": ["app.services.vectorstore.milvus_docseg_store"],  # Step 3 已消除
         
-        # 待迁移的（Step 3+）
+        # 待迁移的（Step 4+）
         "backend/app/platform/ingest/v2_service.py": [
             "app.services.segmenter.chunker",
             "app.services.embedding.http_embedding_client",
             "app.services.embedding_provider_store",
-            "app.services.vectorstore.milvus_docseg_store",
         ],
         "backend/app/platform/retrieval/new_retriever.py": [
             "app.services.embedding.http_embedding_client",
             "app.services.embedding_provider_store",
-            "app.services.vectorstore.milvus_docseg_store",
             "app.services.retrieval.rrf",
         ],
         "backend/app/platform/retrieval/facade.py": [

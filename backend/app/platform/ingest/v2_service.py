@@ -14,7 +14,7 @@ from app.services.segmenter.chunker import chunk_document
 from app.services.embedding.http_embedding_client import embed_texts
 from app.services.embedding_provider_store import EmbeddingProviderStored, get_embedding_store
 from app.platform.docstore.service import DocStoreService
-from app.services.vectorstore.milvus_docseg_store import milvus_docseg_store
+from app.platform.vectorstore.milvus_docseg_store import milvus_docseg_store
 
 logger = logging.getLogger(__name__)
 

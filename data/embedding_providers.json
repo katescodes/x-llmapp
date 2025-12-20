@@ -1,0 +1,21 @@
+{
+  "providers": [
+    {
+      "name": "default-http-embedding",
+      "base_url": "http://host.docker.internal:8081/",
+      "endpoint_path": "/v1/embeddings",
+      "model": "bge-m3",
+      "api_key": null,
+      "timeout_ms": 30000,
+      "batch_size": 16,
+      "output_dense": true,
+      "output_sparse": true,
+      "dense_dim": null,
+      "sparse_format": "indices_values",
+      "id": "6bbe5c809c6a42219f6ffaf031d00622",
+      "created_at": "2025-12-20T07:14:42.200554",
+      "updated_at": "2025-12-20T07:14:42.200554"
+    }
+  ],
+  "default_provider_id": "6bbe5c809c6a42219f6ffaf031d00622"
+}
