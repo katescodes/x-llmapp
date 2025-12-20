@@ -81,15 +81,19 @@ class NewRetriever:
         
         logger.info(f"[NewRetriever] found {len(doc_version_ids)} doc_versions")
         
-        # 2. 向量检索 (Milvus)
+        # 2. 向量检索 (Milvus) - with fallback
         dense_start = time.time()
         dense_hits = []
+        dense_error = None
         if embedding_provider:
-            dense_hits = await self._search_dense(
+            dense_hits, dense_error = await self._search_dense(
                 query, doc_version_ids, embedding_provider, dense_limit, project_id, doc_types
             )
         dense_ms = int((time.time() - dense_start) * 1000)
-        logger.info(f"[NewRetriever] DENSE_DONE count={len(dense_hits)} ms={dense_ms}")
+        if dense_error:
+            logger.warning(f"[NewRetriever] DENSE_FAILED error={dense_error} fallback_to_lexical_only ms={dense_ms}")
+        else:
+            logger.info(f"[NewRetriever] DENSE_DONE count={len(dense_hits)} ms={dense_ms}")
         
         # 3. 全文检索 (PG tsvector)
         lexical_start = time.time()
@@ -97,8 +101,14 @@ class NewRetriever:
         lexical_ms = int((time.time() - lexical_start) * 1000)
         logger.info(f"[NewRetriever] LEXICAL_DONE count={len(lexical_hits)} ms={lexical_ms}")
         
-        # 4. RRF 融合
-        fused = rrf_fuse(dense_hits, lexical_hits, k=60, topn=top_k)
+        # 4. RRF 融合 (如果 dense 失败，只用 lexical)
+        if dense_error and lexical_hits:
+            # Dense 失败降级：直接返回 top_k 个 lexical 结果
+            fused = lexical_hits[:top_k]
+            logger.info(f"[NewRetriever] FALLBACK_MODE using_lexical_only top_k={len(fused)}")
+        else:
+            # 正常融合
+            fused = rrf_fuse(dense_hits, lexical_hits, k=60, topn=top_k)
         
         # 5. 加载完整文本
         chunk_ids = [hit["chunk_id"] for hit in fused]
@@ -106,7 +116,7 @@ class NewRetriever:
         
         overall_ms = int((time.time() - overall_start) * 1000)
         logger.info(
-            f"[NewRetriever] DONE project_id={project_id} dense={len(dense_hits)} lexical={len(lexical_hits)} fused={len(results)} total_ms={overall_ms}"
+            f"[NewRetriever] DONE project_id={project_id} dense={len(dense_hits)} lexical={len(lexical_hits)} fused={len(results)} total_ms={overall_ms} dense_error={dense_error is not None}"
         )
         
         return results
@@ -142,14 +152,19 @@ class NewRetriever:
         limit: int,
         project_id: str,
         doc_types: Optional[List[str]],
-    ) -> List[Dict]:
-        """Milvus 向量检索"""
+    ) -> tuple[List[Dict], Optional[str]]:
+        """
+        Milvus 向量检索
+        
+        Returns:
+            (hits, error_msg) - error_msg is None on success
+        """
         try:
             # 获取查询向量
             vectors = await embed_texts([query], provider=embedding_provider)
             if not vectors or not vectors[0].get("dense"):
                 logger.warning("NewRetriever no query vector")
-                return []
+                return [], "No query vector generated"
             
             query_dense = vectors[0]["dense"]
             
@@ -163,7 +178,7 @@ class NewRetriever:
             )
             
             # 转换为统一格式
-            return [
+            result = [
                 {
                     "chunk_id": hit["segment_id"],
                     "score": hit["score"],
@@ -171,9 +186,18 @@ class NewRetriever:
                 }
                 for hit in hits
             ]
+            return result, None
         except Exception as e:
-            logger.error(f"NewRetriever dense search failed: {e}", exc_info=True)
-            return []
+            error_msg = f"{type(e).__name__}: {str(e)}"
+            logger.exception(
+                "NewRetriever dense search failed; fallback to lexical only",
+                extra={
+                    "project_id": project_id,
+                    "doc_types": doc_types,
+                    "error": error_msg,
+                }
+            )
+            return [], error_msg
     
     def _search_lexical(
         self, query: str, doc_version_ids: List[str], limit: int

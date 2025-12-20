@@ -135,7 +135,7 @@ def extract_project_info(
     status = result.get("status", "unknown")
     if status not in ("ok", "success"):
         raise RuntimeError(f"模式={mode} 抽取失败: {result.get('message', 'unknown')}")
-    
+        
     log_success(f"模式={mode} 抽取完成 (耗时: {extract_time_ms}ms)")
     
     # 获取结果

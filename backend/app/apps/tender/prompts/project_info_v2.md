@@ -6,17 +6,17 @@
 {
   "data": {
     "base": {
-      "projectName": "项目名称",
-      "ownerName": "招标人/业主",
-      "agencyName": "代理机构",
-      "bidDeadline": "投标截止时间",
-      "bidOpeningTime": "开标时间",
-      "budget": "预算金额",
-      "maxPrice": "最高限价",
-      "bidBond": "投标保证金",
-      "schedule": "工期要求",
-      "quality": "质量要求",
-      "location": "项目地点/交付地点",
+    "projectName": "项目名称",
+    "ownerName": "招标人/业主",
+    "agencyName": "代理机构",
+    "bidDeadline": "投标截止时间",
+    "bidOpeningTime": "开标时间",
+    "budget": "预算金额",
+    "maxPrice": "最高限价",
+    "bidBond": "投标保证金",
+    "schedule": "工期要求",
+    "quality": "质量要求",
+    "location": "项目地点/交付地点",
       "contact": "联系人与电话"
     },
 

@@ -40,9 +40,19 @@ class SimpleLLMOrchestrator:
     def chat(self, messages: list, model_id: str = None, **kwargs) -> dict:
         """调用 LLM 生成回答（同步版本）"""
         # 开发环境：如果 MOCK_LLM=true，返回模拟数据
+        # 安全检查：MOCK_LLM 只在 DEBUG=true 时允许生效
         import os
-        if os.getenv("MOCK_LLM", "false").lower() in ("true", "1", "yes"):
-            logger.info("[SimpleLLMOrchestrator] MOCK_LLM enabled, returning mock response")
+        mock_llm_enabled = os.getenv("MOCK_LLM", "false").lower() in ("true", "1", "yes")
+        debug_enabled = os.getenv("DEBUG", "false").lower() in ("true", "1", "yes")
+        
+        if mock_llm_enabled:
+            if not debug_enabled:
+                logger.warning("[SimpleLLMOrchestrator] MOCK_LLM=true but DEBUG=false, MOCK ignored for safety")
+                mock_llm_enabled = False
+            else:
+                logger.info("[SimpleLLMOrchestrator] MOCK_LLM enabled, returning mock response")
+        
+        if mock_llm_enabled:
             # 返回一个符合 prompt 要求的四板块 JSON
             mock_response = {
                 "data": {
@@ -97,7 +107,7 @@ class SimpleLLMOrchestrator:
         try:
             # 获取模型配置
             if model_id:
-                from .services.llm_client import get_llm_model_by_id
+                from app.services.llm_client import get_llm_model_by_id
                 model = get_llm_model_by_id(model_id)
             else:
                 model = get_default_llm_model()

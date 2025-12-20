@@ -78,7 +78,7 @@ class ExtractV2Service:
                 f"ExtractV2: extract_project_info returned EMPTY data! "
                 f"project_id={project_id} "
                 f"result.data={result.data}"
-            )
+        )
         
         # 4. 返回结果（保持接口兼容）
         return {

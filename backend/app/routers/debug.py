@@ -313,6 +313,61 @@ async def test_new_retrieval(
         }
 
 
+@router.get("/llm/ping")
+def check_llm_availability():
+    """
+    检查 LLM 可用性
+    
+    用于诊断 LLM 连接问题
+    仅在 DEBUG=true 时可用
+    """
+    if not (DEBUG or ENV == "dev"):
+        raise HTTPException(
+            status_code=403,
+            detail="LLM ping endpoint only available in DEBUG mode"
+        )
+    
+    from fastapi import Request
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # 获取 LLM orchestrator (和实际业务代码一样)
+        from ..main import app
+        llm_orchestrator = app.state.llm_orchestrator
+        
+        # 测试调用
+        test_messages = [
+            {"role": "user", "content": "Hello, respond with OK"}
+        ]
+        
+        result = llm_orchestrator.chat(messages=test_messages)
+        
+        # 检查是否是 mock 响应
+        is_mock = os.getenv("MOCK_LLM", "false").lower() in ("true", "1", "yes")
+        
+        # 提取响应片段
+        content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        snippet = content[:200] if content else "(empty)"
+        
+        return {
+            "ok": True,
+            "mock_mode": is_mock,
+            "response_snippet": snippet,
+            "error": None
+        }
+        
+    except Exception as e:
+        logger.exception("LLM ping failed")
+        return {
+            "ok": False,
+            "mock_mode": os.getenv("MOCK_LLM", "false").lower() in ("true", "1", "yes"),
+            "response_snippet": None,
+            "error": f"{type(e).__name__}: {str(e)}"
+        }
+
+
 @router.get("/docstore/ready")
 def check_docstore_ready(
     project_id: str,

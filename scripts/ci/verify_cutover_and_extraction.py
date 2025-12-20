@@ -460,7 +460,7 @@ def main():
         except Exception as db_err:
             verification_details.append(f"DB query failed: {db_err}")
             verification_details.append("Fallback: Skipping strict validation")
-            found_must_hit = False
+                found_must_hit = False
         
         results['rules_must_hit'] = found_must_hit
         

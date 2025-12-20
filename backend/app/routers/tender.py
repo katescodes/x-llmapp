@@ -874,7 +874,7 @@ def run_review(
             import logging
             logging.getLogger(__name__).exception(f"Review failed: {e}")
             dao.update_run(run_id, "failed", message=str(e))
-    
+
     if run_sync:
         # 同步执行
         job()
