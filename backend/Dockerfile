@@ -29,6 +29,7 @@ RUN pip install --no-cache-dir \
 COPY app ./app
 COPY migrations ./migrations
 COPY scripts ./scripts
+COPY testdata ./testdata
 COPY worker.py ./worker.py
 
 EXPOSE 8000

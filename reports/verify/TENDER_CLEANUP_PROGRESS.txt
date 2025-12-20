@@ -1,0 +1,58 @@
+
+=================================================================
+  能力定义纠偏 + 删除旧接口/旧实现 - 进度报告
+=================================================================
+
+已完成 Part A (A0-A2)：
+
+✅ A0: 契约定义
+  - backend/app/apps/tender/contracts/tender_contract_v1.yaml
+  - 定义四大能力（4板块 + risks + outline + review）
+  - MUST_HIT_001 必命中规则
+  - 机器可验收
+
+✅ A1: 对比脚本
+  - scripts/eval/tender_feature_parity.py
+  - OLD vs NEW_ONLY 对比
+  - 支持单项目和批量（corpus_dir）
+  - 生成 diff_summary.json 和 report.md
+
+✅ A2: 接入 CI
+  - Gate 7: tender_feature_parity
+  - 强制检查产出文件
+  - scripts/ci/verify_cutover_and_extraction.py 已更新
+
+待完成 Part A (A3) 和 Part B：
+
+🚧 A3: 纠偏（需先运行验证）
+  - 运行 Gate 7 检查当前状态
+  - 如发现字段缺失，修改：
+    * extraction_specs (拆成 4 组 queries)
+    * prompts (明确 4 板块输出)
+    * 落库逻辑（确保 4 板块都存在）
+
+🚧 B1: TenderService 删除 OLD 分支
+  - 清理 extract_project_info (行 904)
+  - 清理 extract_risks (行 1131)
+  - 清理 generate_directory (行 1381)
+  - 清理 run_review (行 2122)
+  - 删除 kb_documents/kb_chunks 引用
+
+🚧 B2: 删除旧模块
+  - 扫描 services.tender 依赖
+  - 删除/改shim 旧抽取模块
+  - 保留 KB 共用代码
+
+🚧 B3: 加硬门槛
+  - check_platform_work_boundary.py 新增检查
+  - 禁止 kb_documents/kb_chunks
+  - 禁止 OLD/SHADOW 分支
+
+下一步：
+1. 确保数据库已初始化
+2. 运行 Gate 7: docker-compose exec -T backend python scripts/eval/tender_feature_parity.py
+3. 根据结果决定是否需要 A3 纠偏
+4. 完成 B1-B3
+
+详细计划: reports/verify/TENDER_CLEANUP_PLAN.md
+=================================================================
