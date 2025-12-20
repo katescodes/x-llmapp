@@ -3800,6 +3800,8 @@ class TenderService:
         """
         生成语义目录（从评分/要求推导）
         
+        现在直接调用 works/tender/outline 的统一入口
+        
         Args:
             project_id: 项目ID
             mode: 生成模式 FAST/FULL
@@ -3808,215 +3810,21 @@ class TenderService:
         Returns:
             语义目录结果
         """
-        import time
-        from app.services.semantic_outline import RequirementExtractionService, OutlineSynthesisService
-        from app.schemas.semantic_outline import (
-            OutlineMode,
-            OutlineStatus,
-            SemanticOutlineResult,
-            SemanticOutlineDiagnostics,
-        )
+        from app.works.tender.outline.outline_v2_service import generate_outline_v2
         
-        start_time = time.time()
-        
-        # 1. 获取项目信息
+        # 获取项目信息（用于owner_id）
         project = self.dao.get_project(project_id)
-        if not project:
-            raise ValueError(f"Project not found: {project_id}")
+        owner_id = project.get("owner_id") if project else None
         
-        kb_id = project["kb_id"]
-        
-        # 2. 获取项目相关的所有chunks
-        # 先获取项目的文档
-        from app.services import kb_service
-        docs = kb_service.list_documents(kb_id)
-        
-        if not docs:
-            raise ValueError("No documents found in project")
-        
-        # 获取所有chunks
-        doc_ids = [doc["id"] for doc in docs]
-        chunks = self.dao.load_chunks_by_doc_ids(doc_ids, limit=1000)
-        
-        if not chunks:
-            raise ValueError("No chunks found in project documents")
-        
-        # 3. 阶段A：抽取要求项
-        extraction_start = time.time()
-        extraction_service = RequirementExtractionService(llm_orchestrator=self.llm)
-        requirements = extraction_service.extract_requirements(chunks, mode=mode)
-        extraction_time_ms = int((time.time() - extraction_start) * 1000)
-        
-        if not requirements:
-            # 没有抽取到要求项，返回失败结果
-            outline_id = self.dao.create_semantic_outline(
-                project_id=project_id,
-                mode=mode,
-                max_depth=max_depth,
-                status=OutlineStatus.FAILED.value,
-                coverage_rate=0.0,
-                diagnostics_json={
-                    "total_req_count": 0,
-                    "covered_req_count": 0,
-                    "coverage_rate": 0.0,
-                    "req_type_counts": {},
-                    "total_nodes": 0,
-                    "l1_nodes": 0,
-                    "max_depth": 0,
-                    "extraction_time_ms": extraction_time_ms,
-                    "synthesis_time_ms": 0,
-                    "total_time_ms": int((time.time() - start_time) * 1000),
-                    "error": "No requirements extracted from documents",
-                },
-            )
-            
-            return {
-                "outline_id": outline_id,
-                "project_id": project_id,
-                "status": OutlineStatus.FAILED.value,
-                "outline": [],
-                "requirements": [],
-                "diagnostics": {
-                    "total_req_count": 0,
-                    "covered_req_count": 0,
-                    "coverage_rate": 0.0,
-                    "req_type_counts": {},
-                    "total_nodes": 0,
-                    "l1_nodes": 0,
-                    "max_depth": 0,
-                    "extraction_time_ms": extraction_time_ms,
-                    "error": "No requirements extracted",
-                },
-            }
-        
-        # 4. 阶段B：合成目录
-        synthesis_start = time.time()
-        synthesis_service = OutlineSynthesisService(llm_orchestrator=self.llm)
-        outline_nodes = synthesis_service.synthesize_outline(
-            requirements=requirements,
-            mode=mode,
-            max_depth=max_depth,
-        )
-        synthesis_time_ms = int((time.time() - synthesis_start) * 1000)
-        
-        # 5. 计算覆盖率和诊断信息
-        diagnostics = self._calculate_outline_diagnostics(
-            requirements=requirements,
-            outline_nodes=outline_nodes,
-            extraction_time_ms=extraction_time_ms,
-            synthesis_time_ms=synthesis_time_ms,
-            total_time_ms=int((time.time() - start_time) * 1000),
-        )
-        
-        # 6. 确定状态
-        coverage_rate = diagnostics["coverage_rate"]
-        if coverage_rate >= 0.85:
-            status = OutlineStatus.SUCCESS.value
-        elif coverage_rate >= 0.5:
-            status = OutlineStatus.LOW_COVERAGE.value
-        else:
-            status = OutlineStatus.FAILED.value
-        
-        # 7. 保存到数据库
-        outline_id = self.dao.create_semantic_outline(
+        # 调用统一入口
+        return generate_outline_v2(
+            pool=self.pool,
             project_id=project_id,
+            owner_id=owner_id,
             mode=mode,
             max_depth=max_depth,
-            status=status,
-            coverage_rate=coverage_rate,
-            diagnostics_json=diagnostics,
+            llm_orchestrator=self.llm,
         )
-        
-        # 8. 保存要求项
-        requirements_data = [
-            {
-                "req_id": req.req_id,
-                "req_type": req.req_type.value,
-                "title": req.title,
-                "content": req.content,
-                "params": req.params,
-                "score_hint": req.score_hint,
-                "must_level": req.must_level.value,
-                "source_chunk_ids": req.source_chunk_ids,
-                "confidence": req.confidence,
-            }
-            for req in requirements
-        ]
-        self.dao.save_requirement_items(outline_id, project_id, requirements_data)
-        
-        # 9. 保存目录节点（扁平化）
-        nodes_flat = self._flatten_outline_nodes(outline_nodes, outline_id, project_id)
-        self.dao.save_semantic_outline_nodes(outline_id, project_id, nodes_flat)
-        
-        # 10. 构建返回结果
-        return {
-            "outline_id": outline_id,
-            "project_id": project_id,
-            "status": status,
-            "outline": [node.model_dump() for node in outline_nodes],
-            "requirements": [req.model_dump() for req in requirements],
-            "diagnostics": diagnostics,
-        }
-
-    def _calculate_outline_diagnostics(
-        self,
-        requirements: List[Any],
-        outline_nodes: List[Any],
-        extraction_time_ms: int,
-        synthesis_time_ms: int,
-        total_time_ms: int,
-    ) -> Dict[str, Any]:
-        """计算语义目录诊断信息"""
-        # 统计要求项类型
-        req_type_counts = {}
-        for req in requirements:
-            req_type = req.req_type.value
-            req_type_counts[req_type] = req_type_counts.get(req_type, 0) + 1
-        
-        # 统计被覆盖的要求项
-        covered_req_ids = set()
-        
-        def collect_covered_reqs(nodes):
-            for node in nodes:
-                covered_req_ids.update(node.covered_req_ids)
-                if node.children:
-                    collect_covered_reqs(node.children)
-        
-        collect_covered_reqs(outline_nodes)
-        
-        # 统计节点数量
-        total_nodes = 0
-        l1_nodes = 0
-        max_depth = 0
-        
-        def count_nodes(nodes, depth=1):
-            nonlocal total_nodes, l1_nodes, max_depth
-            for node in nodes:
-                total_nodes += 1
-                if node.level == 1:
-                    l1_nodes += 1
-                max_depth = max(max_depth, node.level)
-                if node.children:
-                    count_nodes(node.children, depth + 1)
-        
-        count_nodes(outline_nodes)
-        
-        # 计算覆盖率
-        total_req_count = len(requirements)
-        covered_req_count = len(covered_req_ids)
-        coverage_rate = covered_req_count / total_req_count if total_req_count > 0 else 0.0
-        
-        return {
-            "total_req_count": total_req_count,
-            "covered_req_count": covered_req_count,
-            "coverage_rate": round(coverage_rate, 3),
-            "req_type_counts": req_type_counts,
-            "total_nodes": total_nodes,
-            "l1_nodes": l1_nodes,
-            "max_depth": max_depth,
-            "extraction_time_ms": extraction_time_ms,
-            "synthesis_time_ms": synthesis_time_ms,
-            "total_time_ms": total_time_ms,
         }
 
     def _flatten_outline_nodes(

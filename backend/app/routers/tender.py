@@ -1608,13 +1608,21 @@ def generate_semantic_outline(
     
     # 这里可以加权限检查：project["owner_id"] == user.user_id
     
-    # 生成语义目录
-    svc = _svc(request)
+    # 使用 works/tender/outline 的统一入口
+    from app.works.tender.outline.outline_v2_service import generate_outline_v2
+    from app.services.llm.llm_orchestrator_service import get_llm_orchestrator
+    
     try:
-        result = svc.generate_semantic_outline(
+        pool = _get_pool(request)
+        llm = get_llm_orchestrator()
+        
+        result = generate_outline_v2(
+            pool=pool,
             project_id=project_id,
+            owner_id=project.get("owner_id"),
             mode=req.mode,
             max_depth=req.max_depth,
+            llm_orchestrator=llm,
         )
         
         return {
