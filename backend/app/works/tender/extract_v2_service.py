@@ -1,6 +1,6 @@
 """
 新抽取服务 (v2) - Step 3
-基于平台 ExtractionEngine 的项目信息/风险抽取
+基于平台 ExtractionEngine 的项目信息/风险抽取/目录生成
 """
 import logging
 from typing import Any, Dict, List, Optional
@@ -12,6 +12,7 @@ from app.platform.retrieval.facade import RetrievalFacade
 from app.services.embedding_provider_store import get_embedding_store
 from .extraction_specs.project_info_v2 import build_project_info_spec
 from .extraction_specs.risks_v2 import build_risks_spec
+from .extraction_specs.directory_v2 import build_directory_spec
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,75 @@ class ExtractV2Service:
         logger.info(f"ExtractV2: extract_risks done risks={len(arr)}")
         
         return arr
+    
+    async def generate_directory_v2(
+        self,
+        project_id: str,
+        model_id: Optional[str],
+        run_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        生成目录 (v2) - 使用平台 ExtractionEngine
+        
+        Returns:
+            {
+                "data": {
+                    "nodes": [
+                        {
+                            "title": "章节标题",
+                            "level": 1,
+                            "order_no": 1,
+                            "parent_ref": "父节点标题",
+                            "required": true,
+                            "volume": "第一卷",
+                            "notes": "说明",
+                            "evidence_chunk_ids": [...]
+                        }
+                    ]
+                },
+                "evidence_chunk_ids": [...],
+                "evidence_spans": [...]
+            }
+        """
+        logger.info(f"ExtractV2: generate_directory start project_id={project_id}")
+        
+        # 1. 获取 embedding provider
+        embedding_provider = get_embedding_store().get_default()
+        if not embedding_provider:
+            raise ValueError("No embedding provider configured")
+        
+        # 2. 构建 spec
+        spec = build_directory_spec()
+        
+        # 3. 调用引擎
+        result = await self.engine.run(
+            spec=spec,
+            retriever=self.retriever,
+            llm=self.llm,
+            project_id=project_id,
+            model_id=model_id,
+            run_id=run_id,
+            embedding_provider=embedding_provider,
+        )
+        
+        # 4. 验证结果
+        if not result.data or not isinstance(result.data, dict):
+            logger.error(f"ExtractV2: directory data invalid, type={type(result.data)}")
+            raise ValueError("Directory extraction returned invalid data")
+        
+        nodes = result.data.get("nodes", [])
+        if not nodes:
+            logger.warning(f"ExtractV2: no directory nodes extracted for project={project_id}")
+        
+        logger.info(f"ExtractV2: generate_directory done nodes={len(nodes)}")
+        
+        # 5. 返回结果
+        return {
+            "data": result.data,
+            "evidence_chunk_ids": result.evidence_chunk_ids,
+            "evidence_spans": result.evidence_spans,
+            "retrieval_trace": result.retrieval_trace.__dict__ if result.retrieval_trace else {}
+        }
     
     def _generate_evidence_spans(
         self,

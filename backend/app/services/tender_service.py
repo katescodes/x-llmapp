@@ -1148,56 +1148,118 @@ class TenderService:
         model_id: Optional[str],
         run_id: Optional[str] = None,
     ):
-        """生成目录"""
-        chunks, _ = self._load_context_by_assets(
-            project_id,
-            kinds=["tender"],
-            bidder_name=None,
-            bid_asset_ids=[],
-            limit=260,
-        )
-        chunks = self._filter_chunks_for_bid_directory(chunks, limit=90)
-        ctx = _build_marked_context(chunks)
-
-        messages = [
-            {"role": "system", "content": self.DIRECTORY_PROMPT.strip()},
-            {"role": "user", "content": f"招标文件原文片段：\n{ctx}"},
-        ]
-        out_text = self._llm_text(LLMCall(model_id=model_id, messages=messages))
-        arr = _extract_json(out_text)
+        """生成目录 - 使用 V2 引擎"""
+        # 1. 检查模式
+        from app.core.cutover import get_cutover_config
+        cutover = get_cutover_config()
+        extract_mode = cutover.get_mode("extract", project_id)
+        if extract_mode.value != "NEW_ONLY":
+            raise RuntimeError("Legacy directory generation deleted. Set EXTRACT_MODE=NEW_ONLY")
         
-        if not isinstance(arr, list):
-            raise ValueError("directory output not list")
-
-        if isinstance(arr, list) and self._looks_like_tender_toc(arr):
-            # 回炉一次：更强提醒（同一个 prompt 再加一条“你刚才错了”）
-            repair_messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        self.DIRECTORY_PROMPT
-                        + "\n\n你刚才生成的是【招标文件目录】而不是【投标文件目录】。请严格按投标文件应提交材料重写。"
-                    ).strip(),
-                },
-                {"role": "user", "content": f"招标文件原文片段：\n{ctx}"},
-            ]
-            out_text2 = self._llm_text(LLMCall(model_id=model_id, messages=repair_messages))
-            arr2 = _extract_json(out_text2)
-            if isinstance(arr2, list) and len(arr2) > 0:
-                arr = arr2
+        # 2. 创建 platform job (可选)
+        if self.jobs_service:
+            try:
+                job_id = self.jobs_service.create_job(
+                    job_type="extract",
+                    project_id=project_id,
+                    run_id=run_id
+                )
+                logger.info(f"[generate_directory] platform job created: {job_id}")
+            except Exception as e:
+                logger.warning(f"[generate_directory] Failed to create platform job: {e}")
         
-        self.dao.replace_directory(project_id, arr)
+        # 3. 调用 V2 抽取服务
+        from app.works.tender.extract_v2_service import ExtractV2Service
+        from app.services.db.postgres import _get_pool
+        from app.platform.utils.async_runner import run_async
         
-        # 自动抽取范本并挂载
+        pool = _get_pool()
+        extract_v2 = ExtractV2Service(pool, self.llm)
+        
+        v2_result = run_async(extract_v2.generate_directory_v2(
+            project_id=project_id,
+            model_id=model_id,
+            run_id=run_id
+        ))
+        
+        # 4. 提取 nodes
+        nodes = v2_result.get("data", {}).get("nodes", [])
+        if not nodes:
+            raise ValueError("Directory nodes empty")
+        
+        logger.info(f"[generate_directory] V2 extracted {len(nodes)} nodes")
+        
+        # 5. 后处理: 排序 + 构建树 + 生成 numbering
+        nodes_sorted = sorted(nodes, key=lambda n: (n.get("level", 99), n.get("order_no", 0)))
+        nodes_with_tree = self._build_directory_tree(nodes_sorted)
+        
+        # 6. 保存(版本化)
+        version_id = self.dao.create_directory_version(project_id, source="tender", run_id=run_id)
+        self.dao.upsert_directory_nodes(version_id, nodes_with_tree)
+        self.dao.set_active_directory_version(project_id, version_id)
+        
+        logger.info(f"[generate_directory] Saved {len(nodes_with_tree)} nodes to version {version_id}")
+        
+        # 7. 自动抽取范本(保留)
         try:
             self._auto_extract_and_attach_samples(project_id)
         except Exception as e:
-            # 抽取失败不影响目录生成
-            import logging
-            logging.warning(f"自动抽取范本失败: {e}")
+            logger.warning(f"自动抽取范本失败: {e}")
         
+        # 8. 更新状态
         if run_id:
-            self.dao.update_run(run_id, "success", progress=1.0, message="ok", result_json=arr)
+            self.dao.update_run(
+                run_id,
+                "success",
+                progress=1.0,
+                message="Directory generated",
+                result_json=v2_result
+            )
+    
+    def _build_directory_tree(self, nodes: List[Dict]) -> List[Dict]:
+        """构建目录树: 生成 parent_id 和 numbering"""
+        # 栈: 记录每个 level 的最后一个节点
+        stack = {}
+        result = []
+        counters = {}  # level -> counter
+        
+        for i, node in enumerate(nodes):
+            level = node.get("level", 1)
+            
+            # 生成 parent_id
+            if level > 1:
+                parent_level = level - 1
+                parent_node = stack.get(parent_level)
+                node["parent_id"] = parent_node.get("id") if parent_node else None
+            else:
+                node["parent_id"] = None
+            
+            # 生成 numbering
+            if level not in counters:
+                counters[level] = 0
+            counters[level] += 1
+            
+            if level == 1:
+                node["numbering"] = str(counters[level])
+            else:
+                parent_numbering = stack.get(level-1, {}).get("numbering", "")
+                node["numbering"] = f"{parent_numbering}.{counters[level]}" if parent_numbering else str(counters[level])
+            
+            # 生成 id
+            node["id"] = f"node_{i+1:03d}"
+            
+            # 更新栈
+            stack[level] = node
+            # 清空更深层级
+            for l in list(stack.keys()):
+                if l > level:
+                    del stack[l]
+                    if l in counters:
+                        del counters[l]
+            
+            result.append(node)
+        
+        return result
     
     def _pick_latest_asset(self, assets: List[Dict[str, Any]], require_storage_path: bool = False) -> Optional[Dict[str, Any]]:
         """

@@ -24,6 +24,7 @@ def build_risks_spec() -> ExtractionSpec:
     prompt = _load_prompt("risks_v2.md")
     
     return ExtractionSpec(
+        task_type="extract_risks",
         prompt=prompt,
         queries="招标要求 技术规范 资质条件 合规要求 风险条款",
         topk_per_query=20,

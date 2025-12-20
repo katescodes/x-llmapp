@@ -27,6 +27,9 @@ def extract_json(text: str) -> Any:
     Raises:
         json.JSONDecodeError: 如果无法解析
     """
+    if not text:
+        raise ValueError("Empty text provided to extract_json")
+    
     text = text.strip()
     
     # 尝试提取 ```json ... ``` 中的内容
@@ -40,6 +43,9 @@ def extract_json(text: str) -> Any:
         end = text.find("```", start)
         if end > start:
             text = text[start:end].strip()
+        elif end == -1:
+            # 没有找到结束标记，使用从start到结尾的所有内容
+            text = text[start:].strip()
     elif "```" in text:
         start = text.find("```") + 3
         # 跳过空白字符
@@ -48,6 +54,9 @@ def extract_json(text: str) -> Any:
         end = text.find("```", start)
         if end > start:
             text = text[start:end].strip()
+        elif end == -1:
+            # 没有找到结束标记，使用从start到结尾的所有内容
+            text = text[start:].strip()
     
     # 解析 JSON
     return json.loads(text)
@@ -60,6 +69,7 @@ def repair_json(text: str) -> Any:
     包括：
     - 单引号替换为双引号
     - 去除首尾空白
+    - 提取代码块中的JSON
     
     Args:
         text: 待修复的文本
@@ -70,7 +80,31 @@ def repair_json(text: str) -> Any:
     Raises:
         json.JSONDecodeError: 如果修复后仍无法解析
     """
+    if not text:
+        raise ValueError("Empty text provided to repair_json")
+    
     text = text.strip()
+    
+    # 尝试提取代码块（与extract_json相同的逻辑）
+    if "```json" in text:
+        start_marker = text.find("```json")
+        start = start_marker + 7
+        while start < len(text) and text[start] in (' ', '\n', '\r', '\t'):
+            start += 1
+        end = text.find("```", start)
+        if end > start:
+            text = text[start:end].strip()
+        elif end == -1:
+            text = text[start:].strip()
+    elif "```" in text:
+        start = text.find("```") + 3
+        while start < len(text) and text[start] in (' ', '\n', '\r', '\t'):
+            start += 1
+        end = text.find("```", start)
+        if end > start:
+            text = text[start:end].strip()
+        elif end == -1:
+            text = text[start:].strip()
     
     # 尝试修复常见问题 - 全局替换单引号为双引号
     if "'" in text:

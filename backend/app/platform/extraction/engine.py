@@ -113,13 +113,13 @@ class ExtractionEngine:
         try:
             print(f"[DEBUG] About to call LLM: llm={llm} llm_type={type(llm).__name__ if llm else 'None'}")
             
-            # 确保 max_tokens 足够大（至少 4096）
+            # 确保 max_tokens 足够大（至少 8192 for complex extractions）
             out_text = await call_llm(
                 messages,
                 llm,
                 model_id,
                 temperature=spec.temperature,
-                max_tokens=4096
+                max_tokens=8192
             )
             
             llm_ms = int((time.time() - llm_start) * 1000)
