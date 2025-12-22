@@ -330,10 +330,22 @@ async def _chat_endpoint_impl(
     else:
         effective_kb_ids = (history_session or {}).get("default_kb_ids", []) or []
 
+    # 知识问答增强：当选择了知识库时，自动在用户问题后追加提示语
+    enhanced_message = req.message
+    if effective_kb_ids:
+        # 检查用户问题是否已经包含详尽度相关的关键词
+        detail_keywords = ["详尽", "详细", "全面", "完整", "深入", "展开"]
+        has_detail_request = any(keyword in req.message for keyword in detail_keywords)
+        
+        # 如果用户没有明确要求详尽回答，则自动追加提示语
+        if not has_detail_request:
+            enhanced_message = f"{req.message}\n\n请尽可能详尽、全面回答。"
+            req_logger.info(f"[知识问答增强] 已为用户问题追加详尽度提示语")
+
     append_history_message(
         session_id,
         "user",
-        req.message,
+        req.message,  # 仍然保存原始用户消息到历史记录
         {
             "selected_kb_ids": effective_kb_ids,
             "enable_web": enable_web,
@@ -907,7 +919,7 @@ async def _chat_endpoint_impl(
             # 步骤1: 需求抽取
             req_logger.info("Orchestrator: Extracting requirements")
             requirements = await orchestrator.extract_requirements(
-                user_message=req.message,
+                user_message=enhanced_message,
                 history=history_for_llm,
                 ui_detail_level=req.detail_level or "normal",
             )
@@ -951,7 +963,7 @@ async def _chat_endpoint_impl(
             
             # 生成答案
             raw_answer = await orchestrator.generate_modular_answer(
-                user_message=req.message,
+                user_message=enhanced_message,
                 requirements=requirements,
                 context=combined_context,
                 history=history_for_llm,
@@ -990,7 +1002,7 @@ async def _chat_endpoint_impl(
                 raise HTTPException(status_code=503, detail="历史案例模式需要可用的 Embedding 服务")
             decision_kb_ids = retrieval_targets or None
             decision_result = await generate_history_decision_answer(
-                raw_question=req.message,
+                raw_question=enhanced_message,
                 history_messages=history_for_llm,
                 call_answer_llm=call_chat_llm,
                 call_profile_llm=call_plan_llm,
@@ -1040,7 +1052,7 @@ async def _chat_endpoint_impl(
                 try:
                     answer = await summarize_with_llm_stream(
                         stream_call,
-                        req.message,
+                        enhanced_message,
                         style,
                         sources,
                         history_for_llm,
@@ -1067,7 +1079,7 @@ async def _chat_endpoint_impl(
                 try:
                     answer = await summarize_with_llm(
                         call_chat_llm,
-                        req.message,
+                        enhanced_message,
                         style,
                         sources,
                         history_for_llm,

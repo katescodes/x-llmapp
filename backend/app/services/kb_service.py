@@ -9,7 +9,7 @@ from ..platform.ingest.parser import parse_document
 from .embedding.http_embedding_client import embed_texts
 from .embedding_provider_store import get_embedding_store
 from .segmenter.chunker import chunk_document
-from .vectorstore.milvus_lite_store import milvus_store
+from .vectorstore.milvus_lite_store import get_milvus_store
 from .asr_service import transcribe_audio
 from app.schemas.types import KbCategory
 
@@ -54,7 +54,7 @@ def update_kb(kb_id: str, name: Optional[str], description: Optional[str], categ
 def delete_kb(kb_id: str):
     get_kb_or_raise(kb_id)
     try:
-        milvus_store.delete_by_kb(kb_id)
+        get_milvus_store().delete_by_kb(kb_id)
     except Exception as exc:  # noqa: BLE001
         logger.exception("删除知识库向量失败 kb=%s: %s", kb_id, exc)
         raise
@@ -85,7 +85,7 @@ def delete_document(kb_id: str, doc_id: str, skip_asset_cleanup: bool = False):
     previous_status = doc["status"]
     kb_dao.update_document_status(doc_id, "deleting", doc.get("meta"))
     try:
-        milvus_store.delete_by_doc(kb_id, doc_id)
+        get_milvus_store().delete_by_doc(kb_id, doc_id)
     except Exception as exc:  # noqa: BLE001
         kb_dao.update_document_status(doc_id, previous_status, doc.get("meta"))
         logger.exception("删除文档向量失败 kb=%s doc=%s: %s", kb_id, doc_id, exc)
@@ -181,7 +181,7 @@ async def import_document(kb_id: str, filename: str, data: bytes, kb_category: K
             )
         dense_dim = _resolve_dense_dim(vectors, provider.dense_dim)
         try:
-            milvus_store.upsert_chunks(
+            get_milvus_store().upsert_chunks(
                 [
                     {
                         "chunk_id": chunk.chunk_id,
@@ -213,7 +213,7 @@ async def import_document(kb_id: str, filename: str, data: bytes, kb_category: K
     except Exception as exc:  # noqa: BLE001
         kb_dao.update_document_status(doc_id, "failed", {"error": str(exc)})
         kb_dao.delete_chunks_by_doc(doc_id)
-        milvus_store.delete_by_doc(kb_id, doc_id)
+        get_milvus_store().delete_by_doc(kb_id, doc_id)
         return {
             "filename": filename,
             "status": "failed",

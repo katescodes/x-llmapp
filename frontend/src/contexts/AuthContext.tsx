@@ -6,7 +6,7 @@ import { User, LoginResponse, RegisterRequest, AuthContextType } from '../types/
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || window.location.origin;
+import { api } from '../config/api';
 
 interface AuthProviderProps {
   children: ReactNode;
@@ -38,20 +38,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const login = async (username: string, password: string) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ username, password }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Login failed');
-      }
-
-      const data: LoginResponse = await response.json();
+      // 使用 api.post 替代直接 fetch，复用统一的配置和错误处理
+      const data: LoginResponse = await api.post('/api/auth/login', { username, password }, { skipAuth: true });
 
       // 保存到状态和 localStorage
       setToken(data.access_token);
@@ -66,20 +54,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const register = async (data: RegisterRequest) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Registration failed');
-      }
-
-      const registeredUser: User = await response.json();
+      // 使用 api.post 替代直接 fetch
+      await api.post('/api/auth/register', data, { skipAuth: true });
 
       // 注册成功后自动登录
       await login(data.username, data.password);
@@ -128,8 +104,8 @@ export const useAuth = (): AuthContextType => {
  */
 export const createAuthFetch = (token: string | null) => {
   return async (url: string, options: RequestInit = {}) => {
-    const headers: HeadersInit = {
-      ...options.headers,
+    const headers: Record<string, string> = {
+      ...(options.headers as any),
     };
 
     if (token) {

@@ -42,6 +42,11 @@ interface TenderAsset {
   storage_path?: string;
   bidder_name?: string;
   created_at?: string;
+  meta_json?: {
+    validate_status?: 'valid' | 'invalid' | 'error';
+    validate_message?: string;
+    [key: string]: any;
+  };
 }
 
 interface TenderRun {
@@ -175,6 +180,8 @@ export default function TenderWorkspace() {
   const [previewMode, setPreviewMode] = useState<"content" | "format">("content");
   const [formatPreviewUrl, setFormatPreviewUrl] = useState<string>("");
   const [formatDownloadUrl, setFormatDownloadUrl] = useState<string>("");
+  const [formatPreviewBlobUrl, setFormatPreviewBlobUrl] = useState<string>("");
+  const [formatPreviewLoading, setFormatPreviewLoading] = useState<boolean>(false);
 
   // 轻量 Toast（不引入第三方库）
   const [toast, setToast] = useState<{ kind: 'success' | 'error' | 'warning'; msg: string; detail?: string } | null>(null);
@@ -201,6 +208,93 @@ export default function TenderWorkspace() {
   
   // 轮询 ref
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // -------------------- 格式预览加载（使用 fetch + Blob URL 以携带 Authorization） --------------------
+  
+  useEffect(() => {
+    // 清理函数：释放旧的 Blob URL
+    return () => {
+      if (formatPreviewBlobUrl) {
+        URL.revokeObjectURL(formatPreviewBlobUrl);
+      }
+    };
+  }, [formatPreviewBlobUrl]);
+
+  useEffect(() => {
+    if (!formatPreviewUrl) {
+      setFormatPreviewBlobUrl("");
+      return;
+    }
+
+    const loadPreview = async () => {
+      setFormatPreviewLoading(true);
+      try {
+        // 使用 api.get 的底层 request 函数，但需要获取 Blob 响应
+        const token = localStorage.getItem('auth_token');
+        const response = await fetch(formatPreviewUrl, {
+          method: 'GET',
+          headers: {
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        setFormatPreviewBlobUrl(blobUrl);
+      } catch (err) {
+        console.error('Failed to load format preview:', err);
+        showToast('error', '格式预览加载失败', String(err));
+        setFormatPreviewBlobUrl("");
+      } finally {
+        setFormatPreviewLoading(false);
+      }
+    };
+
+    loadPreview();
+  }, [formatPreviewUrl, showToast]);
+
+  // -------------------- 下载Word文件（携带 Authorization） --------------------
+  
+  const downloadWordFile = useCallback(async () => {
+    if (!formatDownloadUrl) return;
+    
+    try {
+      const token = localStorage.getItem('auth_token');
+      const response = await fetch(formatDownloadUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      
+      // 触发下载
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = `投标文件_${currentProject?.name || '导出'}_${new Date().toISOString().split('T')[0]}.docx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      // 清理 Blob URL
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
+      
+      showToast('success', 'Word文件下载成功');
+    } catch (err) {
+      console.error('Failed to download Word file:', err);
+      showToast('error', 'Word文件下载失败', String(err));
+    }
+  }, [formatDownloadUrl, currentProject, showToast]);
 
   // -------------------- 数据加载 --------------------
 
@@ -444,6 +538,14 @@ export default function TenderWorkspace() {
     setSamplePreviewById({});
     setSelectedFormatTemplateId("");
     setTocStyleVars(null);
+    // 清空格式预览相关状态（避免 403 错误）
+    setPreviewMode("content");
+    setFormatPreviewUrl("");
+    setFormatDownloadUrl("");
+    if (formatPreviewBlobUrl) {
+      URL.revokeObjectURL(formatPreviewBlobUrl);
+    }
+    setFormatPreviewBlobUrl("");
   };
   
   // 编辑项目
@@ -1135,7 +1237,12 @@ export default function TenderWorkspace() {
 
       {/* 中间工作区 */}
       <div className="main-panel">
-        {currentProject ? (
+        {viewMode === "formatTemplates" ? (
+          /* 格式模板管理视图 - 独立于项目 */
+          <div className="kb-detail">
+            <FormatTemplatesPage embedded onBack={() => setViewMode("projectInfo")} />
+          </div>
+        ) : currentProject ? (
           <>
             {/* 工作区头部 */}
             <div className="header-bar">
@@ -1151,13 +1258,7 @@ export default function TenderWorkspace() {
 
             {/* 工作区内容 */}
             <div className="kb-detail">
-              {viewMode === "formatTemplates" ? (
-                <>
-                  {console.log('渲染FormatTemplatesPage组件')}
-                  <FormatTemplatesPage embedded onBack={() => setViewMode("projectInfo")} />
-                </>
-              ) : (
-                <>
+              <>
               {/* 项目内上传区 */}
               <section className="kb-upload-section">
                 <h4>📤 项目内上传</h4>
@@ -1475,14 +1576,14 @@ export default function TenderWorkspace() {
                           </button>
 
                           {previewMode === "format" && !!formatDownloadUrl && (
-                            <a
-                              href={formatDownloadUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              style={{ alignSelf: "center", marginLeft: 8, color: "#3b82f6", textDecoration: "none" }}
+                            <button
+                              onClick={downloadWordFile}
+                              className="link-button"
+                              style={{ alignSelf: "center", marginLeft: 8, color: "#3b82f6", textDecoration: "underline" }}
+                              title="下载Word文档"
                             >
-                              下载Word
-                            </a>
+                              📥 下载Word
+                            </button>
                           )}
                         </div>
 
@@ -1515,10 +1616,22 @@ export default function TenderWorkspace() {
                           </div>
                         ) : (
                           <div style={{ height: "72vh", border: "1px solid #eee", borderRadius: 8, overflow: "hidden" }}>
-                            {formatPreviewUrl ? (
+                            {formatPreviewLoading ? (
+                              <div style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                height: "100%",
+                                color: "#64748b"
+                              }}>
+                                <div style={{ fontSize: "32px", marginBottom: "16px" }}>⏳</div>
+                                <div>加载格式预览中...</div>
+                              </div>
+                            ) : formatPreviewBlobUrl ? (
                               <iframe
                                 title="格式预览"
-                                src={formatPreviewUrl}
+                                src={formatPreviewBlobUrl}
                                 style={{ width: "100%", height: "100%", border: "none" }}
                               />
                             ) : (
@@ -1682,8 +1795,7 @@ export default function TenderWorkspace() {
                   )}
                 </section>
               )}
-                </>
-              )}
+              </>
             </div>
           </>
         ) : (

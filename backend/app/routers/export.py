@@ -41,7 +41,7 @@ def get_pool(request: Request) -> ConnectionPool:
 
 
 @router.post("/projects/{project_id}/export/docx")
-def export_project_docx(
+async def export_project_docx(
     project_id: str,
     format_template_id: Optional[str] = Query(None, description="格式模板ID（可选，优先从目录节点获取）"),
     include_toc: bool = Query(True, description="是否包含目录"),
@@ -76,7 +76,7 @@ def export_project_docx(
         export_service = ExportService(dao)
         
         # 2. 导出文档
-        output_path = export_service.export_project_to_docx(
+        output_path = await export_service.export_project_to_docx(
             project_id=project_id,
             format_template_id=format_template_id,
             include_toc=include_toc,
@@ -115,7 +115,7 @@ def export_project_docx(
 
 
 @router.post("/projects/{project_id}/export/docx-v2", deprecated=True)
-def export_project_docx_post(
+async def export_project_docx_post(
     project_id: str,
     req: ExportDocxRequest,
     pool: ConnectionPool = Depends(get_pool),
@@ -126,7 +126,7 @@ def export_project_docx_post(
     
     已废弃，推荐使用 GET 版本
     """
-    return export_project_docx(
+    return await export_project_docx(
         project_id=project_id,
         format_template_id=req.format_template_id,
         include_toc=req.include_toc,

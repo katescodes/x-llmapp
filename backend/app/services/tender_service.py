@@ -1206,8 +1206,9 @@ class TenderService:
                 parent_numbering = stack.get(level-1, {}).get("numbering", "")
                 node["numbering"] = f"{parent_numbering}.{counters[level]}" if parent_numbering else str(counters[level])
             
-            # 生成 id
-            node["id"] = f"node_{i+1:03d}"
+            # 生成 id (使用 UUID 避免主键冲突)
+            import uuid
+            node["id"] = f"node_{uuid.uuid4().hex[:16]}"
             
             # 更新栈
             stack[level] = node
@@ -1702,7 +1703,9 @@ class TenderService:
             if not path or not diag["storage_path_exists"]:
                 # C-2) 旧项目：尝试从磁盘/存储恢复（若系统没有原始 bytes，则通常只能走 fallback）
                 restored_path = self._try_restore_tender_docx_from_disk(project_id, tender_asset)
+                # 修复：确保 restored_ext 不为空，避免 NoneType 错误
                 restored_ext = os.path.splitext(restored_path or "")[1].lower() if restored_path else ""
+                
                 if restored_path and os.path.exists(restored_path) and restored_ext in (".docx", ".pdf"):
                     path = restored_path
                     diag["tender_storage_path"] = restored_path

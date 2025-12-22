@@ -253,11 +253,12 @@ def get_sections(
 # ==================== Document ====================
 
 @router.post("/projects/{project_id}/document/generate", response_model=RunOut)
-def generate_document(
+async def generate_document(
     project_id: str,
     bg: BackgroundTasks,
     req: Request,
     sync: int = 0,
+    auto_generate: int = 1,
     user=Depends(get_current_user_sync),
 ):
     """生成申报书文档"""
@@ -267,14 +268,25 @@ def generate_document(
     # 创建 run
     run_id = dao.create_run(project_id, "document")
     
+    auto_generate_content = bool(auto_generate)
+    
     if sync == 1:
         # 同步执行
-        service.generate_document(project_id, run_id)
+        await service.generate_document(
+            project_id, 
+            run_id, 
+            auto_generate_content=auto_generate_content
+        )
         run = dao.get_run(run_id)
         return run
     else:
-        # 异步执行
-        bg.add_task(service.generate_document, project_id, run_id)
+        # 异步执行（使用 asyncio.create_task）
+        import asyncio
+        asyncio.create_task(service.generate_document(
+            project_id, 
+            run_id, 
+            auto_generate_content=auto_generate_content
+        ))
         run = dao.get_run(run_id)
         return run
 

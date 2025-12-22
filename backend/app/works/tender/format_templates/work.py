@@ -470,7 +470,7 @@ class FormatTemplatesWork:
     
     # ==================== 套用到项目目录 ====================
     
-    def apply_to_project_directory(
+    async def apply_to_project_directory(
         self,
         project_id: str,
         template_id: str,
@@ -514,7 +514,6 @@ class FormatTemplatesWork:
                 )
             
             # 3. 准备输出目录（使用持久化路径）
-            import os
             renders_dir = os.getenv("TENDER_RENDERS_DIR", "/app/storage/tender/renders")
             output_dir = Path(renders_dir) / project_id
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -524,7 +523,7 @@ class FormatTemplatesWork:
             export_service = ExportService(self.dao)
             
             try:
-                output_path = export_service.export_project_to_docx(
+                output_path = await export_service.export_project_to_docx(
                     project_id=project_id,
                     format_template_id=template_id,
                     include_toc=True,
@@ -569,7 +568,7 @@ class FormatTemplatesWork:
                 detail=f"套用格式失败: {str(e)}"
             )
     
-    def preview_project_with_template(
+    async def preview_project_with_template(
         self,
         project_id: str,
         template_id: str,
@@ -619,7 +618,7 @@ class FormatTemplatesWork:
             export_service = ExportService(self.dao)
             
             try:
-                docx_path = export_service.export_project_to_docx(
+                docx_path = await export_service.export_project_to_docx(
                     project_id=project_id,
                     format_template_id=template_id,
                     include_toc=True,
@@ -769,7 +768,7 @@ class FormatTemplatesWork:
         
         # 3. LLM 分析（可选）
         apply_assets = None
-        if model_id and self.llm_orchestrator:
+        if model_id:
             logger.info(f"启用 LLM 分析: model_id={model_id}")
             try:
                 from app.services.template.template_applyassets_llm import (
@@ -783,7 +782,7 @@ class FormatTemplatesWork:
                 apply_assets = validate_applyassets(llm_result, blocks)
                 logger.info(f"LLM 分析完成: confidence={apply_assets.get('policy', {}).get('confidence', 0)}")
             except Exception as e:
-                logger.warning(f"LLM 分析失败，使用默认策略: {e}")
+                logger.warning(f"LLM 分析失败，使用默认策略: {e}", exc_info=True)
         
         if not apply_assets:
             from app.services.template.template_applyassets_llm import get_fallback_apply_assets
@@ -835,7 +834,7 @@ class FormatTemplatesWork:
         meta_json["format_template_id"] = template_id
         
         self.dao._execute(
-            "UPDATE directory_nodes SET meta_json = %s WHERE id = %s",
+            "UPDATE tender_directory_nodes SET meta_json = %s WHERE id = %s",
             (json.dumps(meta_json), root_id)
         )
         

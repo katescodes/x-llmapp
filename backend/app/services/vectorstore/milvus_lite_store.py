@@ -244,5 +244,36 @@ class MilvusLiteStore:
         return hits
 
 
-milvus_store = MilvusLiteStore()
+# 延迟初始化：避免在导入时就连接数据库
+_milvus_store_instance: Optional[MilvusLiteStore] = None
+
+
+def get_milvus_store() -> MilvusLiteStore:
+    """
+    获取 Milvus Store 单例（延迟初始化）
+    
+    使用延迟初始化避免在模块导入时就尝试连接数据库，
+    这样可以防止容器启动时的文件锁冲突问题。
+    
+    Returns:
+        MilvusLiteStore 实例
+    """
+    global _milvus_store_instance
+    if _milvus_store_instance is None:
+        _milvus_store_instance = MilvusLiteStore()
+    return _milvus_store_instance
+
+
+# 保留向后兼容性：但使用时会触发延迟初始化
+@property
+def milvus_store() -> MilvusLiteStore:
+    """向后兼容的属性访问器"""
+    return get_milvus_store()
+
+
+# 为了完全向后兼容，也提供模块级变量（但实际是函数调用）
+def __getattr__(name):
+    if name == "milvus_store":
+        return get_milvus_store()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 

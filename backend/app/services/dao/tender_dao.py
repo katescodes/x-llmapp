@@ -539,6 +539,10 @@ class TenderDAO:
             if nid in used_ids:
                 nid = f"tdn_{uuid.uuid4().hex}"
             
+            # 检查是否使用了占位符ID（如 node_001），这类ID非常容易冲突，应强制重新生成
+            if nid and (nid.startswith("node_") or nid == "node_001"):
+                nid = f"tdn_{uuid.uuid4().hex}"
+
             used_ids.add(nid)
             by_numbering_id[n["numbering"]] = nid
             out_rows.append((order_no, nid, n))

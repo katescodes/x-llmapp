@@ -331,17 +331,23 @@ class DeclareService:
                 )
             raise
     
-    def generate_document(
+    async def generate_document(
         self,
         project_id: str,
         run_id: Optional[str] = None,
+        auto_generate_content: bool = True,
+        model_id: Optional[str] = None,
     ):
         """生成申报书文档（同步入口）"""
         from app.services.export.declare_docx_exporter import DeclareDocxExporter
         
         try:
             exporter = DeclareDocxExporter(self.dao)
-            result = exporter.export(project_id)
+            result = await exporter.export(
+                project_id,
+                auto_generate_content=auto_generate_content,
+                model_id=model_id,
+            )
             
             # 更新 run 状态
             if run_id:

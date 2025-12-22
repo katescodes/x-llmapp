@@ -25,6 +25,7 @@ from app.services.export.docx_template_loader import (
 from app.services.export.docx_exporter import (
     render_directory_tree_to_docx,
     render_simple_outline_to_docx,
+    build_project_context_string,
 )
 from app.services.export.style_map import (
     get_style_config_from_template,
@@ -51,7 +52,7 @@ class ExportService:
         """
         self.dao = dao
     
-    def export_project_to_docx(
+    async def export_project_to_docx(
         self,
         project_id: str,
         *,
@@ -60,6 +61,10 @@ class ExportService:
         prefix_numbering: bool = False,
         merge_semantic_summary: bool = False,
         output_dir: Optional[str] = None,
+        auto_generate_content: bool = False,
+        auto_write_cfg: Optional[Any] = None,
+        project_context: str = "",
+        model_id: Optional[str] = None,
     ) -> str:
         """
         导出项目为 Word 文档
@@ -71,6 +76,10 @@ class ExportService:
             prefix_numbering: 是否在标题前添加编号
             merge_semantic_summary: 是否合并语义目录的 summary
             output_dir: 输出目录（可选，默认使用临时目录）
+            auto_generate_content: 是否自动生成内容（当 summary 为空时）
+            auto_write_cfg: 自动写作配置
+            project_context: 项目上下文信息（用于自动生成内容）
+            model_id: LLM模型ID（用于自动生成内容）
             
         Returns:
             输出文件路径
@@ -91,7 +100,18 @@ class ExportService:
         if not format_template_id:
             format_template_id = self._find_format_template_id(roots)
         
-        # 3. 回填语义目录的 summary（写数据库，然后重新加载）
+        # 3. 如果启用了自动生成但未提供 project_context，则自动构建
+        if auto_generate_content and not project_context:
+            try:
+                project = self.dao.get_project(project_id)
+                if project:
+                    project_context = build_project_context_string(project)
+                    logger.info(f"自动构建项目上下文: {len(project_context)} 字符")
+            except Exception as e:
+                logger.warning(f"构建项目上下文失败: {e}")
+                project_context = ""
+        
+        # 4. 回填语义目录的 summary（写数据库，然后重新加载）
         if merge_semantic_summary:
             backfill_stats = self._backfill_semantic_summaries(project_id)
             logger.info(f"Summary 回填统计: {backfill_stats}")
@@ -101,7 +121,7 @@ class ExportService:
             roots = build_tree(rows)
             fill_numbering_if_missing(roots)
         
-        # 4. 准备输出路径
+        # 5. 准备输出路径
         if not output_dir:
             output_dir = tempfile.gettempdir()
         
@@ -110,16 +130,20 @@ class ExportService:
             f"project_{project_id}_{uuid.uuid4().hex[:8]}.docx"
         )
         
-        # 5. 渲染文档
+        # 6. 渲染文档
         if format_template_id:
             # 使用模板母版
-            self._export_with_template(
+            await self._export_with_template(
                 roots=roots,
                 format_template_id=format_template_id,
                 output_path=output_path,
                 include_toc=include_toc,
                 prefix_numbering=prefix_numbering,
                 project_id=project_id,
+                auto_generate_content=auto_generate_content,
+                auto_write_cfg=auto_write_cfg,
+                project_context=project_context,
+                model_id=model_id,
             )
         else:
             # 简单导出（不使用模板）
@@ -202,7 +226,7 @@ class ExportService:
             logger.error(f"回填 summary 失败: {e}", exc_info=True)
             return {"error": str(e)}
     
-    def _export_with_template(
+    async def _export_with_template(
         self,
         roots: List[DirNode],
         format_template_id: str,
@@ -210,6 +234,10 @@ class ExportService:
         include_toc: bool,
         prefix_numbering: bool,
         project_id: str,
+        auto_generate_content: bool = False,
+        auto_write_cfg: Optional[Any] = None,
+        project_context: str = "",
+        model_id: Optional[str] = None,
     ) -> None:
         """使用模板母版导出"""
         # 1. 加载模板信息
@@ -237,13 +265,24 @@ class ExportService:
         # 4. 准备样式配置
         heading_style_map, normal_style_name = self._get_style_config(template_info)
         
-        # 5. 准备节正文插入回调
+        # 5. 提取 applyAssets（LLM 分析的保留/删除计划）
+        apply_assets = None
+        analysis_json = template_info.get("analysis_json")
+        if analysis_json and isinstance(analysis_json, dict):
+            apply_assets = analysis_json.get("applyAssets")
+            if apply_assets:
+                logger.info(f"从 analysis_json 提取 applyAssets: "
+                           f"anchors={len(apply_assets.get('anchors', []))}, "
+                           f"keep={len(apply_assets.get('keepPlan', {}).get('keepBlockIds', []))}, "
+                           f"delete={len(apply_assets.get('keepPlan', {}).get('deleteBlockIds', []))}")
+        
+        # 6. 准备节正文插入回调
         def insert_body(node: DirNode, doc):
             """插入节正文内容"""
             self._insert_section_body(project_id, node, doc)
         
-        # 6. 渲染文档
-        render_directory_tree_to_docx(
+        # 7. 渲染文档
+        await render_directory_tree_to_docx(
             template_path=template_path,
             output_path=output_path,
             roots=roots,
@@ -252,7 +291,12 @@ class ExportService:
             prefix_numbering_in_text=prefix_numbering,
             heading_style_map=heading_style_map,
             normal_style_name=normal_style_name,
+            apply_assets=apply_assets,  # 新增：传递 LLM 分析结果
             insert_section_body=insert_body,
+            auto_generate_content=auto_generate_content,
+            auto_write_cfg=auto_write_cfg,
+            project_context=project_context,
+            model_id=model_id,
         )
     
     def _get_style_config(
@@ -262,6 +306,10 @@ class ExportService:
         """
         从模板信息中提取样式配置
         
+        优先级：
+        1. style_config_json / style_config (旧字段，手动配置)
+        2. analysis_json.roleMapping (新字段，自动分析)
+        
         Args:
             template_info: 模板信息字典
             
@@ -269,28 +317,58 @@ class ExportService:
             元组 (heading_style_map, normal_style_name)
         """
         try:
-            # 获取 style_config_json
+            # 方案1：优先从 style_config_json 读取（旧方案，兼容性）
             style_config = get_style_config_from_template(template_info)
             
-            if not style_config:
-                logger.info("模板未配置样式映射，使用默认样式")
-                return None, None
+            if style_config:
+                # 加载标题样式映射
+                heading_style_map = load_heading_style_map(style_config)
+                
+                # 加载正文样式
+                normal_style = load_normal_style(style_config)
+                
+                if heading_style_map or normal_style:
+                    logger.info(
+                        f"从 style_config 加载样式: heading_map={heading_style_map}, "
+                        f"normal_style={normal_style}"
+                    )
+                    return heading_style_map, normal_style
             
-            # 加载标题样式映射
-            heading_style_map = load_heading_style_map(style_config)
+            # 方案2：从 analysis_json.roleMapping 读取（新方案）
+            analysis_json = template_info.get("analysis_json")
+            if analysis_json:
+                role_mapping = analysis_json.get("roleMapping", {})
+                if role_mapping:
+                    # 转换格式：{"h1": "+标题1", "h2": "+标题2"} → {1: "+标题1", 2: "+标题2"}
+                    heading_style_map = {}
+                    for key, style_name in role_mapping.items():
+                        if isinstance(key, str) and key.startswith("h") and len(key) == 2:
+                            try:
+                                level = int(key[1])
+                                if isinstance(style_name, str) and style_name.strip():
+                                    heading_style_map[level] = style_name.strip()
+                            except (ValueError, IndexError):
+                                pass
+                    
+                    # 提取正文样式
+                    normal_style = role_mapping.get("body")
+                    if isinstance(normal_style, str):
+                        normal_style = normal_style.strip() if normal_style.strip() else None
+                    else:
+                        normal_style = None
+                    
+                    if heading_style_map or normal_style:
+                        logger.info(
+                            f"从 analysis_json.roleMapping 加载样式: "
+                            f"heading_map={heading_style_map}, normal_style={normal_style}"
+                        )
+                        return heading_style_map, normal_style
             
-            # 加载正文样式
-            normal_style = load_normal_style(style_config)
-            
-            logger.info(
-                f"加载样式配置: heading_map={heading_style_map}, "
-                f"normal_style={normal_style}"
-            )
-            
-            return heading_style_map, normal_style
+            logger.info("模板未配置样式映射，使用默认样式")
+            return None, None
         
         except Exception as e:
-            logger.warning(f"解析样式配置失败: {e}")
+            logger.warning(f"解析样式配置失败: {e}", exc_info=True)
             return None, None
     
     def _insert_section_body(self, project_id: str, node: DirNode, doc) -> None:

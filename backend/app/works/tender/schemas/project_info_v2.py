@@ -73,3 +73,4 @@ class ProjectInfoV2(BaseModel):
         """导出为 dict，排除 None 值"""
         return self.model_dump(exclude_none=True, by_alias=True)
 
+

@@ -10,7 +10,7 @@ from app.services.embedding.http_embedding_client import embed_texts
 from app.services.embedding_provider_store import EmbeddingProviderStored
 from app.platform.retrieval.providers.legacy.pg_lexical import search_lexical
 from app.platform.retrieval.providers.legacy.rrf import rrf_fuse
-from app.services.vectorstore.milvus_lite_store import milvus_store
+from app.services.vectorstore.milvus_lite_store import get_milvus_store
 from app.services.logging.request_logger import (
     get_request_logger,
     is_debug_enabled,
@@ -53,7 +53,7 @@ async def retrieve(
     lexical_hits: List[dict] = []
 
     try:
-        dense_hits = milvus_store.search_dense(
+        dense_hits = get_milvus_store().search_dense(
             query_dense,
             limit=dense_topk,
             kb_ids=kb_ids,

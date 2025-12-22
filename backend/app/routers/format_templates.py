@@ -128,7 +128,7 @@ def get_format_template(
         raise HTTPException(status_code=404, detail="Template not found")
     
     # 权限检查
-    if template.owner_id != user.user_id and not template.is_public:
+    if template.owner_id != user.user_id and not template.is_public and user.role != "admin":
         raise HTTPException(status_code=403, detail="Permission denied")
     
     return template
@@ -148,7 +148,7 @@ def update_format_template(
     template = work.get_template(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    if template.owner_id != user.user_id:
+    if template.owner_id != user.user_id and user.role != "admin":
         raise HTTPException(status_code=403, detail="Permission denied")
     
     try:
@@ -177,7 +177,7 @@ def delete_format_template(
     template = work.get_template(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    if template.owner_id != user.user_id:
+    if template.owner_id != user.user_id and user.role != "admin":
         raise HTTPException(status_code=403, detail="Permission denied")
     
     success = work.delete_template(template_id)
@@ -203,7 +203,7 @@ def get_format_template_file(
         raise HTTPException(status_code=404, detail="Template not found")
     
     # 权限检查
-    if template.owner_id != user.user_id and not template.is_public:
+    if template.owner_id != user.user_id and not template.is_public and user.role != "admin":
         raise HTTPException(status_code=403, detail="Permission denied")
     
     storage_path = template.template_storage_path
@@ -262,7 +262,7 @@ async def analyze_format_template(
     template = work.get_template(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    if template.owner_id != user.user_id:
+    if template.owner_id != user.user_id and user.role != "admin":
         raise HTTPException(status_code=403, detail="Permission denied")
     
     # 读取文件（如果提供）
@@ -315,7 +315,7 @@ async def parse_format_template(
     template = work.get_template(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    if template.owner_id != user.user_id:
+    if template.owner_id != user.user_id and user.role != "admin":
         raise HTTPException(status_code=403, detail="Permission denied")
     
     try:
@@ -357,7 +357,7 @@ def get_format_template_preview(
     template = work.get_template(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    if template.owner_id != user.user_id and not template.is_public:
+    if template.owner_id != user.user_id and not template.is_public and user.role != "admin":
         raise HTTPException(status_code=403, detail="Permission denied")
     
     try:
@@ -385,7 +385,7 @@ def get_format_template_preview(
 # ==================== Apply to Directory Endpoint ====================
 
 @router.post("/projects/{project_id}/directory/apply-format-template")
-def apply_format_template_to_directory(
+async def apply_format_template_to_directory(
     project_id: str,
     req: ApplyFormatTemplateReq,
     return_type: str = Query("json", description="返回类型: json 或 file"),
@@ -400,11 +400,11 @@ def apply_format_template_to_directory(
     project = dao.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    if project.get("owner_id") != user.user_id:
+    if project.get("owner_id") != user.user_id and user.role != "admin":
         raise HTTPException(status_code=403, detail="Permission denied")
     
     try:
-        result = work.apply_to_project_directory(
+        result = await work.apply_to_project_directory(
             project_id=project_id,
             template_id=req.format_template_id,
             return_type=return_type
@@ -453,7 +453,7 @@ def get_template_analysis(
         raise HTTPException(status_code=404, detail="Template not found")
     
     # 权限检查
-    if template.owner_id != user.user_id and not template.is_public:
+    if template.owner_id != user.user_id and not template.is_public and user.role != "admin":
         raise HTTPException(status_code=403, detail="Permission denied")
     
     analysis_json = template.analysis_json
@@ -501,7 +501,7 @@ async def reanalyze_template(
     template = work.get_template(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    if template.owner_id != user.user_id:
+    if template.owner_id != user.user_id and user.role != "admin":
         raise HTTPException(status_code=403, detail="Permission denied")
     
     try:
@@ -527,7 +527,7 @@ async def reanalyze_template(
 # ==================== Export Download Endpoint ====================
 
 @router.get("/projects/{project_id}/directory/format-preview")
-def get_format_preview(
+async def get_format_preview(
     project_id: str,
     format: str = Query("pdf", description="预览格式: pdf 或 docx"),
     format_template_id: Optional[str] = Query(None, description="格式模板ID"),
@@ -550,7 +550,7 @@ def get_format_preview(
     project = dao.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    if project.get("owner_id") != user.user_id:
+    if project.get("owner_id") != user.user_id and user.role != "admin":
         raise HTTPException(status_code=403, detail="Permission denied")
     
     work = _get_format_templates_work(request)
@@ -566,7 +566,7 @@ def get_format_preview(
                 )
         
         # 2. 生成预览
-        result = work.preview_project_with_template(
+        result = await work.preview_project_with_template(
             project_id=project_id,
             template_id=format_template_id,
             output_format=format
@@ -623,7 +623,7 @@ def download_exported_docx(
     project = dao.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    if project.get("owner_id") != user.user_id:
+    if project.get("owner_id") != user.user_id and user.role != "admin":
         raise HTTPException(status_code=403, detail="Permission denied")
     
     # 构建文件路径

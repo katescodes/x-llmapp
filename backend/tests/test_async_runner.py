@@ -73,3 +73,4 @@ def test_run_async_returns_complex_object():
     assert result == {"key": "value", "number": 42}
     assert isinstance(result, dict)
 
+
