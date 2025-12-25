@@ -6,18 +6,24 @@ from typing import Any, Dict, List, Tuple
 from rapidfuzz import fuzz
 
 # 标题编号模式（PDF 常见）
-H1 = re.compile(r"^\s*[一二三四五六七八九十]+[、.．]\s*\S+")
-H2 = re.compile(r"^\s*\d+(?:\.\d+)*[、.．]\s*\S+")
+# ✅ 扩展编号模式，支持更多格式
+H1 = re.compile(r"^\s*[一二三四五六七八九十]+[、.．。]\s*\S+")
+H2 = re.compile(r"^\s*\d+(?:\.\d+)*[、.．。]\s*\S+")
 H3 = re.compile(r"^\s*[（(]\s*\d+\s*[)）]\s*\S+")
+H4 = re.compile(r"^\s*[附表第][一二三四五六七八九十\d]+[、：:]\s*\S+")  # 附件、表格等
+H5 = re.compile(r"^\s*[附录]?\s*[A-Z]\s*[、.．。:：]\s*\S+")  # 附录A、B等
 
 # 范本关键词（只用于"标题候选"与区域打分，不依赖固定章号）
+# ✅ 扩展关键词，提高PDF识别率
 SAMPLE_KW = [
     "投标函","响应函","报价","报价一览表","开标一览表","分项报价","报价表","报价清单",
-    "授权委托书","授权书","法定代表人","身份证明",
-    "偏离","商务响应","技术响应","承诺函","声明","资格审查","资质","营业执照","样表","范本","格式"
+    "授权委托书","授权书","法定代表人","身份证明","委托书",
+    "偏离","商务响应","技术响应","承诺函","声明","资格审查","资质","营业执照","样表","范本","格式",
+    "保证金","投标保证金","履约保证","证书","证明","业绩","项目组织",
+    "设备清单","材料清单","工程量清单","施工方案","技术方案","实施方案","组织架构","人员配备"
 ]
 
-REGION_KW = ["投标文件格式","响应文件格式","样表","范本","格式","附件"]
+REGION_KW = ["投标文件格式","响应文件格式","样表","范本","格式","附件","投标文件","投标资料","标书"]
 
 def _has_kw(s: str, kws: List[str]) -> bool:
     t = (s or "").strip()
@@ -34,7 +40,8 @@ def _title_score(it: Dict[str, Any], font_p85: float) -> float:
     center = bool(it.get("center"))
 
     score = 0.0
-    if H1.match(txt) or H2.match(txt) or H3.match(txt):
+    # ✅ 检查所有编号模式
+    if H1.match(txt) or H2.match(txt) or H3.match(txt) or H4.match(txt) or H5.match(txt):
         score += 5.0
     if _has_kw(txt, SAMPLE_KW):
         score += 4.0
@@ -113,6 +120,7 @@ def detect_pdf_fragments(items: List[Dict[str, Any]], title_normalize_fn, title_
     seg = items[r_start:r_end]
 
     # 1) 找标题候选（强约束：要么编号/要么包含范本关键词/要么能映射到已知类型）
+    # ✅ 降低分数阈值，提高识别率
     heads = []
     for it in seg:
         if it.get("type") != "paragraph":
@@ -121,18 +129,20 @@ def detect_pdf_fragments(items: List[Dict[str, Any]], title_normalize_fn, title_
         if not txt:
             continue
         sc = _title_score(it, font_p85)
-        if sc < 6.5:
+        if sc < 4.0:  # ✅ 从6.5降低到4.0，更容易识别
             continue
 
         title = txt.split("\n")[0].strip()  # 标题一般第一行
         norm = title_normalize_fn(title)
         ftype = title_to_type_fn(norm) if norm else None
 
-        # 强约束过滤：未知且没关键词，不要
-        if (not ftype) and (not _has_kw(title, SAMPLE_KW)):
-            continue
-
-        heads.append((int(it["bodyIndex"]), title, ftype, sc))
+        # ✅ 放宽约束：只要有一定分数就保留
+        if sc >= 6.0:
+            # 高分直接通过
+            heads.append((int(it["bodyIndex"]), title, ftype, sc))
+        elif (ftype or _has_kw(title, SAMPLE_KW)):
+            # 中等分数+有类型/关键词
+            heads.append((int(it["bodyIndex"]), title, ftype, sc))
 
     # 2) 去重（标题相似只留一个，避免重复投标函/授权书）
     heads_sorted = sorted(heads, key=lambda x: x[0])

@@ -65,6 +65,12 @@ class FormatTemplateParseSummary(BaseModel):
     heading_levels: List[Dict[str, Any]] = []
     header_images: List[str] = []
     footer_images: List[str] = []
+    
+    # 增强信息
+    template_instructions: Optional[Dict[str, Any]] = None  # 模板使用说明
+    header_footer_spec: Optional[Dict[str, Any]] = None  # 页眉页脚规格
+    field_code_usage: Optional[Dict[str, Any]] = None  # 域代码使用说明
+    cover_structure: Optional[Dict[str, Any]] = None  # 封面结构
 
 
 # ==================== 套用格式结果 ====================

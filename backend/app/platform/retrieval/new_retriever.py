@@ -53,6 +53,7 @@ class NewRetriever:
         top_k: int = 12,
         dense_limit: int = 40,
         lexical_limit: int = 40,
+        **kwargs  # 接受额外参数（如 run_id, bidder_name 等）但忽略它们
     ) -> List[RetrievedChunk]:
         """
         混合检索

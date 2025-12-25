@@ -17,10 +17,11 @@ from app.services.embedding_provider_store import get_embedding_store
 from app.platform.extraction.context import build_marked_context
 from app.platform.extraction.llm_adapter import call_llm
 from app.platform.extraction.json_utils import extract_json, repair_json
-from app.works.tender.review.review_dimensions import build_review_dimensions, ReviewDimension
+from app.works.tender.review.review_dimensions import get_review_dimensions, ReviewDimension
 from app.works.tender.schemas.review_v2 import ReviewResultV2, ReviewItemV2, ReviewDataV2
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)  # 确保INFO级别日志被输出
 
 
 def _load_prompt(filename: str) -> str:
@@ -38,12 +39,22 @@ class ReviewV2Service:
         self.retriever = RetrievalFacade(pool)
         self.llm = llm_orchestrator
         self.review_prompt_template = _load_prompt("review_v2.md")
-        self.dimensions = build_review_dimensions()
+        self.dimensions = get_review_dimensions()
         self.max_dims = int(os.getenv("REVIEW_MAX_DIMS", "7"))
         self.top_k_per_dim = int(os.getenv("REVIEW_TOPK_PER_DIM", "20"))
         self.review_dimensions_enabled = os.getenv("REVIEW_DIMENSIONS_ENABLED", "").split(',')
         if self.review_dimensions_enabled == ['']: # Handle empty string case
             self.review_dimensions_enabled = [d.name for d in self.dimensions] # Enable all by default
+    
+    def _map_severity_to_result(self, severity: str) -> str:
+        """将LLM返回的severity映射为schema要求的result"""
+        severity_lower = severity.lower()
+        if severity_lower in ["error", "fail", "failed"]:
+            return "fail"
+        elif severity_lower in ["warning", "warn", "risk"]:
+            return "risk"
+        else:  # info, pass, success等
+            return "pass"
 
     async def run_review_v2(
         self,
@@ -60,6 +71,7 @@ class ReviewV2Service:
             Dict[str, Any] - 包含 items, retrieval_trace, raw_outputs 等
         """
         logger.info(f"ReviewV2: run_review_v2 start project_id={project_id} run_id={run_id}")
+        logger.info(f"ReviewV2: Enabled dimensions: {[d.name for d in self.dimensions if d.name in self.review_dimensions_enabled]}")
         
         embedding_provider = get_embedding_store().get_default()
         if not embedding_provider:
@@ -70,11 +82,13 @@ class ReviewV2Service:
         all_raw_outputs: Dict[str, str] = {}
         
         enabled_dimensions = [d for d in self.dimensions if d.name in self.review_dimensions_enabled][:self.max_dims]
+        logger.info(f"ReviewV2: Will process {len(enabled_dimensions)} dimensions")
 
-        for dim in enabled_dimensions:
-            logger.info(f"ReviewV2: Processing dimension: {dim.name}")
+        for idx, dim in enumerate(enabled_dimensions, 1):
+            logger.info(f"ReviewV2: ========== Processing dimension: {dim.name} ==========")
             
             # 1. 检索招标要求 chunks
+            logger.info(f"ReviewV2: Retrieving tender chunks, query={dim.tender_query[:50]}...")
             tender_chunks_objs = await self.retriever.retrieve(
                 query=dim.tender_query,
                 project_id=project_id,
@@ -84,9 +98,11 @@ class ReviewV2Service:
                 run_id=run_id,
                 mode="NEW_ONLY" # Assuming NEW_ONLY for review retrieval
             )
-            tender_ctx = build_marked_context([c.model_dump() for c in tender_chunks_objs])
+            tender_ctx = build_marked_context([c.to_dict() for c in tender_chunks_objs])
+            logger.info(f"ReviewV2: Retrieved {len(tender_chunks_objs)} tender chunks, context length={len(tender_ctx)}")
             
             # 2. 检索投标响应 chunks
+            logger.info(f"ReviewV2: Retrieving bid chunks, query={dim.bid_query[:50]}...")
             bid_chunks_objs = await self.retriever.retrieve(
                 query=dim.bid_query,
                 project_id=project_id,
@@ -98,7 +114,8 @@ class ReviewV2Service:
                 run_id=run_id,
                 mode="NEW_ONLY" # Assuming NEW_ONLY for review retrieval
             )
-            bid_ctx = build_marked_context([c.model_dump() for c in bid_chunks_objs])
+            bid_ctx = build_marked_context([c.to_dict() for c in bid_chunks_objs])
+            logger.info(f"ReviewV2: Retrieved {len(bid_chunks_objs)} bid chunks, context length={len(bid_ctx)}")
 
             # Store retrieval trace for this dimension
             all_retrieval_traces[dim.name] = {
@@ -113,14 +130,16 @@ class ReviewV2Service:
 
             # Handle empty retrieval scenarios
             if not tender_ctx and not bid_ctx:
-                logger.warning(f"ReviewV2: No chunks found for dimension {dim.name}, skipping LLM call.")
-                all_compare_items.append(ReviewItemV2(
+                logger.warning(f"ReviewV2: No chunks found for dimension {dim.name}, adding fallback item and skipping LLM.")
+                fallback_item = ReviewItemV2(
                     dimension=dim.name,
                     requirement_text="未检索到相关招标要求证据",
                     response_text="未检索到相关投标响应证据",
                     result="risk",
                     notes="无足够证据进行审查"
-                ))
+                )
+                all_compare_items.append(fallback_item)
+                logger.info(f"ReviewV2: Added fallback item, total items so far: {len(all_compare_items)}")
                 continue
             elif not tender_ctx:
                 logger.warning(f"ReviewV2: No tender chunks found for dimension {dim.name}.")
@@ -144,16 +163,26 @@ class ReviewV2Service:
                 # Continue to LLM with only tender_ctx if bid_ctx is empty but tender_ctx exists
 
             # 3. 调用 LLM 生成该维度的 review items
+            # 构建用户消息（手动替换变量，避免 .format() 与 JSON 示例冲突）
+            user_content = f"""
+## 当前审核维度
+
+**{dim.name}**
+
+## 招标文件相关片段
+
+{tender_ctx or "(未检索到招标要求原文片段)"}
+
+## 投标文件相关片段
+
+{bid_ctx or "(未检索到投标响应原文片段)"}
+
+请基于以上材料，按照系统提示词中的格式输出审核结果。
+"""
+            
             messages = [
                 {"role": "system", "content": self.review_prompt_template.strip()},
-                {
-                    "role": "user",
-                    "content": self.review_prompt_template.format(
-                        dimension_name=dim.name,
-                        tender_ctx=tender_ctx or "(未检索到招标要求原文片段)",
-                        bid_ctx=bid_ctx or "(未检索到投标响应原文片段)"
-                    )
-                },
+                {"role": "user", "content": user_content.strip()}
             ]
             
             llm_start = time.time()
@@ -174,18 +203,97 @@ class ReviewV2Service:
 
             # 4. 解析和校验 LLM 输出
             try:
-                obj = extract_json(out_text)
+                # 尝试提取JSON
+                try:
+                    obj = extract_json(out_text)
+                except Exception as json_error:
+                    logger.warning(f"ReviewV2: JSON parse failed for {dim.name}: {json_error}, trying repair...")
+                    # 尝试修复JSON
+                    try:
+                        obj = repair_json(out_text)
+                        logger.info(f"ReviewV2: JSON repair succeeded for {dim.name}")
+                    except Exception as repair_error:
+                        logger.error(f"ReviewV2: JSON repair also failed for {dim.name}: {repair_error}")
+                        # JSON解析失败，添加兜底项
+                        logger.info(f"ReviewV2: Adding fallback item due to JSON parse failure for {dim.name}")
+                        fallback_item = ReviewItemV2(
+                            dimension=dim.name,
+                            requirement_text="LLM返回格式错误，无法解析",
+                            response_text="需要人工审核",
+                            result="risk",
+                            notes=f"LLM输出JSON格式错误: {str(repair_error)[:100]}"
+                        )
+                        all_compare_items.append(fallback_item)
+                        logger.info(f"ReviewV2: Added JSON parse fallback item, total items: {len(all_compare_items)}")
+                        continue
+                
+                logger.info(f"ReviewV2: Extracted JSON for {dim.name}, keys: {obj.keys() if isinstance(obj, dict) else 'not-a-dict'}")
+                
+                # 字段映射：将LLM可能返回的不同字段名转换为schema期望的格式
+                if "data" in obj and isinstance(obj["data"], dict):
+                    logger.info(f"ReviewV2: data keys: {obj['data'].keys()}")
+                    # 如果LLM返回了 review_items，将其改为 items
+                    if "review_items" in obj["data"]:
+                        logger.info(f"ReviewV2: Converting review_items to items, count={len(obj['data']['review_items'])}")
+                        obj["data"]["items"] = obj["data"].pop("review_items")
+                    
+                    # 转换每个item的字段
+                    if "items" in obj["data"] and isinstance(obj["data"]["items"], list):
+                        logger.info(f"ReviewV2: Converting {len(obj['data']['items'])} items")
+                        converted_items = []
+                        for item in obj["data"]["items"]:
+                            # 构建notes字段
+                            notes_parts = []
+                            if item.get("title"):
+                                notes_parts.append(item.get("title"))
+                            if item.get("description"):
+                                notes_parts.append(item.get("description"))
+                            if item.get("suggestion"):
+                                notes_parts.append(f"建议: {item.get('suggestion')}")
+                            notes = " | ".join(notes_parts) if notes_parts else item.get("notes", "")
+                            
+                            converted_item = {
+                                "dimension": dim.name,  # 使用当前维度名称
+                                "requirement_text": item.get("requirement_text", item.get("description", "未提取到具体要求")),
+                                "response_text": item.get("response_text", item.get("suggestion", "未提取到响应内容")),
+                                "result": self._map_severity_to_result(item.get("severity", item.get("result", "warning"))),
+                                "rigid": item.get("rigid", False),
+                                "notes": notes,
+                                "evidence_chunk_ids": item.get("evidence_chunk_ids", [])
+                            }
+                            converted_items.append(converted_item)
+                        obj["data"]["items"] = converted_items
+                        logger.info(f"ReviewV2: Converted items sample: {converted_items[0] if converted_items else 'empty'}")
+                else:
+                    logger.warning(f"ReviewV2: No 'data' key in obj for {dim.name}, adding fallback item")
+                    fallback_item = ReviewItemV2(
+                        dimension=dim.name,
+                        requirement_text="LLM返回结构不正确",
+                        response_text="需要人工审核",
+                        result="risk",
+                        notes="LLM输出缺少data字段"
+                    )
+                    all_compare_items.append(fallback_item)
+                    continue
+                
                 validated_result = ReviewResultV2.model_validate(obj)
                 dimension_items = validated_result.data.items
                 all_compare_items.extend(dimension_items)
-                logger.info(f"ReviewV2: Dimension {dim.name} generated {len(dimension_items)} items.")
+                logger.info(f"ReviewV2: Dimension {dim.name} generated {len(dimension_items)} items, total: {len(all_compare_items)}")
             except Exception as e:
-                logger.error(f"ReviewV2: JSON parse or schema validation failed for dimension {dim.name}: {e}")
-                logger.error(f"Raw LLM output for {dim.name}: {out_text[:1000]}")
-                raise ExtractionSchemaError(
-                    f"Review schema validation failed for dimension {dim.name}: {str(e)}",
-                    errors=[] # TODO: Extract pydantic errors if possible
-                ) from e
+                logger.error(f"ReviewV2: Schema validation or other error for dimension {dim.name}: {e}")
+                logger.error(f"Raw LLM output for {dim.name}: {out_text[:500]}")
+                # 添加兜底项而不是跳过
+                fallback_item = ReviewItemV2(
+                    dimension=dim.name,
+                    requirement_text="处理异常",
+                    response_text="需要人工审核",
+                    result="risk",
+                    notes=f"处理错误: {str(e)[:100]}"
+                )
+                all_compare_items.append(fallback_item)
+                logger.info(f"ReviewV2: Added exception fallback item, total items: {len(all_compare_items)}")
+                continue
         
         # Collect all evidence_chunk_ids from all items
         all_evidence_chunk_ids = sorted(list(set(
@@ -196,11 +304,16 @@ class ReviewV2Service:
         all_evidence_spans = [] # TODO: Implement detailed evidence span generation if needed
 
         logger.info(f"ReviewV2: run_review_v2 completed. Total compare items: {len(all_compare_items)}")
+        logger.info(f"ReviewV2: Returning dict with keys: items({len(all_compare_items)}), retrieval_trace({len(all_retrieval_traces)}), raw_outputs({len(all_raw_outputs)})")
 
-        return {
+        result_dict = {
             "items": [item.to_dict_exclude_none() for item in all_compare_items],
             "retrieval_trace": all_retrieval_traces,
             "raw_outputs": all_raw_outputs,
             "evidence_chunk_ids": all_evidence_chunk_ids,
             "evidence_spans": all_evidence_spans,
         }
+        return result_dict
+        
+        logger.info(f"ReviewV2: result_dict['items'] length = {len(result_dict['items'])}")
+        return result_dict

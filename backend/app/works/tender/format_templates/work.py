@@ -418,13 +418,87 @@ class FormatTemplatesWork:
         Returns:
             解析摘要
         """
-        # TODO: 从数据库或缓存获取解析结果
-        # 暂时返回最小结果
+        template = self.dao.get_format_template(template_id)
+        if not template:
+            raise ValueError(f"Template {template_id} not found")
+        
+        analysis_json = template.get("analysis_json", {})
+        
+        # 提取样式信息
+        style_profile = analysis_json.get("styleProfile", {})
+        role_mapping = analysis_json.get("roleMapping", {})
+        blocks = analysis_json.get("blocks", [])
+        
+        # 构建heading_levels（从roleMapping提取）
+        heading_levels = []
+        for level in ["h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8", "h9"]:
+            style_name = role_mapping.get(level)
+            if style_name:
+                heading_levels.append({
+                    "level": level,
+                    "style": style_name,
+                    "display": f"{level.upper()} → {style_name}"
+                })
+        
+        # 构建sections（从blocks提取段落和表格信息）
+        sections = []
+        paragraph_count = 0
+        table_count = 0
+        
+        for block in blocks:
+            block_type = block.get("type", "")
+            if block_type == "paragraph":
+                paragraph_count += 1
+            elif block_type == "table":
+                table_count += 1
+        
+        if paragraph_count > 0:
+            sections.append({
+                "type": "paragraph",
+                "count": paragraph_count,
+                "label": f"{paragraph_count} 个段落"
+            })
+        
+        if table_count > 0:
+            sections.append({
+                "type": "table",
+                "count": table_count,
+                "label": f"{table_count} 个表格"
+            })
+        
+        # 提取样式变体（从styleProfile获取所有样式）
+        variants = []
+        styles = style_profile.get("styles", [])
+        for style in styles[:20]:  # 限制显示前20个样式
+            style_name = style.get("name", "")
+            if style_name:
+                variants.append({
+                    "name": style_name,
+                    "type": style.get("type", "paragraph"),
+                    "has_numbering": style.get("hasNumbering", False)
+                })
+        
+        # 提取模板使用说明
+        template_instructions = self._extract_template_instructions(blocks)
+        
+        # 提取页眉页脚规格
+        header_footer_spec = self._extract_header_footer_spec(blocks)
+        
+        # 提取域代码使用说明
+        field_code_usage = self._extract_field_code_usage(blocks)
+        
+        # 提取封面结构
+        cover_structure = self._extract_cover_structure(blocks)
+        
         return FormatTemplateParseSummary(
             template_id=template_id,
-            sections=[],
-            variants=[],
-            heading_levels=[]
+            sections=sections,
+            variants=variants,
+            heading_levels=heading_levels,
+            template_instructions=template_instructions,
+            header_footer_spec=header_footer_spec,
+            field_code_usage=field_code_usage,
+            cover_structure=cover_structure
         )
     
     # ==================== 预览 ====================
@@ -460,13 +534,41 @@ class FormatTemplatesWork:
             )
         
         # 如果请求的是 pdf，需要转换
-        # TODO: 调用文档转换服务（LibreOffice/unoconv）
-        # 暂时降级返回 docx
-        logger.warning(f"PDF预览暂未实现，降级返回DOCX: {template_id}")
-        return PreviewResult(
-            file_path=storage_path,
-            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        )
+        try:
+            # 检查是否已有缓存的PDF
+            preview_pdf_path = template.get("preview_pdf_path")
+            if preview_pdf_path and os.path.exists(preview_pdf_path):
+                logger.info(f"使用缓存的PDF预览: {preview_pdf_path}")
+                return PreviewResult(
+                    file_path=preview_pdf_path,
+                    content_type="application/pdf"
+                )
+            
+            # 生成新的PDF
+            logger.info(f"生成PDF预览: {template_id}")
+            output_dir = Path(self.storage_dir) / template_id
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            pdf_path = self._convert_docx_to_pdf(storage_path, output_dir)
+            
+            # 更新数据库缓存路径
+            self.dao._execute(
+                "UPDATE format_templates SET preview_pdf_path = %s WHERE id = %s",
+                (pdf_path, template_id)
+            )
+            
+            logger.info(f"PDF预览生成成功: {pdf_path}")
+            return PreviewResult(
+                file_path=pdf_path,
+                content_type="application/pdf"
+            )
+            
+        except Exception as e:
+            logger.error(f"PDF转换失败，降级返回DOCX: {e}", exc_info=True)
+            return PreviewResult(
+                file_path=storage_path,
+                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
     
     # ==================== 套用到项目目录 ====================
     
@@ -920,4 +1022,255 @@ class FormatTemplatesWork:
             hints["indentFirstLine"] = style_def["indentFirstLine"]
         
         return hints
+    
+    def _extract_template_instructions(self, blocks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """
+        提取模板使用说明
+        
+        识别标准：包含"使用说明"、"模板说明"、"填写说明"等关键词的块及其后续块
+        """
+        import re
+        
+        instruction_blocks = []
+        instructions_text = []
+        in_instruction_section = False
+        
+        for block in blocks:
+            text = block.get("text", "").strip()
+            block_id = block.get("blockId", "")
+            
+            # 检测说明开始
+            if re.search(r'(使用说明|模板说明|填写说明|注意事项)', text, re.IGNORECASE):
+                in_instruction_section = True
+                instruction_blocks.append(block_id)
+                instructions_text.append(text)
+                continue
+            
+            # 在说明区段内
+            if in_instruction_section:
+                # 检测说明结束（遇到标题或空块）
+                if block.get("styleName", "").startswith("+标题") or block.get("styleName", "") == "+标题1":
+                    in_instruction_section = False
+                    break
+                
+                if text:  # 非空块
+                    instruction_blocks.append(block_id)
+                    instructions_text.append(text)
+        
+        if not instruction_blocks:
+            return None
+        
+        return {
+            "has_instructions": True,
+            "instruction_blocks": instruction_blocks,
+            "instructions_text": "\n".join(instructions_text),
+            "instructions_count": len(instruction_blocks)
+        }
+    
+    def _extract_header_footer_spec(self, blocks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """
+        提取页眉页脚规格
+        
+        从blocks中提取页眉页脚相关的尺寸规格
+        """
+        import re
+        
+        paper_sizes = {}
+        layout_notes = []
+        text_indent = None
+        
+        for block in blocks:
+            text = block.get("text", "")
+            
+            # 提取页眉规格
+            if "页眉" in text and ("cm" in text or "厘米" in text):
+                # A4竖版
+                match = re.search(r'页眉.*?A4.*?竖版.*?高度\s*([\d.]+)\s*cm.*?长度\s*([\d.]+)\s*cm', text)
+                if match:
+                    paper_sizes["A4_portrait"] = paper_sizes.get("A4_portrait", {})
+                    paper_sizes["A4_portrait"]["header"] = {
+                        "height": f"{match.group(1)}cm",
+                        "width": f"{match.group(2)}cm"
+                    }
+                
+                # A4横版
+                match = re.search(r'A4.*?横版.*?高度\s*([\d.]+)\s*cm.*?长度\s*([\d.]+)\s*cm', text)
+                if match:
+                    paper_sizes["A4_landscape"] = paper_sizes.get("A4_landscape", {})
+                    paper_sizes["A4_landscape"]["header"] = {
+                        "height": f"{match.group(1)}cm",
+                        "width": f"{match.group(2)}cm"
+                    }
+                
+                # A3横版
+                match = re.search(r'A3.*?横版.*?高度\s*([\d.]+)\s*cm.*?长度\s*([\d.]+)\s*cm', text)
+                if match:
+                    paper_sizes["A3_landscape"] = paper_sizes.get("A3_landscape", {})
+                    paper_sizes["A3_landscape"]["header"] = {
+                        "height": f"{match.group(1)}cm",
+                        "width": f"{match.group(2)}cm"
+                    }
+            
+            # 提取页脚规格
+            if "页脚" in text and ("cm" in text or "厘米" in text):
+                # A4竖版
+                match = re.search(r'页脚.*?A4.*?竖版.*?高度\s*([\d.]+)\s*cm.*?长度\s*([\d.]+)\s*cm', text)
+                if match:
+                    paper_sizes["A4_portrait"] = paper_sizes.get("A4_portrait", {})
+                    paper_sizes["A4_portrait"]["footer"] = {
+                        "height": f"{match.group(1)}cm",
+                        "width": f"{match.group(2)}cm"
+                    }
+                
+                # A4横版
+                match = re.search(r'A4.*?横版.*?高度\s*([\d.]+)\s*cm.*?长度\s*([\d.]+)\s*cm', text)
+                if match:
+                    paper_sizes["A4_landscape"] = paper_sizes.get("A4_landscape", {})
+                    paper_sizes["A4_landscape"]["footer"] = {
+                        "height": f"{match.group(1)}cm",
+                        "width": f"{match.group(2)}cm"
+                    }
+                
+                # A3横版
+                match = re.search(r'A3.*?横版.*?高度\s*([\d.]+)\s*[cm].*?长度\s*([\d.]+)\s*cm', text)
+                if match:
+                    paper_sizes["A3_landscape"] = paper_sizes.get("A3_landscape", {})
+                    paper_sizes["A3_landscape"]["footer"] = {
+                        "height": f"{match.group(1)}cm",
+                        "width": f"{match.group(2)}cm"
+                    }
+            
+            # 提取文本缩进
+            if "缩进" in text:
+                match = re.search(r'缩进\s*[-]*\s*(\d+)\s*字符', text)
+                if match:
+                    text_indent = f"-{match.group(1)}字符" if "-" in text else f"{match.group(1)}字符"
+            
+            # 提取布局说明
+            if "页眉" in text or "页脚" in text:
+                if "异型排版" in text or "连接至前一节" in text or "图片" in text:
+                    layout_notes.append(text)
+        
+        if not paper_sizes and not layout_notes:
+            return None
+        
+        result = {}
+        if paper_sizes:
+            result["paper_sizes"] = paper_sizes
+        if text_indent:
+            result["text_indent"] = text_indent
+        if layout_notes:
+            result["layout_notes"] = layout_notes
+        
+        return result
+    
+    def _extract_field_code_usage(self, blocks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """
+        提取域代码使用说明
+        
+        识别标准：包含"域"、"域代码"、"StyleRef"等关键词
+        """
+        import re
+        
+        uses_field_codes = False
+        field_type = None
+        auto_update = None
+        plain_text_sections = []
+        notes = []
+        
+        for block in blocks:
+            text = block.get("text", "")
+            
+            if "域" in text or "field" in text.lower():
+                uses_field_codes = True
+                notes.append(text)
+                
+                # 提取域类型
+                if "StyleRef" in text:
+                    field_type = "StyleRef"
+                elif "域代码" in text:
+                    match = re.search(r'"([^"]+)"', text)
+                    if match:
+                        field_type = match.group(1)
+                
+                # 提取自动更新内容
+                if "自动更新" in text or "自动引用" in text:
+                    match = re.search(r'(段落编号|样式|标题|编号)', text)
+                    if match:
+                        auto_update = match.group(1)
+                
+                # 提取纯文字区段
+                if "纯文字" in text or "纯文本" in text:
+                    match = re.search(r'(首页|目录|封面)', text)
+                    if match:
+                        plain_text_sections.append(match.group(1))
+        
+        if not uses_field_codes:
+            return None
+        
+        result = {
+            "uses_field_codes": True
+        }
+        if field_type:
+            result["field_type"] = field_type
+        if auto_update:
+            result["auto_update"] = auto_update
+        if plain_text_sections:
+            result["plain_text_sections"] = plain_text_sections
+        if notes:
+            result["notes"] = notes
+        
+        return result
+    
+    def _extract_cover_structure(self, blocks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """
+        提取封面结构
+        
+        从前N个blocks中识别封面元素
+        """
+        import re
+        
+        cover_elements = []
+        cover_blocks = []
+        
+        # 只检查前15个块
+        for block in blocks[:15]:
+            text = block.get("text", "").strip()
+            block_id = block.get("blockId", "")
+            
+            if not text:
+                continue
+            
+            # 识别封面元素
+            if re.search(r'(正本|副本)', text):
+                cover_elements.append("正本/副本标记")
+                cover_blocks.append(block_id)
+            elif re.search(r'(商务标|技术标)', text):
+                cover_elements.append("商务标/技术标")
+                cover_blocks.append(block_id)
+            elif re.search(r'(项目编号|项目名称)', text):
+                cover_elements.append("项目编号")
+                cover_blocks.append(block_id)
+            elif "投标文件" in text:
+                cover_elements.append("投标文件标题")
+                cover_blocks.append(block_id)
+            elif re.search(r'(投标单位|投标人)', text):
+                cover_elements.append("投标单位信息")
+                cover_blocks.append(block_id)
+            elif re.search(r'(法定代表人|负责人|授权)', text):
+                cover_elements.append("法定代表人/授权")
+                cover_blocks.append(block_id)
+            elif "日期" in text or re.search(r'\d{4}\s*年', text):
+                cover_elements.append("日期")
+                cover_blocks.append(block_id)
+        
+        if not cover_elements:
+            return None
+        
+        return {
+            "has_cover": True,
+            "cover_elements": cover_elements,
+            "cover_blocks": cover_blocks,
+            "cover_blocks_count": len(cover_blocks)
+        }
 

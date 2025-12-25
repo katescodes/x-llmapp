@@ -38,9 +38,17 @@ async def call_llm(
     import time
     import traceback
     
+    # 如果没有orchestrator但有model_id，尝试直接调用LLM
     if not llm_orchestrator:
-        logger.error("[call_llm] LLM orchestrator is None!")
-        raise RuntimeError("LLM orchestrator not available")
+        if model_id:
+            logger.info(f"[call_llm] No orchestrator, using direct LLM client with model_id={model_id}")
+            from app.services.llm_client import llm_chat
+            # 转换messages格式并调用
+            result = llm_chat(messages, model_id=model_id, temperature=temperature, max_tokens=max_tokens or 4096)
+            return result
+        else:
+            logger.error("[call_llm] LLM orchestrator is None and no model_id provided!")
+            raise RuntimeError("LLM orchestrator not available")
     
     # 单点兜底：确保 max_tokens 有合理默认值
     if max_tokens is None:

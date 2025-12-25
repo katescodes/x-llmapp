@@ -145,17 +145,26 @@ class TenderSampleFragmentExtractor:
             major_re = re.compile(r"^\s*(第[一二三四五六七八九十百千0-9]+[章节部分卷]|附件[一二三四五六七八九十0-9]*)")
 
             # 范本区关键词（起点候选）
+            # ✅ 扩展关键词，提高识别率
             start_kw = [
                 "投标文件格式", "响应文件格式", "投标文件样表",
-                "样表", "格式", "范本", "表格", "附件"
+                "样表", "格式", "范本", "表格", "附件",
+                "投标文件", "响应文件", "投标书", "标书格式",
+                "投标资料", "报价文件", "商务标", "技术标",
+                "资格文件", "投标材料"
             ]
 
             # 范本区的典型标题/内容关键词（用于打分）
+            # ✅ 扩展关键词，涵盖更多范本类型
             target_kw = [
                 "开标一览表", "投标函", "报价", "货物报价", "工程量清单",
-                "法定代表人", "授权委托书", "授权书",
+                "法定代表人", "授权委托书", "授权书", "委托书",
                 "商务", "合同条款", "技术", "偏离", "响应",
-                "资质证书", "营业执照"
+                "资质证书", "营业执照", "证书", "证明",
+                "投标保证金", "保证金", "履约保证",
+                "项目组织", "业绩", "资格", "声明函",
+                "商务条款", "技术方案", "施工方案", "实施方案",
+                "设备清单", "材料清单", "人员配备", "组织架构"
             ]
 
             # 表单标题行（"一、xx / 1、xx / (1)xx / 1.1 xx"）
@@ -200,8 +209,25 @@ class TenderSampleFragmentExtractor:
                     candidates.append(i)
 
             # 2) 选择最高分候选
+            # ✅ 如果没有找到候选，则从第一个有范本关键词的地方开始
             if not candidates:
-                return 0, len(items), {"reason": "no_candidates"}
+                # 兜底策略：查找任意包含范本关键词的位置
+                for i, it in enumerate(items):
+                    if it.get("type") != "paragraph":
+                        continue
+                    t = (it.get("text") or "").strip()
+                    if not t or is_toc_line(t):
+                        continue
+                    # 只要包含任何范本相关词汇，就尝试作为起点
+                    if any(k in t for k in target_kw):
+                        candidates.append(i)
+                        if len(candidates) >= 3:  # 找到3个候选就够了
+                            break
+            
+            if not candidates:
+                # 仍然没找到，使用整个文档
+                return 0, len(items), {"reason": "no_candidates_fallback_to_full_doc"}
+
 
             best_i = candidates[0]
             best_score = -1

@@ -579,7 +579,7 @@ class ApplyFormatTemplateReq(BaseModel):
 
 
 @router.post("/projects/{project_id}/directory/apply-format-template")
-def apply_format_template(
+async def apply_format_template(
     project_id: str, 
     req: ApplyFormatTemplateReq, 
     request: Request,
@@ -603,6 +603,7 @@ def apply_format_template(
     from pathlib import Path
     from fastapi.responses import FileResponse
     from urllib.parse import quote
+    from app.services.export.export_service import ExportService
     
     logger = logging.getLogger(__name__)
     logger.info(f"自动套用格式: project={project_id}, template={req.format_template_id}, return_type={return_type}")
@@ -614,7 +615,7 @@ def apply_format_template(
         # 1. 记录模板ID到目录节点（保持原有逻辑）
         nodes = svc.apply_format_template_to_directory(project_id, req.format_template_id)
         
-        # 2. 获取模板
+        # 2. 获取模板并校验
         template = dao.get_format_template(req.format_template_id)
         if not template:
             raise HTTPException(status_code=404, detail="格式模板不存在")
@@ -633,40 +634,42 @@ def apply_format_template(
                 detail="模板未分析，请先在格式模板管理中分析模板或重新上传"
             )
         
-        # 解析 analysis_json
-        if isinstance(analysis_json, str):
-            analysis_json = json.loads(analysis_json)
-        
-        # 3. 获取目录树
+        # 3. 检查目录是否为空
         outline_tree = dao.list_directory(project_id)
         if not outline_tree:
             raise HTTPException(status_code=400, detail="项目目录为空，请先生成目录")
         
-        # 4. 渲染文档
+        # 4. 使用 ExportService 导出项目为 DOCX（统一走旧版7步流程）
         output_dir = Path(tempfile.gettempdir()) / "template_renders"
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        export_service = ExportService(dao)
+        
+        try:
+            output_docx_path = await export_service.export_project_to_docx(
+                project_id=project_id,
+                format_template_id=req.format_template_id,
+                include_toc=True,
+                prefix_numbering=False,
+                merge_semantic_summary=False,
+                output_dir=str(output_dir),
+                auto_generate_content=False
+            )
+            logger.info(f"✓ ExportService 导出完成: {output_docx_path}")
+        except ValueError as ve:
+            logger.error(f"ExportService 导出失败: {ve}")
+            raise HTTPException(status_code=400, detail=f"模板渲染失败: {str(ve)}")
+        except Exception as e:
+            logger.error(f"ExportService 导出异常: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
+        
+        # 5. 准备文件名
         project = dao.get_project(project_id)
         project_name = project.get("name", "投标文件") if project else "投标文件"
-        
-        # 内部文件名（可以包含中文）
-        internal_filename = f"render_{uuid.uuid4().hex[:8]}.docx"
-        output_path = output_dir / internal_filename
-        
-        # 下载时显示的文件名（URL编码）
         display_name = f"{project_name}_套用格式_{uuid.uuid4().hex[:8]}.docx"
         encoded_filename = quote(display_name.encode('utf-8'))
         
-        # 使用新的模板渲染器
-        from app.services.template.template_renderer import render_outline_with_template_v2
-        
-        render_outline_with_template_v2(
-            template_path=template_path,
-            output_path=str(output_path),
-            outline_tree=outline_tree,
-            analysis_json=analysis_json,
-            prefix_numbering=False  # ✅ 不手工拼接编号，交给模板样式自动生成
-        )
+        output_path = Path(output_docx_path)
         
         logger.info(f"✓ 套用格式完成: {output_path}")
         
@@ -712,6 +715,22 @@ def apply_format_template(
     
     except HTTPException:
         raise
+    except ValueError as ve:
+        # ValueError 通常表示业务逻辑错误（如目录为空、模板未分析等）
+        error_detail = str(ve)
+        logger.error(f"[APPLY_FMT_FAIL] 业务校验失败: {error_detail}")
+        
+        # 根据错误信息提供更友好的提示
+        if "目录" in error_detail and "为空" in error_detail:
+            detail = f"模板渲染失败：{error_detail}。请先生成项目目录。"
+        elif "roleMapping" in error_detail or "role_mapping" in error_detail:
+            detail = f"模板渲染失败：{error_detail}。请在格式模板管理中重新分析模板。"
+        elif "锚点" in error_detail:
+            detail = f"模板渲染失败：{error_detail}。模板格式可能不符合要求。"
+        else:
+            detail = f"模板渲染失败：{error_detail}"
+        
+        raise HTTPException(status_code=400, detail=detail)
     except Exception as e:
         logger.error(f"套用格式失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"套用格式失败: {str(e)}")

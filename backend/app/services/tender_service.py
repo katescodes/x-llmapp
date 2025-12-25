@@ -1268,17 +1268,19 @@ class TenderService:
             logger.warning(f"[samples] tender asset has no storage_path, skip. project_id={project_id}")
             return
 
-        if not storage_path.lower().endswith(".docx"):
-            logger.warning(f"[samples] tender asset is not docx, skip. project_id={project_id}, storage_path={storage_path}")
+        # 支持 DOCX 和 PDF 格式
+        ext = os.path.splitext(storage_path.lower())[1]
+        if ext not in [".docx", ".pdf"]:
+            logger.warning(f"[samples] tender asset is not docx/pdf, skip. project_id={project_id}, storage_path={storage_path}")
             return
 
         if not os.path.exists(storage_path):
-            logger.warning(f"[samples] tender docx not found on disk, skip. project_id={project_id}, storage_path={storage_path}")
+            logger.warning(f"[samples] tender file not found on disk, skip. project_id={project_id}, storage_path={storage_path}")
             return
         
-        # 3. 抽取范本
+        # 3. 抽取范本（支持DOCX和PDF）
         from app.services.fragment.fragment_extractor import TenderSampleFragmentExtractor
-        logger.info(f"[samples] extracting fragments from tender docx. project_id={project_id}, docx_path={storage_path}")
+        logger.info(f"[samples] extracting fragments from tender file ({ext}). project_id={project_id}, path={storage_path}")
         extractor = TenderSampleFragmentExtractor(self.dao)
         extractor.extract_and_upsert(
             project_id=project_id,
@@ -1944,346 +1946,85 @@ class TenderService:
                 print(f"[WARN] Failed to create platform job: {e}")
         
         try:
-            # 加载招标文件 chunks
-            tender_chunks, _ = self._load_context_by_assets(
-                project_id,
-                kinds=["tender"],
-                bidder_name=None,
-                bid_asset_ids=[],
-                limit=180,
-            )
-            tender_ctx = _build_marked_context(tender_chunks)
-
-            # 加载投标文件 chunks
-            bid_chunks, _ = self._load_context_by_assets(
-                project_id,
-                kinds=["bid"],
-                bidder_name=bidder_name,
-                bid_asset_ids=bid_asset_ids,
-                limit=180,
-            )
-            bid_ctx = _build_marked_context(bid_chunks)
-
-            # 加载自定义规则文件 chunks（直接叠加原文，不再抽取为 JSON）
-            rule_ctx = ""
-            if custom_rule_asset_ids:
-                rule_assets = self.dao.get_assets_by_ids(project_id, custom_rule_asset_ids)
-                rule_doc_ids = [a.get("kb_doc_id") for a in rule_assets if a.get("kb_doc_id")]
-                if rule_doc_ids:
-                    rule_chunks = self.dao.load_chunks_by_doc_ids(rule_doc_ids, limit=120)
-                    rule_ctx = _build_marked_context(rule_chunks)
-
-            # 调用 LLM
-            messages = [
-                {"role": "system", "content": self.REVIEW_PROMPT.strip()},
-                {
-                    "role": "user",
-                    "content": f"""招标文件原文片段：
-{tender_ctx}
-
-投标文件原文片段：
-{bid_ctx}
-
-自定义审核规则文件原文片段（可为空）：
-{rule_ctx or "(无)"}""",
-                },
-            ]
-            out_text = self._llm_text(LLMCall(model_id=model_id, messages=messages))
-            arr = _extract_json(out_text)
+            # 全部使用新审核模式 (ReviewV2Service)
+            # 旧的对比审核和规则审核逻辑已删除
             
-            if not isinstance(arr, list):
-                raise ValueError("review output not list")
+            # 如果没有指定model_id，使用默认模型
+            if not model_id:
+                from app.services.llm_model_store import get_llm_store
+                store = get_llm_store()
+                default_model = store.get_default_model()
+                if default_model:
+                    model_id = default_model.id
+                    logger.info(f"No model_id provided, using default: {model_id}")
+                else:
+                    logger.warning("No model_id provided and no default model configured")
             
-            # 为所有对比审核项添加 source 字段
-            for item in arr:
-                if "source" not in item:
-                    item["source"] = "compare"
+            logger.info(f"NEW_ONLY review mode: project={project_id}, model_id={model_id}, bidder={bidder_name}")
             
-            # Step 9: 规则审核（接入 RULES_MODE 切换）
-            from app.core.cutover import get_cutover_config
-            cutover = get_cutover_config()
-            rules_mode = cutover.get_mode("rules", project_id)
-            
-            rule_findings = []
-            rule_findings_v2 = []
-            
-            # 获取规则集版本
-            assets = self.dao.list_assets(project_id)
-            rule_set_version_id = None
-            for asset in assets:
-                if asset.get("kind") == "custom_rule":
-                    meta_json = asset.get("meta_json") or {}
-                    rule_set_version_id = meta_json.get("rule_set_version_id")
-                    # 只使用校验通过的规则
-                    if rule_set_version_id and meta_json.get("validate_status") == "valid":
-                        break
-                    else:
-                        rule_set_version_id = None
-            
-            if rule_set_version_id:
-                from app.services.platform.ruleset_service import RuleSetService
+            arr = []  # 初始化审核项列表
+            try:
+                import asyncio
+                from app.works.tender.review_v2_service import ReviewV2Service
                 from app.services.db.postgres import _get_pool
                 
                 pool = _get_pool()
-                ruleset_service = RuleSetService(pool)
-                rule_set_version = ruleset_service.get_version(rule_set_version_id)
+                review_v2 = ReviewV2Service(pool, self.llm)
+                logger.info("Created ReviewV2Service")
                 
-                if rule_set_version:
-                    # 获取项目信息（用于字段检测）
-                    project_info = {}
-                    try:
-                        proj_info_row = self.dao.get_project_info(project_id)
-                        if proj_info_row:
-                            project_info = proj_info_row.get("data_json") or {}
-                    except Exception:
-                        pass
-                    
-                    # OLD 模式：使用旧规则评估器（或不执行）
-                    if rules_mode.value == "OLD":
-                        if self.feature_flags.RULES_EVALUATOR_ENABLED:
-                            try:
-                                from app.services.platform.rules_evaluator import RulesEvaluator
-                                evaluator = RulesEvaluator()
-                                context = {
-                                    "tender_chunks": tender_chunks,
-                                    "bid_chunks": bid_chunks,
-                                    "project_info": project_info
-                                }
-                                rule_findings = evaluator.evaluate(rule_set_version, context)
-                                logger.info(f"OLD rules evaluation: {len(rule_findings)} findings")
-                            except Exception as e:
-                                logger.warning(f"OLD rules evaluation failed: {e}")
-                    
-                    # SHADOW 模式：旧评估器先跑，v2 评估器也跑但不返回
-                    elif rules_mode.value == "SHADOW":
-                        # 旧评估器
-                        if self.feature_flags.RULES_EVALUATOR_ENABLED:
-                            try:
-                                from app.services.platform.rules_evaluator import RulesEvaluator
-                                evaluator = RulesEvaluator()
-                                context = {
-                                    "tender_chunks": tender_chunks,
-                                    "bid_chunks": bid_chunks,
-                                    "project_info": project_info
-                                }
-                                rule_findings = evaluator.evaluate(rule_set_version, context)
-                                logger.info(f"SHADOW rules (old): {len(rule_findings)} findings")
-                            except Exception as e:
-                                logger.warning(f"SHADOW rules (old) failed: {e}")
-                        
-                        # v2 评估器（异步）
-                        try:
-                            import asyncio
-                            from app.platform.rules.evaluator_v2 import RulesEvaluatorV2
-                            
-                            evaluator_v2 = RulesEvaluatorV2(pool)
-                            context_v2 = {"project_info": project_info}
-                            rule_findings_v2 = asyncio.run(evaluator_v2.evaluate(
-                                project_id, rule_set_version, context_v2
-                            ))
-                            
-                            logger.info(
-                                f"SHADOW rules (v2): {len(rule_findings_v2)} findings "
-                                f"(old={len(rule_findings)}, diff={len(rule_findings_v2) - len(rule_findings)})"
-                            )
-                            
-                            # 记录统计 diff（不记录完整内容）
-                            from app.core.shadow_diff import ShadowDiffLogger
-                            diff_summary = {
-                                "old_count": len(rule_findings),
-                                "new_count": len(rule_findings_v2),
-                                "delta": len(rule_findings_v2) - len(rule_findings)
-                            }
-                            ShadowDiffLogger.log(
-                                kind="rules_evaluation",
-                                project_id=project_id,
-                                old_summary={"count": len(rule_findings)},
-                                new_summary={"count": len(rule_findings_v2)},
-                                diff_json=diff_summary
-                            )
-                        except Exception as e:
-                            logger.error(f"SHADOW rules (v2) failed: {e}", exc_info=True)
-                    
-                    # PREFER_NEW 模式：v2 优先，失败回退旧评估器
-                    elif rules_mode.value == "PREFER_NEW":
-                        v2_success = False
-                        try:
-                            import asyncio
-                            from app.platform.rules.evaluator_v2 import RulesEvaluatorV2
-                            
-                            logger.info(f"PREFER_NEW rules: trying v2 for project={project_id}")
-                            evaluator_v2 = RulesEvaluatorV2(pool)
-                            context_v2 = {"project_info": project_info}
-                            rule_findings = asyncio.run(evaluator_v2.evaluate(
-                                project_id, rule_set_version, context_v2
-                            ))
-                            v2_success = True
-                            logger.info(f"PREFER_NEW rules: v2 succeeded, {len(rule_findings)} findings")
-                        except Exception as e:
-                            logger.warning(f"PREFER_NEW rules: v2 failed, falling back to old. Error: {e}")
-                            # 回退到旧评估器
-                            if self.feature_flags.RULES_EVALUATOR_ENABLED:
-                                try:
-                                    from app.services.platform.rules_evaluator import RulesEvaluator
-                                    evaluator = RulesEvaluator()
-                                    context = {
-                                        "tender_chunks": tender_chunks,
-                                        "bid_chunks": bid_chunks,
-                                        "project_info": project_info
-                                    }
-                                    rule_findings = evaluator.evaluate(rule_set_version, context)
-                                    logger.info(f"PREFER_NEW rules: fallback succeeded, {len(rule_findings)} findings")
-                                except Exception as e2:
-                                    logger.error(f"PREFER_NEW rules: fallback also failed: {e2}")
-                    
-                    # NEW_ONLY 模式：仅使用 v2，失败则报错
-                    elif rules_mode.value == "NEW_ONLY":
-                        import asyncio
-                        from app.platform.rules.evaluator_v2 import RulesEvaluatorV2
-                        
-                        evaluator_v2 = RulesEvaluatorV2(pool)
-                        context_v2 = {"project_info": project_info}
-                        rule_findings = asyncio.run(evaluator_v2.evaluate(
-                            project_id, rule_set_version, context_v2
-                        ))
-                        logger.info(f"NEW_ONLY rules: {len(rule_findings)} findings")
-            
-            # 合并对比审核和规则审核结果
-            combined_results = arr + rule_findings
-
-            # 保存审核项（仅保存对比审核到旧表，保持兼容性）
-            self.dao.replace_review_items(project_id, arr)
-            
-            if run_id:
-                self.dao.update_run(
-                    run_id, "success", progress=1.0, message="ok", result_json={"count": len(arr)}
-                )
-            
-            # Step 8: REVIEW_MODE 切换
-            from app.core.cutover import get_cutover_config
-            cutover = get_cutover_config()
-            review_mode = cutover.get_mode("review", project_id)
-            
-            # NEW_ONLY 模式：仅使用 v2，失败则报错
-            if review_mode.value == "NEW_ONLY":
-                try:
-                    import asyncio
-                    from app.works.tender.review_v2_service import ReviewV2Service
-                    from app.services.db.postgres import _get_pool
-                    
-                    logger.info(f"NEW_ONLY review_run: using v2 only for project={project_id}")
-                    pool = _get_pool()
-                    review_v2 = ReviewV2Service(pool, self.llm)
-                    
-                    # 运行 v2 审核
-                    v2_results = asyncio.run(review_v2.run_review_v2(
-                        project_id=project_id,
-                        model_id=model_id,
-                        custom_rule_asset_ids=custom_rule_asset_ids,
-                        bidder_name=bidder_name,
-                        bid_asset_ids=bid_asset_ids,
-                        run_id=run_id
-                    ))
-                    
-                    # v2 成功：使用 v2 结果，写入旧表以保证前端兼容
-                    arr = v2_results  # 替换原来的 arr
-                    combined_results = arr + rule_findings  # 更新合并结果
-                    
-                    # 写入旧表（保证前端兼容）
-                    self.dao.replace_review_items(project_id, arr)
-                    
-                    # 更新运行状态
-                    if run_id:
-                        self.dao.update_run(
-                            run_id, "success", progress=1.0,
-                            message="ok",
-                            result_json={
-                                "count": len(arr),
-                                "review_v2_status": "ok",
-                                "review_mode_used": "NEW_ONLY"
-                            }
-                        )
-                    
-                    logger.info(f"NEW_ONLY review_run: v2 succeeded for project={project_id}, count={len(arr)}")
-                    
-                except Exception as e:
-                    # NEW_ONLY 失败：记录并抛错，不允许回退
-                    error_msg = f"REVIEW_MODE=NEW_ONLY v2 failed: {str(e)}"
-                    logger.error(
-                        f"NEW_ONLY review_run failed for project={project_id}: {e}",
-                        exc_info=True
-                    )
-                    
-                    # 更新运行状态为失败
-                    if run_id:
-                        self.dao.update_run(
-                            run_id, "failed", progress=0.0,
-                            message=error_msg,
-                            result_json={
-                                "review_v2_status": "failed",
-                                "review_v2_error": str(e),
-                                "review_mode_used": "NEW_ONLY"
-                            }
-                        )
-                    
-                    # 抛出错误，不允许回退
-                    raise ValueError(error_msg) from e
-            
-            # PREFER_NEW 模式：v2 优先，失败回退旧逻辑
-            elif review_mode.value == "PREFER_NEW":
-                v2_success = False
-                try:
-                    import asyncio
-                    from app.works.tender.review_v2_service import ReviewV2Service
-                    from app.services.db.postgres import _get_pool
-                    
-                    logger.info(f"PREFER_NEW review_run: trying v2 for project={project_id}")
-                    pool = _get_pool()
-                    review_v2 = ReviewV2Service(pool, self.llm)
-                    
-                    # 运行 v2 审核
-                    v2_results = asyncio.run(review_v2.run_review_v2(
-                        project_id=project_id,
-                        model_id=model_id,
-                        custom_rule_asset_ids=custom_rule_asset_ids,
-                        bidder_name=bidder_name,
-                        bid_asset_ids=bid_asset_ids,
-                        run_id=run_id
-                    ))
-                    
-                    # v2 成功：使用 v2 结果
-                    arr = v2_results
-                    combined_results = arr + rule_findings
-                    v2_success = True
-                    
-                    logger.info(f"PREFER_NEW review_run: v2 succeeded for project={project_id}, count={len(arr)}")
-                    
-                except Exception as e:
-                    # v2 失败：使用已有的旧逻辑结果
-                    logger.warning(
-                        f"PREFER_NEW review_run: v2 failed for project={project_id}, "
-                        f"using old results. Error: {e}",
-                        exc_info=True
-                    )
-                    v2_success = False
+                # 运行 v2 审核
+                logger.info("Calling run_review_v2...")
+                v2_results = asyncio.run(review_v2.run_review_v2(
+                    project_id=project_id,
+                    model_id=model_id,
+                    bidder_name=bidder_name,
+                    bid_asset_ids=bid_asset_ids,
+                    run_id=run_id
+                ))
+                logger.info(f"run_review_v2 completed")
                 
-                # 无论 v2 是否成功，都写入旧表（保证前端兼容）
+                # v2 成功：使用 v2 结果，写入旧表以保证前端兼容
+                # v2_results 是字典，包含 'items' 键
+                arr = v2_results.get("items", [])  # 提取 items 列表
+                logger.info(f"Extracted {len(arr)} review items")
+                
+                # 写入旧表（保证前端兼容）
                 self.dao.replace_review_items(project_id, arr)
                 
+                # 更新运行状态
                 if run_id:
                     self.dao.update_run(
                         run_id, "success", progress=1.0,
                         message="ok",
                         result_json={
                             "count": len(arr),
-                            "review_v2_status": "ok" if v2_success else "fallback",
-                            "review_mode_used": "PREFER_NEW"
+                            "review_v2_status": "ok"
                         }
                     )
-            
-            # SHADOW 模式已删除 - review_diff.py 已移除
-            # elif review_mode.value == "SHADOW":
-            #     ... (SHADOW mode code removed)
+                
+                logger.info(f"Review completed successfully for project={project_id}, count={len(arr)}")
+                
+            except Exception as e:
+                # 审核失败：记录并抛错
+                error_msg = f"Review failed: {str(e)}"
+                logger.error(
+                    f"Review failed for project={project_id}: {e}",
+                    exc_info=True
+                )
+                
+                # 更新运行状态为失败
+                if run_id:
+                    self.dao.update_run(
+                        run_id, "failed", progress=0.0,
+                        message=error_msg,
+                        result_json={
+                            "review_v2_status": "failed",
+                            "review_v2_error": str(e)
+                        }
+                    )
+                
+                # 抛出错误
+                raise ValueError(error_msg) from e
             
             # 旁路双写：ReviewCase（如果启用）
             case_id = None
@@ -2341,9 +2082,9 @@ class TenderService:
                         status="running"
                     )
                     
-                    # 4. 批量创建 review_findings（从 combined_results 转换）
+                    # 4. 批量创建 review_findings（从 arr 转换）
                     findings = []
-                    for item in combined_results:
+                    for item in arr:
                         source = item.get("source", "compare")
                         finding = {
                             "source": source,
@@ -2369,9 +2110,8 @@ class TenderService:
                         review_run_id,
                         status="succeeded",
                         result_json={
-                            "total_findings": len(combined_results),
-                            "compare_findings": len(arr),
-                            "rule_findings": len(rule_findings)
+                            "total_findings": len(arr),
+                            "compare_findings": len(arr)
                         }
                     )
                     

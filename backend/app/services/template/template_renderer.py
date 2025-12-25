@@ -118,6 +118,24 @@ def render_outline_with_template(
     logger.info(f"开始渲染: template={template_docx_path}, output={out_docx_path}")
     logger.info(f"目录节点数: {len(outline_nodes)}, role_mapping={role_mapping}")
     
+    # 硬校验：目录节点不能为空
+    if not outline_nodes:
+        error_msg = "目录节点为空，无法生成文档"
+        logger.error(f"[RENDER_FAIL] {error_msg}")
+        raise ValueError(error_msg)
+    
+    # 校验：role_mapping 缺失则使用默认值
+    if not role_mapping:
+        logger.warning("[RENDER_WARN] role_mapping 为空，使用默认样式映射")
+        role_mapping = {
+            "h1": "+标题1",
+            "h2": "+标题2",
+            "h3": "+标题3",
+            "h4": "+标题4",
+            "h5": "+标题5",
+            "body": "++正文"
+        }
+    
     # 1. 复制模板作为底板
     shutil.copyfile(template_docx_path, out_docx_path)
     logger.info("✓ 复制模板完成")
@@ -187,6 +205,26 @@ def render_outline_with_template(
     # 先扁平化目录节点
     flat = outline_nodes_to_flat(outline_nodes)
     
+    # A) 目录节点过滤：避免把"目录/目 录/TOC"当成正文章节插入
+    flat_filtered = []
+    for n in flat:
+        title = (n.get("title") or "").strip()
+        # 去除空白后，完全匹配"目录"相关关键词（大小写不敏感）
+        title_normalized = title.replace(" ", "").replace("\u3000", "").lower()
+        if title_normalized in ["目录", "目录结构", "toc", "投标文件目录"]:
+            logger.info(f"✓ 过滤目录节点: {title}")
+            continue
+        flat_filtered.append(n)
+    
+    logger.info(f"✓ 目录节点过滤: {len(flat)} -> {len(flat_filtered)} (过滤了 {len(flat) - len(flat_filtered)} 个)")
+    flat = flat_filtered
+    
+    # 硬校验：过滤后目录节点不能为空
+    if not flat:
+        error_msg = "过滤后目录节点为空（可能所有节点都是'目录'类节点），无法生成文档"
+        logger.error(f"[RENDER_FAIL] {error_msg}")
+        raise ValueError(error_msg)
+    
     toc_diag = replace_all_toc_sdt_with_plain_toc(doc, flat, role_mapping)
     logger.warning(f"[APPLY_FMT] toc_diag={toc_diag}")
     
@@ -219,11 +257,47 @@ def render_outline_with_template(
     toc_anchor = find_toc_anchor(doc)
     logger.info(f"✓ 锚点状态 - TOC: {toc_anchor is not None}, CONTENT: {anchor is not None}")
     
+    # B) 修正"目录标题"段落样式（避免出现"一、目录"）
+    if toc_anchor is not None:
+        try:
+            current_style = toc_anchor.style.name
+            logger.info(f"目录标题当前样式: {current_style}")
+            
+            # 如果是带编号的标题样式，改为不带编号的样式
+            heading_styles = ["heading 1", "heading1", "+标题1", "标题 1", "标题1", "title"]
+            if current_style.lower() in heading_styles or current_style.startswith("+标题"):
+                # 优先使用 role_mapping.get("toc_title")
+                new_style = role_mapping.get("toc_title")
+                if not new_style:
+                    # 尝试常见的无编号样式
+                    for candidate in ["TOC Heading", "目录标题", "目录", "Normal"]:
+                        try:
+                            _ = doc.styles[candidate]
+                            new_style = candidate
+                            break
+                        except Exception:
+                            continue
+                
+                if new_style:
+                    toc_anchor.style = new_style
+                    logger.info(f"✓ 修正目录标题样式: {current_style} -> {new_style}")
+        except Exception as e:
+            logger.warning(f"修正目录标题样式失败: {e}")
+    
+    # C) TOC 列表必定生成（兜底保证）
+    # 检查 toc_diag 是否显示 TOC 写入行数为 0，如果是则强制走 fallback
+    toc_written_lines = (toc_diag or {}).get("toc_written_lines", 0)
+    force_fallback = (toc_written_lines == 0)
+    
+    if force_fallback:
+        logger.warning("⚠️ TOC 写入行数为 0，强制走 Fallback 模式")
+    
     # 4. 如果两者都存在：先把 TOC 区域清空，然后写入新的 TOC 行（Fallback 模式）
-    if toc_anchor is not None and anchor is not None and content_anchor is None:
+    if toc_anchor is not None and anchor is not None and (content_anchor is None or force_fallback):
         # 删除"目录"到"正文插入点"之间的旧目录内容
-        remove_blocks_between(doc, toc_anchor, anchor)
-        logger.info("✓ 清理旧目录内容完成")
+        if content_anchor is None:
+            remove_blocks_between(doc, toc_anchor, anchor)
+            logger.info("✓ 清理旧目录内容完成")
         
         # 写入新的目录行（纯文本目录：不带页码，保证一定替换成功）
         # 可按模板已有 toc 样式：toc 1~toc 5（没有就用 Normal）
@@ -244,16 +318,28 @@ def render_outline_with_template(
             return role_mapping.get("body") or "Normal"
         
         cur_toc = toc_anchor
-        flat = outline_nodes_to_flat(outline_nodes)
+        toc_lines_written = 0
         for n in flat:
             lvl = int(n.get("level") or 1)
             title = (n.get("title") or "").strip()
             if not title:
                 continue
-            # ✅ TOC 目录行：只用 title，不拼接编号（纯文本目录，无页码）
-            cur_toc = insert_paragraph_after(cur_toc, title, style_name=toc_style(lvl))
+            
+            # ✅ 清理 title 中自带的编号前缀（目录中只显示标题名称）
+            import re
+            title_clean = re.sub(r"^\s*\d+(\.\d+)*\s*", "", title).strip()
+            title_clean = re.sub(r"^\s*[一二三四五六七八九十]+\s*[、.．]\s*", "", title_clean).strip()
+            
+            # ✅ TOC 目录行：只用纯标题，不拼接编号（纯文本目录，无页码）
+            cur_toc = insert_paragraph_after(cur_toc, title_clean, style_name=toc_style(lvl))
+            toc_lines_written += 1
         
-        logger.info(f"✓ 重建目录完成，共 {len(flat)} 个条目")
+        logger.info(f"✓ 重建目录完成，共 {toc_lines_written} 个条目")
+        
+        # D) 锚点选择更稳：把 anchor 设为 TOC 列表最后一行，避免误删 TOC
+        if content_anchor is None and toc_lines_written > 0:
+            anchor = cur_toc
+            logger.info(f"✓ 更新锚点为 TOC 末尾，避免误删目录")
     
     # 5. 再清理 anchor 后面的模板示例内容（确保正文是"替换"而不是"追加"）
     prune_after_anchor(doc, anchor)
@@ -360,22 +446,65 @@ def render_outline_with_template_v2(
     prefix_numbering: bool = True,
 ):
     """
-    渲染接口 V2（兼容旧的调用方式）
+    渲染接口 V2（兼容适配器函数）
     
     Args:
         template_path: 模板文件路径
         output_path: 输出文件路径
-        outline_tree: 目录树（扁平列表）
-        analysis_json: 模板分析结果 {"roleMapping": ..., "applyAssets": ...}
+        outline_tree: 目录树（可能是 DAO rows 或扁平列表）
+        analysis_json: 模板分析结果 {"roleMapping"/"role_mapping": ..., "applyAssets"/"apply_assets": ...}
         prefix_numbering: 是否在标题前添加编号
     """
-    role_mapping = analysis_json.get("roleMapping", {})
-    apply_assets = analysis_json.get("applyAssets")
+    # a) 兼容读取 roleMapping / role_mapping（两种 key 都支持）
+    role_mapping = analysis_json.get("roleMapping") or analysis_json.get("role_mapping") or {}
+    if not role_mapping:
+        logger.warning("[V2] roleMapping 为空，将使用默认样式映射")
+        role_mapping = {
+            "h1": "+标题1",
+            "h2": "+标题2",
+            "h3": "+标题3",
+            "h4": "+标题4",
+            "h5": "+标题5",
+            "body": "++正文"
+        }
     
+    # b) 兼容读取 applyAssets / apply_assets
+    apply_assets = analysis_json.get("applyAssets") or analysis_json.get("apply_assets")
+    
+    # c) 将 outline_tree 规范化成 renderer 需要的 outline_nodes
+    outline_nodes = []
+    if outline_tree:
+        # 检查是否为 DAO rows（含 level/title/meta_json/parent_id/order_no）
+        if isinstance(outline_tree, list) and len(outline_tree) > 0:
+            first = outline_tree[0]
+            # 如果是 dict 并且包含目录节点的典型字段，直接使用
+            if isinstance(first, dict) and ("level" in first or "title" in first):
+                outline_nodes = outline_tree
+            else:
+                logger.warning(f"[V2] outline_tree 格式不符合预期: {type(first)}")
+                outline_nodes = outline_tree
+        else:
+            logger.warning(f"[V2] outline_tree 类型不符合预期: {type(outline_tree)}")
+            outline_nodes = outline_tree if isinstance(outline_tree, list) else []
+    
+    # d) 确保最终 outline_nodes_to_flat(outline_nodes) 非空；若为空，抛出 ValueError
+    try:
+        flat = outline_nodes_to_flat(outline_nodes)
+    except Exception as e:
+        logger.error(f"[V2] 扁平化目录节点失败: {e}")
+        raise ValueError(f"目录节点扁平化失败: {e}")
+    
+    if not flat:
+        logger.error(f"[V2] outline_nodes 为空或扁平化后为空，无法渲染")
+        raise ValueError("outline_nodes empty after normalize - 目录节点为空，无法生成文档")
+    
+    logger.info(f"[V2] 目录节点校验通过: {len(flat)} 个节点")
+    
+    # 最终调用现有的 render_outline_with_template
     render_outline_with_template(
         template_docx_path=template_path,
         out_docx_path=output_path,
-        outline_nodes=outline_tree,
+        outline_nodes=outline_nodes,
         role_mapping=role_mapping,
         prefix_numbering=prefix_numbering,
         use_llm_prune=False,

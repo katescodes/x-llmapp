@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from docx import Document
-from docx.oxml import OxmlElement
+from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import qn
 from lxml import etree
 
@@ -445,6 +445,68 @@ async def _generate_multi_round(
     return full_text
 
 
+def is_toc_title(text: str) -> bool:
+    """
+    判断文本是否为目录标题
+    
+    Args:
+        text: 待判断的文本
+        
+    Returns:
+        True 如果是目录标题
+    """
+    if not text:
+        return False
+    
+    # 去除空白和全角空格
+    normalized = text.strip().replace(" ", "").replace("\u3000", "").lower()
+    
+    # 匹配常见的目录标题
+    toc_keywords = ["目录", "目录结构", "toc", "投标文件目录", "tableofcontents"]
+    return normalized in toc_keywords
+
+
+def _get_toc_title_style(
+    heading_style_map: Optional[Dict[int, str]],
+    doc: Document
+) -> str:
+    """
+    获取目录标题的样式名称（确保不是带编号的 Heading 样式）
+    
+    优先级：
+    1. heading_style_map 中的 "toc_title" 或 0 级
+    2. 文档中存在的 "TOC Heading" / "TOC Title" / "目录标题"
+    3. 回退到 "Normal"
+    
+    Args:
+        heading_style_map: 样式映射（可能包含 toc_title 或 0 级）
+        doc: Document 对象，用于检查样式是否存在
+        
+    Returns:
+        样式名称
+    """
+    # 1. 优先使用 heading_style_map 中的 toc_title 或 0 级
+    if heading_style_map:
+        if "toc_title" in heading_style_map:
+            return heading_style_map["toc_title"]
+        if 0 in heading_style_map:
+            return heading_style_map[0]
+    
+    # 2. 尝试常见的 TOC 专用样式
+    candidates = ["TOC Heading", "TOC Title", "目录标题", "目录"]
+    for candidate in candidates:
+        try:
+            _ = doc.styles[candidate]
+            logger.info(f"使用目录标题样式: {candidate}")
+            return candidate
+        except KeyError:
+            continue
+    
+    # 3. 回退到 Normal（确保不会是带编号的 Heading）
+    logger.warning("未找到目录标题专用样式，使用 Normal")
+    return "Normal"
+
+
 def _get_heading_style_name(
     level: int,
     heading_style_map: Optional[Dict[int, str]] = None
@@ -499,9 +561,66 @@ def _clear_body_keep_sectpr(doc: Document, apply_assets: Optional[Dict[str, Any]
     # 方案1：使用 LLM 分析的 applyAssets（最智能）
     if apply_assets and isinstance(apply_assets, dict):
         keep_plan = apply_assets.get("keepPlan", {})
+        keep_block_ids = keep_plan.get("keepBlockIds", []) if keep_plan else []
+        delete_block_ids = keep_plan.get("deleteBlockIds", []) if keep_plan else []
         anchors = apply_assets.get("anchors", [])
         
-        # 如果有锚点，找到第一个锚点作为内容插入位置
+        # 如果有 keepPlan，使用精细化的保留/删除策略
+        if keep_block_ids or delete_block_ids:
+            logger.info(f"使用 LLM keepPlan: keep={len(keep_block_ids)}, delete={len(delete_block_ids)}")
+            
+            # 将块ID转换为索引（假设块ID为 "b0", "b1", "b2" ...）
+            keep_indices = set()
+            delete_indices = set()
+            
+            for block_id in keep_block_ids:
+                if isinstance(block_id, str) and block_id.startswith("b"):
+                    try:
+                        idx = int(block_id[1:])
+                        keep_indices.add(idx)
+                    except ValueError:
+                        pass
+            
+            for block_id in delete_block_ids:
+                if isinstance(block_id, str) and block_id.startswith("b"):
+                    try:
+                        idx = int(block_id[1:])
+                        delete_indices.add(idx)
+                    except ValueError:
+                        pass
+            
+            logger.info(f"keep_indices 范围: {min(keep_indices) if keep_indices else 'N/A'} - {max(keep_indices) if keep_indices else 'N/A'}")
+            logger.info(f"delete_indices 范围: {min(delete_indices) if delete_indices else 'N/A'} - {max(delete_indices) if delete_indices else 'N/A'}")
+            
+            # 遍历body元素，删除应该删除的块
+            children_list = list(body)
+            block_idx = 0  # 当前块索引（只计算段落和表格）
+            
+            for child in children_list:
+                # 只处理段落和表格（跳过 sectPr 等）
+                if child.tag in [qn("w:p"), qn("w:tbl")]:
+                    # 如果这个块在 delete_indices 中，删除它
+                    if block_idx in delete_indices:
+                        logger.debug(f"删除块 b{block_idx}")
+                        body.remove(child)
+                    else:
+                        logger.debug(f"保留块 b{block_idx}")
+                    block_idx += 1
+            
+            # 删除所有TOC域（Word目录域）
+            _remove_all_toc_fields(doc)
+            
+            # ✅ 额外清理：删除所有使用TOC样式的段落（这些是模板的旧目录条目）
+            _remove_toc_style_paragraphs(doc)
+            
+            # 恢复 sectPr
+            if last_sectpr is not None:
+                body.append(last_sectpr)
+            
+            logger.info(f"根据 keepPlan 完成清理，保留了 {len(keep_indices)} 个块")
+            return
+        
+        # 如果有锚点但没有 keepPlan，尝试使用锚点逻辑（备用）
         if anchors:
             first_anchor = anchors[0] if isinstance(anchors, list) else anchors
             anchor_block_id = first_anchor.get("blockId") if isinstance(first_anchor, dict) else None
@@ -509,8 +628,6 @@ def _clear_body_keep_sectpr(doc: Document, apply_assets: Optional[Dict[str, Any]
             if anchor_block_id:
                 logger.info(f"使用 LLM 分析的锚点: blockId={anchor_block_id}")
                 # 找到锚点对应的元素索引（简化版：根据顺序估计）
-                # TODO: 完整实现需要给每个元素添加 blockId 属性
-                # 这里先使用简化逻辑：根据锚点中的 "reason" 字段查找关键词
                 anchor_reason = first_anchor.get("reason", "") if isinstance(first_anchor, dict) else ""
                 logger.info(f"锚点原因: {anchor_reason}")
                 
@@ -605,6 +722,208 @@ def _clear_body_keep_sectpr(doc: Document, apply_assets: Optional[Dict[str, Any]
         body.append(last_sectpr)
 
 
+def _remove_all_toc_fields(doc: Document) -> int:
+    """
+    删除文档中所有的TOC域（Word目录域）和SDT中的旧目录
+    
+    Args:
+        doc: Document 对象
+        
+    Returns:
+        删除的TOC域数量
+    """
+    removed_count = 0
+    body = doc._element.body
+    
+    # ✅ 新增：删除所有SDT（结构化文档标签）中的旧目录
+    # 模板的旧目录通常在SDT中，python-docx看不到但Word会渲染
+    sdts = body.findall(qn('w:sdt'))
+    for sdt in sdts:
+        # 检查SDT中的内容是否包含旧目录
+        sdt_texts = []
+        for elem in sdt.iter():
+            if elem.tag == qn('w:t'):
+                sdt_texts.append(elem.text or '')
+        
+        sdt_content = ''.join(sdt_texts)
+        # 如果包含"一、"、"二、"等，认为是旧目录
+        if '一、' in sdt_content or '二、' in sdt_content or 'TOC' in sdt_content:
+            logger.info(f"删除SDT中的旧目录，包含 {len(sdt_texts)} 个文本节点")
+            body.remove(sdt)
+            removed_count += 1
+    
+    # 查找所有段落中的 fldSimple 元素（TOC域）
+    for para in body.findall(qn('w:p')):
+        # 查找 w:fldSimple 元素
+        fld_simples = para.findall(qn('w:fldSimple'))
+        for fld in fld_simples:
+            instr = fld.get(qn('w:instr'), '')
+            # 检查是否是TOC域
+            if 'TOC' in instr.upper():
+                logger.info(f"删除TOC域: {instr}")
+                para.remove(fld)
+                removed_count += 1
+        
+        # 查找 w:fldChar（复杂域的开始/结束标记）
+        # TOC域也可能以 fldChar 的形式存在
+        fld_chars = para.findall(qn('w:fldChar'))
+        if fld_chars:
+            # 检查是否包含TOC指令
+            for run in para.findall(qn('w:r')):
+                instr_text = run.find(qn('w:instrText'))
+                if instr_text is not None and 'TOC' in (instr_text.text or '').upper():
+                    # 删除整个段落（因为TOC域可能跨越多个run）
+                    logger.info(f"删除包含TOC域的段落")
+                    body.remove(para)
+                    removed_count += 1
+                    break
+    
+    if removed_count > 0:
+        logger.info(f"共删除 {removed_count} 个TOC域")
+    else:
+        logger.info("未发现TOC域")
+    
+    return removed_count
+
+
+def _remove_toc_style_paragraphs(doc: Document) -> int:
+    """
+    删除文档中所有使用TOC样式的段落（模板的旧目录条目）
+    
+    这些段落通常是模板原有的目录列表，应该被删除，
+    系统会重新生成新的目录。
+    
+    Args:
+        doc: Document 对象
+        
+    Returns:
+        删除的段落数量
+    """
+    removed_count = 0
+    paras_to_remove = []
+    
+    # 遍历所有段落，找出使用TOC样式的段落
+    for para in doc.paragraphs:
+        if para.style and 'toc' in para.style.name.lower():
+            # 记录要删除的段落
+            paras_to_remove.append(para)
+            logger.debug(f"标记删除TOC样式段落: [{para.style.name}] {para.text[:50]}")
+    
+    # 删除段落（使用XML API）
+    for para in paras_to_remove:
+        para._element.getparent().remove(para._element)
+        removed_count += 1
+    
+    if removed_count > 0:
+        logger.info(f"共删除 {removed_count} 个TOC样式段落（模板旧目录）")
+    else:
+        logger.info("未发现TOC样式段落")
+    
+    return removed_count
+
+
+def _remove_template_sample_headings(doc: Document) -> int:
+    """
+    删除模板中的示例标题（如"投标函"、"法定代表人授权书"等）
+    
+    这些标题通常是模板文件中的示例章节标题，应该被删除，
+    系统会插入实际项目的章节。
+    
+    判断标准：
+    1. 使用标题样式（Heading或标题）
+    2. 出现在"目录"标题之前
+    3. 不是"目录"本身
+    
+    Args:
+        doc: Document 对象
+        
+    Returns:
+        删除的段落数量
+    """
+    removed_count = 0
+    paras_to_remove = []
+    
+    # 找到"目录"标题的位置
+    toc_index = -1
+    for i, para in enumerate(doc.paragraphs):
+        text = para.text.strip()
+        if text in ["目录", "目 录", "TOC", "TABLE OF CONTENTS"]:
+            toc_index = i
+            logger.info(f"⚠️ 找到目录标题位置: 段落{i}")
+            break
+    
+    if toc_index == -1:
+        logger.warning("⚠️ 未找到目录标题，跳过删除模板示例标题")
+        return 0
+    
+    # 删除"目录"之前的所有标题段落（这些是模板的示例标题）
+    for i, para in enumerate(doc.paragraphs):
+        # 只处理"目录"之前的段落
+        if i >= toc_index:
+            break
+        
+        # 检查是否是标题样式
+        if para.style and ('heading' in para.style.name.lower() or '标题' in para.style.name):
+            text = para.text.strip()
+            # 排除封面部分的短文本
+            if len(text) > 1:
+                paras_to_remove.append(para)
+                logger.info(f"⚠️ 标记删除模板示例标题 [{i}]: [{para.style.name}] {text[:50]}")
+    
+    # 删除段落
+    for para in paras_to_remove:
+        para._element.getparent().remove(para._element)
+        removed_count += 1
+    
+    if removed_count > 0:
+        logger.info(f"共删除 {removed_count} 个模板示例标题")
+    else:
+        logger.info("未发现模板示例标题")
+    
+    return removed_count
+
+
+def _ensure_cover_single_page(doc: Document) -> int:
+    """
+    确保封面内容只占一页
+    
+    删除封面之后的空段落、分页符、多余内容，确保目录能从第2页开始
+    
+    策略：
+    1. 保留前5个段落（封面核心信息）
+    2. 删除第6个到最后一个段落（模板的多余内容）
+    3. 确保封面简洁，为目录留出空间
+    
+    Args:
+        doc: Document 对象
+        
+    Returns:
+        删除的段落数量
+    """
+    removed_count = 0
+    
+    # 只保留前5个段落（封面标题、项目名称、日期等）
+    paras = list(doc.paragraphs)
+    
+    if len(paras) <= 5:
+        logger.info(f"封面段落数量 <= 5，无需清理")
+        return 0
+    
+    # 删除第6个之后的所有段落
+    for i in range(5, len(paras)):
+        para = paras[i]
+        try:
+            para._element.getparent().remove(para._element)
+            removed_count += 1
+        except Exception as e:
+            logger.warning(f"删除段落 {i} 失败: {e}")
+    
+    if removed_count > 0:
+        logger.info(f"✅ 清理封面多余内容：删除了 {removed_count} 个段落，确保封面只占一页")
+    
+    return removed_count
+
+
 def _add_toc_field(doc: Document, levels: str = "1-5", include_numbering: bool = False) -> None:
     """
     添加目录域（TOC field）
@@ -640,6 +959,143 @@ def _add_toc_field(doc: Document, levels: str = "1-5", include_numbering: bool =
     fld.append(r)
     
     p._p.append(fld)
+
+
+def _add_plain_text_toc(
+    doc: Document,
+    roots: List[DirNode],
+    heading_style_map: Optional[Dict[int, str]],
+    prefix_numbering: bool = False
+) -> int:
+    """
+    生成纯文本目录（立即可见，无需在 Word 中更新）
+    
+    Args:
+        doc: Document 对象
+        roots: 根节点列表
+        heading_style_map: 标题样式映射
+        prefix_numbering: 是否在目录中包含编号
+        
+    Returns:
+        生成的目录行数
+    """
+    from docx.shared import Pt, Inches
+    
+    toc_lines = 0
+    
+    def _get_toc_style_name(level: int) -> str:
+        """获取目录样式名称"""
+        # 尝试使用标准的目录样式（按优先级）
+        toc_style_names = [
+            f"TOC {level}",
+            f"toc {level}",
+            f"TOC{level}",
+            f"toc{level}",
+            f"目录 {level}",
+            f"目录{level}",
+        ]
+        
+        # 检查文档中是否存在这些样式
+        for style_name in toc_style_names:
+            try:
+                # 尝试直接访问样式
+                style = doc.styles[style_name]
+                if style:
+                    logger.debug(f"找到目录样式: {style_name}")
+                    return style_name
+            except KeyError:
+                # 样式不存在
+                continue
+            except Exception as e:
+                logger.debug(f"检查样式 {style_name} 时出错: {e}")
+                continue
+        
+        # 如果没有专用的目录样式，返回 None（使用默认样式）
+        logger.debug(f"未找到level {level}的目录样式，将使用默认样式")
+        return None
+    
+    def _add_toc_entry(node: DirNode, depth: int = 0):
+        """递归添加目录条目"""
+        nonlocal toc_lines
+        from docx.enum.text import WD_TAB_ALIGNMENT, WD_TAB_LEADER
+        
+        # 跳过"目录"节点本身
+        if is_toc_title(node.title):
+            # 但要处理其子节点
+            for child in node.children:
+                _add_toc_entry(child, depth)
+            return
+        
+        # 跳过标记为目录的节点
+        if node.meta_json.get("is_toc") or node.meta_json.get("type") == "toc":
+            for child in node.children:
+                _add_toc_entry(child, depth)
+            return
+        
+        # 生成目录文本（带编号）
+        # ✅ TOC条目始终显示编号（一、二、三、）
+        if node.numbering:
+            toc_text = f"{node.numbering}、{node.title}"
+        else:
+            toc_text = node.title
+        
+        # ✅ 添加Tab符和页码占位符
+        # 格式：一、章节标题\t[页码占位符]
+        page_num_placeholder = "X"  # 占位符，提示用户更新
+        toc_text_with_tab = f"{toc_text}\t{page_num_placeholder}"
+        
+        # 获取目录样式
+        toc_style = _get_toc_style_name(min(node.level, 5))
+        
+        # 添加目录行
+        try:
+            if toc_style:
+                para = doc.add_paragraph(toc_text_with_tab, style=toc_style)
+                logger.debug(f"使用目录样式 {toc_style} 添加: {toc_text[:30]}")
+            else:
+                # 如果没有专用样式，使用默认样式并手动设置格式
+                para = doc.add_paragraph(toc_text_with_tab)
+                
+                # 设置缩进（根据层级）
+                para.paragraph_format.left_indent = Inches(depth * 0.25)
+                
+                # 设置字体大小（根据层级递减）
+                if para.runs:
+                    font_size = max(10, 12 - depth)
+                    para.runs[0].font.size = Pt(font_size)
+                    
+                logger.debug(f"使用默认样式添加: {toc_text[:30]} (depth={depth})")
+            
+            # ✅ 增强：添加Tab stop with dot leader（点号连线到页码）
+            # 这样TOC条目看起来像：章节标题........页码
+            tab_stops = para.paragraph_format.tab_stops
+            
+            # 清除现有的tab stops
+            for ts in list(tab_stops):
+                tab_stops.clear_all()
+            
+            # 添加右对齐的tab stop，位于页面右侧，使用点号引导符
+            # 16cm是A4纸宽度减去左右边距后的合理位置
+            tab_stops.add_tab_stop(Inches(6.0), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
+            
+            logger.debug(f"为TOC条目添加Tab stop: {toc_text[:30]}")
+            
+        except Exception as e:
+            logger.warning(f"添加目录行失败: {e}")
+            para = doc.add_paragraph(toc_text)
+        
+        toc_lines += 1
+        
+        # 递归处理子节点
+        for child in node.children:
+            _add_toc_entry(child, depth + 1)
+    
+    # 遍历所有根节点
+    for root in roots:
+        _add_toc_entry(root, 0)
+    
+    logger.info(f"生成纯文本目录: {toc_lines} 行")
+    return toc_lines
 
 
 def _add_section_break(doc: Document, sectpr_xml: etree._Element) -> None:
@@ -682,6 +1138,87 @@ def _maybe_prefix_numbering(text: str, numbering: Optional[str], enabled: bool) 
     return f"{numbering} {text}"
 
 
+def _extract_template_images(template_path: str) -> Dict[str, List[Any]]:
+    """
+    从模板中提取图片及其关联的标题
+    
+    返回格式：
+    {
+        "投标人营业执照": [图片段落对象列表],
+        "投标人资质证书": [图片段落对象列表],
+        ...
+    }
+    """
+    from docx import Document as TempDocument
+    
+    template_images = {}
+    current_heading = None
+    
+    try:
+        template_doc = TempDocument(template_path)
+        
+        for idx, para in enumerate(template_doc.paragraphs):
+            # 检查是否是标题
+            if para.style and ('标题' in para.style.name or 'heading' in para.style.name.lower()):
+                current_heading = para.text.strip()
+                logger.debug(f"发现标题: {current_heading}")
+            
+            # 检查段落是否包含图片
+            has_image = False
+            for run in para.runs:
+                drawings = run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing')
+                if drawings:
+                    has_image = True
+                    break
+            
+            # 如果包含图片且有当前标题，保存图片段落
+            if has_image and current_heading:
+                # 将整个段落的XML保存下来，以便复制图片
+                if current_heading not in template_images:
+                    template_images[current_heading] = []
+                template_images[current_heading].append(para)
+                logger.info(f"提取图片: {current_heading} (段落{idx})")
+        
+        logger.info(f"从模板中提取了 {len(template_images)} 个标题的图片")
+        for heading, paras in template_images.items():
+            logger.info(f"  - {heading}: {len(paras)}张图片")
+        
+    except Exception as e:
+        logger.error(f"提取模板图片失败: {e}", exc_info=True)
+    
+    return template_images
+
+
+def _insert_images_to_paragraph(source_para, target_doc):
+    """
+    将源段落中的图片复制到目标文档
+    
+    Args:
+        source_para: 源段落（来自模板）
+        target_doc: 目标文档
+    """
+    try:
+        # 创建一个新段落用于存放图片
+        target_para = target_doc.add_paragraph()
+        
+        # 复制图片runs
+        for run in source_para.runs:
+            # 检查run中是否有图片
+            drawings = run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing')
+            if drawings:
+                # 创建新run并复制图片元素
+                new_run = target_para.add_run()
+                for drawing in drawings:
+                    # 直接复制drawing元素到新run
+                    new_run._element.append(drawing)
+                logger.debug("复制了一张图片")
+        
+        return target_para
+    except Exception as e:
+        logger.error(f"插入图片失败: {e}", exc_info=True)
+        return None
+
+
 async def render_directory_tree_to_docx(
     template_path: str,
     output_path: str,
@@ -720,6 +1257,9 @@ async def render_directory_tree_to_docx(
     """
     logger.info(f"开始渲染文档: template={template_path}, output={output_path}, auto_generate={auto_generate_content}")
     
+    # ✅ 提取模板中的图片（资质、证书类）
+    template_images = _extract_template_images(template_path)
+    
     # 初始化自动写作配置和缓存
     if auto_generate_content and auto_write_cfg is None:
         auto_write_cfg = AutoWriteCfg()
@@ -732,16 +1272,67 @@ async def render_directory_tree_to_docx(
     # 2. 清空正文内容（保留最后的 sectPr，使用 LLM 分析的保留计划）
     _clear_body_keep_sectpr(doc, apply_assets=apply_assets)
     
+    # 2.5 ✅ 确保封面只占一页：删除封面后的所有空段落和多余内容
+    # 这样可以保证目录从第2页开始
+    _ensure_cover_single_page(doc)
+    
     # 3. 添加目录页（可选）
     if include_toc:
-        toc_title = doc.add_paragraph("目录", style=_get_heading_style_name(1, heading_style_map))
+        # ✅ 在目录前添加分页符，确保目录从第2页开始
+        doc.add_page_break()
+        logger.info("在目录前添加分页符")
+        
+        # ✅ 使用专用的 TOC 标题样式，避免使用带编号的 Heading 1
+        toc_style = _get_toc_title_style(heading_style_map, doc)
+        logger.info(f"使用目录标题样式: {toc_style}")
+        
+        try:
+            toc_title = doc.add_paragraph("目录", style=toc_style)
+            logger.info(f"目录标题创建成功，样式: {toc_title.style.name}")
+        except Exception as e:
+            logger.error(f"使用样式 {toc_style} 失败: {e}，回退到 Normal")
+            toc_title = doc.add_paragraph("目录")
+            try:
+                toc_title.style = "Normal"
+            except:
+                pass
+        
         toc_title.alignment = 1  # 居中
-        _add_toc_field(doc, "1-5", include_numbering=False)  # 目录中不显示标题编号
+        
+        # 3.5. 删除模板中保留的示例标题（在插入"目录"标题后，生成TOC条目前）
+        # 这些标题是模板的示例结构，会与系统生成的目录冲突
+        logger.info("⚠️ 准备删除模板示例标题...")
+        removed = _remove_template_sample_headings(doc)
+        logger.info(f"⚠️ 删除模板示例标题完成: 删除了 {removed} 个段落")
+        
+        # ✅ 生成纯文本目录（立即可见，无需在 Word 中更新）
+        _add_plain_text_toc(doc, roots, heading_style_map, prefix_numbering_in_text)
+        
+        # ✅ 额外清理：删除模板的示例标题（如"投标函"、"法定代表人授权书"等）
+        # 必须在插入"目录"之后调用，因为需要依赖"目录"的位置来判断哪些是模板示例标题
+        _remove_template_sample_headings(doc)
+        
         doc.add_page_break()
     
     # 4. DFS 遍历目录树，写入内容
     async def emit_node(node: DirNode, depth: int = 0):
         """递归输出节点"""
+        # 4.0 过滤"目录"节点：避免把目录标题当作章节插入正文
+        if is_toc_title(node.title):
+            logger.info(f"跳过目录节点: {node.title}")
+            # 递归处理子节点
+            for child in node.children:
+                await emit_node(child, depth + 1)
+            return
+        
+        # 4.0.5 过滤明确标记为目录的节点
+        if node.meta_json.get("is_toc") or node.meta_json.get("type") == "toc":
+            logger.info(f"跳过标记为目录的节点: {node.title}")
+            # 递归处理子节点
+            for child in node.children:
+                await emit_node(child, depth + 1)
+            return
+        
         # 4.1 检查是否需要插入分节符（横版/特殊布局）
         page_variant = node.meta_json.get("page_variant")
         if page_variant and page_variant in section_prototypes:
@@ -759,6 +1350,10 @@ async def render_directory_tree_to_docx(
             logger.warning(f"样式 {style_name} 不存在，使用默认 Heading: {e}")
             h_level = min(max(node.level, 1), 9)
             para = doc.add_heading(title_text, level=h_level)
+        
+        # ✅ 保留标题的自动编号（显示"一、二、三、"）
+        # 模板的+标题1样式配置了自动编号(numId=1)，这正是用户需要的
+        logger.debug(f"添加标题（保留编号）: {title_text[:30]}")
         
         # 4.3 添加 summary（正文内容）
         content_to_add = node.summary
@@ -820,7 +1415,26 @@ async def render_directory_tree_to_docx(
                 logger.error(f"插入节正文失败: node={node.id}, error={e}", exc_info=True)
                 doc.add_paragraph(f"[正文内容加载失败: {str(e)}]")
         
-        # 4.5 递归处理子节点
+        # ✅ 4.5 插入模板中的图片（资质、证书类）
+        # 根据当前节点的标题匹配模板中的图片
+        if template_images:
+            # 尝试精确匹配
+            if node.title in template_images:
+                logger.info(f"为章节'{node.title}'插入 {len(template_images[node.title])} 张图片")
+                for img_para in template_images[node.title]:
+                    _insert_images_to_paragraph(img_para, doc)
+            # 尝试模糊匹配（关键词）
+            else:
+                for heading, img_paras in template_images.items():
+                    # 检查标题中是否包含关键词
+                    keywords = ['营业执照', '资质证书', '授权书', '许可证', '证明']
+                    if any(kw in node.title and kw in heading for kw in keywords):
+                        logger.info(f"为章节'{node.title}'插入图片（模糊匹配: {heading}）")
+                        for img_para in img_paras:
+                            _insert_images_to_paragraph(img_para, doc)
+                        break
+        
+        # 4.6 递归处理子节点
         for child in node.children:
             await emit_node(child, depth + 1)
     

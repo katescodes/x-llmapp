@@ -41,19 +41,22 @@
 
 ## 输出格式
 
-请严格按照以下JSON格式输出：
+**重要：必须严格按照以下JSON格式输出，字段名必须完全一致！**
+
+**注意：data对象中的数组字段名必须是 "items"，不是 "review_items"！**
 
 ```json
 {
   "data": {
-    "review_items": [
+    "items": [
       {
-        "rule_id": "规则ID（如TECH_001、BIZ_002、DOC_003等）",
-        "title": "简短标题（10字以内）",
-        "severity": "严重级别：info/warning/error",
-        "description": "详细描述不符合项或风险点（100字以内）",
-        "evidence_chunk_ids": ["chunk_abc123", "chunk_def456"],
-        "suggestion": "改进建议（可选，50字以内）"
+        "dimension": "审查维度名称（如：资格审查/资质）",
+        "requirement_text": "招标要求描述（从招标文件中提取的具体要求）",
+        "response_text": "投标响应描述（从投标文件中提取的响应内容）",
+        "result": "审查结果：pass（符合）/ risk（有风险）/ fail（不符合）",
+        "rigid": false,
+        "notes": "备注说明（可选，描述不符合项、风险点或改进建议）",
+        "evidence_chunk_ids": ["chunk_abc123", "chunk_def456"]
       }
     ]
   },
@@ -61,11 +64,11 @@
 }
 ```
 
-## 严重级别定义
+## 审查结果定义
 
-- **error**：严重不符合项，可能导致废标（如缺少必需资质、技术指标严重不达标）
-- **warning**：一般不符合项或风险点，需要改进（如文档格式小问题、轻微技术偏离）
-- **info**：信息性提示，不影响合格性（如建议优化的地方）
+- **pass**：完全符合要求，无问题
+- **risk**：存在风险或潜在问题，需要关注（如文档不完整、轻微偏离）
+- **fail**：严重不符合，可能导致废标（如缺少必需资质、技术指标严重不达标）
 
 ## 审核原则
 
@@ -77,17 +80,15 @@
 
 ## 特殊说明
 
-- 如果某个维度无法判断（因为文档片段不包含相关信息），不要强行判断，而是标注为info级别的"信息不足"
-- 对于模糊或边缘情况，采用保守原则，标注为warning而非error
-- 至少产出3个以上的审核结果（包括兜底的MUST_HIT规则）
+- 如果某个维度无法判断（因为文档片段不包含相关信息），标注为 result: "risk"，并在notes中说明"信息不足"
+- 对于模糊或边缘情况，采用保守原则，标注为 risk 而非 fail
+- 至少产出1个以上的审核结果
 
-## 兜底规则
+## 输出要求
 
-即使没有发现明显的不符合项，也至少应包含以下兜底规则：
-
-1. **MUST_HIT_001**: 审核流程执行确认（severity: info）
-2. **MUST_HIT_002**: 文档完整性检查（severity: warning，说明检查了哪些必需文档）
-3. **MUST_HIT_003**: 资格条件初审（severity: warning，说明初步检查结果）
+- 每个审核项必须包含完整的字段：dimension, requirement_text, response_text, result, evidence_chunk_ids
+- notes字段可选，用于补充说明
+- rigid字段默认为false，只有明确的刚性条款才设为true
 
 请开始审核，输出JSON格式的审核结果。
 

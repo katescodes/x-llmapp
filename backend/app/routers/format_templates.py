@@ -465,25 +465,32 @@ def get_template_analysis(
     apply_assets = analysis_json.get("applyAssets", {})
     blocks = analysis_json.get("blocks", [])
     policy = apply_assets.get("policy", {})
+    anchors = apply_assets.get("anchors", [])
+    keep_plan = apply_assets.get("keepPlan", {})
     
+    # 检查是否有内容标记
+    has_content_marker = any(
+        b.get("markerFlags", {}).get("hasContentMarker")
+        for b in blocks
+    )
+    
+    # 构建前端期望的数据结构
     return {
-        "templateName": template.name,
-        "confidence": policy.get("confidence", 0.5),
+        "template_id": template_id,
+        "template_name": template.name,
+        "analysis_summary": {
+            "confidence": policy.get("confidence", 0.5),
+            "anchorsCount": len(anchors),
+            "keepBlocksCount": len(keep_plan.get("keepBlockIds", [])),
+            "deleteBlocksCount": len(keep_plan.get("deleteBlockIds", [])),
+            "hasContentMarker": has_content_marker,
+        },
         "warnings": policy.get("warnings", []),
-        "anchorsCount": len(apply_assets.get("anchors", [])),
-        "hasContentMarker": any(
-            b.get("markerFlags", {}).get("hasContentMarker")
-            for b in blocks
-        ),
-        "keepBlocksCount": len(apply_assets.get("keepPlan", {}).get("keepBlockIds", [])),
-        "deleteBlocksCount": len(apply_assets.get("keepPlan", {}).get("deleteBlockIds", [])),
-        "headingStyles": {k: v for k, v in role_mapping.items() if k.startswith("h")},
-        "bodyStyle": role_mapping.get("body"),
-        "blocksSummary": {
-            "total": len(blocks),
-            "paragraphs": sum(1 for b in blocks if b.get("type") == "paragraph"),
-            "tables": sum(1 for b in blocks if b.get("type") == "table"),
-        }
+        "full_analysis": {
+            "roleMapping": role_mapping,
+            "applyAssets": apply_assets,
+            "blocks": blocks,
+        },
     }
 
 
@@ -504,6 +511,31 @@ async def reanalyze_template(
     if template.owner_id != user.user_id and user.role != "admin":
         raise HTTPException(status_code=403, detail="Permission denied")
     
+    # 如果没有提供 model_id，自动选择默认的LLM模型
+    if not model_id:
+        logger.info("未提供 model_id，尝试获取默认LLM模型")
+        try:
+            from app.services.llm_model_store import get_llm_store
+            
+            # 使用LLMModelStore获取默认模型（从llm_models.json文件）
+            llm_store = get_llm_store()
+            default_model = llm_store.get_default_model()
+            
+            if default_model:
+                model_id = default_model.id
+                logger.info(f"✅ 使用默认LLM模型: {model_id} ({default_model.name})")
+                logger.info(f"   模型地址: {default_model.base_url}")
+            else:
+                # 如果没有默认模型，获取第一个可用的模型
+                models = llm_store.list_models()
+                if models:
+                    model_id = models[0].id
+                    logger.info(f"✅ 使用第一个可用的LLM模型: {model_id} ({models[0].name})")
+                else:
+                    logger.warning("⚠️ 未找到任何LLM模型，将使用默认策略（不调用LLM）")
+        except Exception as e:
+            logger.warning(f"❌ 获取默认LLM模型失败: {e}，将使用默认策略", exc_info=True)
+    
     try:
         updated = await work.analyze_template(
             template_id=template_id,
@@ -516,7 +548,8 @@ async def reanalyze_template(
         return {
             "success": True,
             "template_id": template_id,
-            "analysis_status": "SUCCESS"
+            "analysis_status": "SUCCESS",
+            "model_id": model_id  # 返回使用的模型ID
         }
     
     except Exception as e:

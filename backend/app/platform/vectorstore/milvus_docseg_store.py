@@ -266,6 +266,24 @@ class MilvusDocSegStore:
         return hits
 
 
-# 全局实例
-milvus_docseg_store = MilvusDocSegStore()
+# 延迟初始化全局实例，避免多进程文件锁冲突
+_milvus_docseg_store_instance = None
+
+def get_milvus_docseg_store() -> MilvusDocSegStore:
+    """获取 Milvus DocSeg Store 单例（延迟初始化）"""
+    global _milvus_docseg_store_instance
+    if _milvus_docseg_store_instance is None:
+        _milvus_docseg_store_instance = MilvusDocSegStore()
+    return _milvus_docseg_store_instance
+
+# 向后兼容的全局变量（通过property实现延迟初始化）
+def _get_global_store():
+    return get_milvus_docseg_store()
+
+# 为了兼容现有代码，保留变量名但使用延迟初始化
+class _StoreLazyProxy:
+    def __getattr__(self, name):
+        return getattr(get_milvus_docseg_store(), name)
+
+milvus_docseg_store = _StoreLazyProxy()
 

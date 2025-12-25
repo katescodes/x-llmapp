@@ -699,6 +699,11 @@ class TenderDAO:
 
     def replace_review_items(self, project_id: str, items: List[Dict[str, Any]]):
         """替换项目的所有审核项"""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"replace_review_items called: project_id={project_id}, items_count={len(items)}")
+        if items:
+            logger.info(f"First item sample: {items[0]}")
         with self.pool.connection() as conn:
             with conn.transaction():  # 显式事务保护
                 with conn.cursor() as cur:
@@ -719,10 +724,10 @@ class TenderDAO:
                                 it.get("requirement_text") or "",
                                 it.get("response_text") or "",
                                 it.get("result") or "risk",
-                                it.get("remark") or "",
+                                it.get("remark") or it.get("notes") or "",  # 兼容 remark 和 notes
                                 bool(it.get("rigid", False)),
-                                json.dumps(it.get("tender_evidence_chunk_ids") or []),
-                                json.dumps(it.get("bid_evidence_chunk_ids") or []),
+                                json.dumps(it.get("tender_evidence_chunk_ids") or it.get("evidence_chunk_ids") or []),  # 兼容两种字段名
+                                json.dumps(it.get("bid_evidence_chunk_ids") or it.get("evidence_chunk_ids") or []),  # 兼容两种字段名
                             ),
                         )
             # with transaction() 自动提交或回滚，无需手动 commit

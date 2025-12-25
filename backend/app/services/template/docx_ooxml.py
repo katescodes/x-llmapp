@@ -533,24 +533,23 @@ def replace_all_toc_sdt_with_plain_toc(
     insert_before.addprevious(_make_p(doc, "目录", title_style))
     logger.info(f"插入目录标题段落（样式: {title_style}）")
 
-    # 插入目录行（使用实际编号，清理 title 中的编号前缀）
+    # 插入目录行（纯标题，不包含编号，符合目录规范）
     import re
     last_line_text = ""
     
     for n in flat_nodes:
         lvl = int(n.get("level") or 1)
         title = (n.get("title") or "").strip()
-        num = (n.get("numbering") or "").strip()
         
         if not title:
             continue
         
-        # 清理 title 中自带的编号前缀，避免 "1 1 投标函" 重复
+        # 清理 title 中自带的编号前缀（目录中只显示标题名称）
         title_clean = re.sub(r"^\s*\d+(\.\d+)*\s*", "", title).strip()
         title_clean = re.sub(r"^\s*[一二三四五六七八九十]+\s*[、.．]\s*", "", title_clean).strip()
         
-        # 使用实际编号（不依赖样式编号）
-        line = f"{num} {title_clean}".strip() if num else title_clean
+        # ✅ 修复：目录行不包含编号，只显示标题名称
+        line = title_clean
         last_line_text = line
         
         insert_before.addprevious(_make_p(doc, line, toc_style(lvl)))

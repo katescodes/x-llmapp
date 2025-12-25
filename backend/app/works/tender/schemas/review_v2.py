@@ -22,6 +22,10 @@ class ReviewItemV2(BaseModel):
         if not v or not v.strip():
             raise ValueError("dimension 不能为空")
         return v.strip()
+    
+    def to_dict_exclude_none(self):
+        """转为字典，排除 None 值"""
+        return self.model_dump(exclude_none=True)
 
 
 class ReviewDataV2(BaseModel):

@@ -494,7 +494,11 @@ export default function TenderWorkspace() {
     if (!currentProject) return;
     try {
       const data = await api.get(`/api/apps/tender/projects/${currentProject.id}/review`);
+      console.log('[loadReview] 获取到审核数据:', data);
+      console.log('[loadReview] 数据类型:', Array.isArray(data) ? 'Array' : typeof data);
+      console.log('[loadReview] 数据长度:', data?.length);
       setReviewItems(data);
+      console.log('[loadReview] setReviewItems 调用完成');
     } catch (err) {
       console.error('Failed to load review:', err);
     }

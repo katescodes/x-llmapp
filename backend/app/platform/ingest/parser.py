@@ -1,6 +1,6 @@
 """
 平台级文档解析器
-支持文本、HTML、PDF、DOCX 和音频文件解析
+支持文本、HTML、PDF、DOCX、Excel 和音频文件解析
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ TEXT_EXTS = {".txt", ".md", ".markdown", ".csv", ".json"}
 HTML_EXTS = {".html", ".htm"}
 PDF_EXTS = {".pdf"}
 DOCX_EXTS = {".docx"}
+EXCEL_EXTS = {".xlsx", ".xls"}
 AUDIO_EXTS = {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm", ".ogg", ".flac"}
 
 
@@ -70,6 +71,58 @@ def _parse_docx(data: bytes) -> Tuple[str, dict]:
     return text, {"paragraphs": len(paragraphs), "chars": len(text)}
 
 
+def _parse_excel(data: bytes) -> Tuple[str, dict]:
+    """
+    解析 Excel 文件（.xlsx 或 .xls）
+    
+    提取所有工作表的文本内容，按行列组织
+    
+    Args:
+        data: Excel 文件二进制数据
+        
+    Returns:
+        (text, metadata) 元组
+    """
+    try:
+        import openpyxl
+        from openpyxl.utils.exceptions import InvalidFileException
+    except ImportError:
+        # 如果没有安装 openpyxl，fallback 到纯文本
+        return "", {"error": "openpyxl not installed", "chars": 0}
+    
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+        lines = []
+        total_rows = 0
+        total_cells = 0
+        
+        for sheet_name in wb.sheetnames:
+            sheet = wb[sheet_name]
+            lines.append(f"=== {sheet_name} ===")
+            
+            for row in sheet.iter_rows(values_only=True):
+                # 过滤空行
+                row_values = [str(cell) if cell is not None else "" for cell in row]
+                if any(v.strip() for v in row_values):
+                    lines.append(" | ".join(row_values))
+                    total_rows += 1
+                    total_cells += len(row_values)
+            
+            lines.append("")  # 工作表之间空行
+        
+        text = "\n".join(lines)
+        return text, {
+            "sheets": len(wb.sheetnames),
+            "rows": total_rows,
+            "cells": total_cells,
+            "chars": len(text)
+        }
+    
+    except Exception as e:
+        # 解析失败，返回错误信息
+        return "", {"error": str(e), "chars": 0}
+
+
 async def parse_document(
     filename: str,
     data: bytes,
@@ -107,6 +160,11 @@ async def parse_document(
 
     if ext in DOCX_EXTS:
         text, meta = _parse_docx(data)
+        metadata.update(meta)
+        return ParsedDocument(title=title, text=text, metadata=metadata)
+
+    if ext in EXCEL_EXTS:
+        text, meta = _parse_excel(data)
         metadata.update(meta)
         return ParsedDocument(title=title, text=text, metadata=metadata)
 

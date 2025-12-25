@@ -82,13 +82,18 @@ export default function FormatTemplatesPage({ embedded, onBack }: Props) {
 
   const loadTemplateDetail = async (templateId: string) => {
     try {
+      console.log('[加载详情] 开始加载模板详情:', templateId);
       const [templateData, specData, summaryData, parseSummaryData, analysisData] = await Promise.all([
         api.get(`/api/apps/tender/format-templates/${templateId}`),
-        api.get(`/api/apps/tender/format-templates/${templateId}/spec`).catch(() => null),
-        api.get(`/api/apps/tender/format-templates/${templateId}/analysis-summary`).catch(() => null),
-        api.get(`/api/apps/tender/format-templates/${templateId}/parse-summary`).catch(() => null),
-        api.get(`/api/apps/tender/templates/${templateId}/analysis`).catch(() => null), // 新增：加载模板分析
+        api.get(`/api/apps/tender/format-templates/${templateId}/spec`).catch((e) => { console.warn('[spec] 加载失败:', e); return null; }),
+        api.get(`/api/apps/tender/format-templates/${templateId}/analysis-summary`).catch((e) => { console.warn('[analysis-summary] 加载失败:', e); return null; }),
+        api.get(`/api/apps/tender/format-templates/${templateId}/parse-summary`).catch((e) => { console.warn('[parse-summary] 加载失败:', e); return null; }),
+        api.get(`/api/apps/tender/templates/${templateId}/analysis`).catch((e) => { console.error('[analysis] 加载失败:', e); return null; }), // 新增：加载模板分析
       ]);
+      
+      console.log('[加载详情] analysisData:', analysisData);
+      console.log('[加载详情] analysisData type:', typeof analysisData);
+      console.log('[加载详情] has analysis_summary?', analysisData?.analysis_summary);
       
       setTemplate(templateData);
       setSpec(specData);
@@ -144,6 +149,8 @@ export default function FormatTemplatesPage({ embedded, onBack }: Props) {
       setActiveTab('docPreview');
     } catch (e: any) {
       setDocPreviewError(String(e?.message || e || '预览加载失败'));
+      // 失败时也切换到docPreview标签页，显示错误信息
+      setActiveTab('docPreview');
     } finally {
       setDocPreviewLoading(false);
     }
@@ -307,20 +314,33 @@ export default function FormatTemplatesPage({ embedded, onBack }: Props) {
   const handleReanalyze = async () => {
     if (!template) return;
     
-    if (!confirm('确定要重新分析此模板吗？这将使用LLM重新解析模板结构。')) {
+    if (!confirm('确定要重新分析此模板吗？这将使用LLM重新解析模板结构，可能需要10-30秒。')) {
       return;
     }
 
     setReanalyzing(true);
+    const startTime = Date.now();
+    
     try {
+      console.log('[模板分析] 开始分析...');
       await api.post(`/api/apps/tender/templates/${template.id}/reanalyze`);
+      
+      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(`[模板分析] 分析完成，耗时 ${duration}s`);
       
       // 重新加载详情
       await loadTemplateDetail(template.id);
-      alert('重新分析完成！');
+      
+      // 使用更明显的提示
+      const message = `✅ 模板分析完成！\n\n耗时: ${duration}秒\n请查看"模板分析"标签页的结果。`;
+      alert(message);
+      
+      // 自动切换到分析标签页
+      setActiveTab('analysis');
     } catch (err) {
-      console.error('Failed to reanalyze template:', err);
-      alert(`重新分析失败: ${err}`);
+      console.error('[模板分析] 分析失败:', err);
+      const message = `❌ 模板分析失败\n\n错误: ${err}\n\n请检查：\n1. 模板文件是否完整\n2. LLM 服务是否正常\n3. 网络连接是否稳定`;
+      alert(message);
     } finally {
       setReanalyzing(false);
     }
@@ -952,33 +972,165 @@ export default function FormatTemplatesPage({ embedded, onBack }: Props) {
 
             {activeTab === 'spec' && (
               <div>
-                <h3 style={{ marginTop: 0, color: '#e2e8f0' }}>解析结构</h3>
-                {spec ? (
+                <h3 style={{ marginTop: 0, color: '#e2e8f0' }}>📋 解析结构</h3>
+                {parseSummary ? (
                   <div style={{ fontSize: '14px', color: '#e2e8f0' }}>
-                    <div style={{ marginBottom: '16px' }}>
-                      <strong>Base Policy:</strong> {spec.base_policy?.policy || 'N/A'}
-                      {spec.base_policy?.excluded_block_ids?.length > 0 && (
-                        <div style={{ marginTop: '4px', fontSize: '12px', color: '#a0aec0' }}>
-                          排除块数量: {spec.base_policy.excluded_block_ids.length}
+                    {/* 标题级别映射 */}
+                    {parseSummary.heading_levels && parseSummary.heading_levels.length > 0 && (
+                      <div style={{ marginBottom: '20px', padding: '16px', background: '#2d3748', borderRadius: '8px' }}>
+                        <h4 style={{ margin: '0 0 12px 0', color: '#60a5fa' }}>🎯 标题级别映射</h4>
+                        <div style={{ display: 'grid', gap: '8px' }}>
+                          {parseSummary.heading_levels.map((hl: any, idx: number) => (
+                            <div key={idx} style={{ padding: '8px 12px', background: '#1e293b', borderRadius: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ fontWeight: 'bold', color: '#fbbf24' }}>{hl.level.toUpperCase()}</span>
+                              <span style={{ color: '#94a3b8' }}>→</span>
+                              <span style={{ color: '#e2e8f0' }}>{hl.style}</span>
+                            </div>
+                          ))}
                         </div>
-                      )}
-                    </div>
-
-                    {summary && (
-                      <div style={{ marginBottom: '16px' }}>
-                        <strong>目录节点数:</strong> {summary.outline_node_count || 0}
                       </div>
                     )}
 
-                    <div>
-                      <strong>样式提示:</strong>
-                      <pre style={{ background: '#2d3748', padding: '12px', borderRadius: '4px', overflow: 'auto', marginTop: '8px' }}>
-                        {JSON.stringify(spec.style_hints, null, 2)}
-                      </pre>
-                    </div>
+                    {/* 文档结构统计 */}
+                    {parseSummary.sections && parseSummary.sections.length > 0 && (
+                      <div style={{ marginBottom: '20px', padding: '16px', background: '#2d3748', borderRadius: '8px' }}>
+                        <h4 style={{ margin: '0 0 12px 0', color: '#60a5fa' }}>📊 文档结构</h4>
+                        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                          {parseSummary.sections.map((sec: any, idx: number) => (
+                            <div key={idx} style={{ padding: '12px 16px', background: '#1e293b', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span style={{ fontSize: '20px' }}>{sec.type === 'paragraph' ? '📝' : '📋'}</span>
+                              <span style={{ fontWeight: 'bold', color: '#e2e8f0' }}>{sec.label}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 样式变体列表 */}
+                    {parseSummary.variants && parseSummary.variants.length > 0 && (
+                      <div style={{ marginBottom: '20px', padding: '16px', background: '#2d3748', borderRadius: '8px' }}>
+                        <h4 style={{ margin: '0 0 12px 0', color: '#60a5fa' }}>🎨 样式变体 (前20个)</h4>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '8px' }}>
+                          {parseSummary.variants.map((variant: any, idx: number) => (
+                            <div key={idx} style={{ padding: '8px 12px', background: '#1e293b', borderRadius: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ color: '#e2e8f0', fontSize: '13px' }}>{variant.name}</span>
+                              {variant.has_numbering && (
+                                <span style={{ fontSize: '11px', padding: '2px 6px', background: '#1e40af', borderRadius: '3px', color: '#93c5fd' }}>编号</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 模板使用说明 */}
+                    {parseSummary.template_instructions && parseSummary.template_instructions.has_instructions && (
+                      <div style={{ marginBottom: '20px', padding: '16px', background: '#2d3748', borderRadius: '8px' }}>
+                        <h4 style={{ margin: '0 0 12px 0', color: '#60a5fa' }}>📋 模板使用说明</h4>
+                        <div style={{ padding: '12px', background: '#1e293b', borderRadius: '6px', whiteSpace: 'pre-wrap', fontSize: '13px', lineHeight: '1.6', color: '#cbd5e1' }}>
+                          {parseSummary.template_instructions.instructions_text}
+                        </div>
+                        <div style={{ marginTop: '8px', fontSize: '12px', color: '#64748b' }}>
+                          📦 共 {parseSummary.template_instructions.instructions_count} 个说明块
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 页眉页脚规格 */}
+                    {parseSummary.header_footer_spec && parseSummary.header_footer_spec.paper_sizes && (
+                      <div style={{ marginBottom: '20px', padding: '16px', background: '#2d3748', borderRadius: '8px' }}>
+                        <h4 style={{ margin: '0 0 12px 0', color: '#60a5fa' }}>🖼️ 页眉页脚规格</h4>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                          <thead>
+                            <tr style={{ borderBottom: '1px solid #475569' }}>
+                              <th style={{ padding: '8px', textAlign: 'left', color: '#94a3b8' }}>纸张类型</th>
+                              <th style={{ padding: '8px', textAlign: 'left', color: '#94a3b8' }}>页眉尺寸</th>
+                              <th style={{ padding: '8px', textAlign: 'left', color: '#94a3b8' }}>页脚尺寸</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.entries(parseSummary.header_footer_spec.paper_sizes).map(([key, value]: [string, any]) => (
+                              <tr key={key} style={{ borderBottom: '1px solid #334155' }}>
+                                <td style={{ padding: '8px', color: '#e2e8f0' }}>
+                                  {key === 'A4_portrait' && 'A4竖版'}
+                                  {key === 'A4_landscape' && 'A4横版'}
+                                  {key === 'A3_landscape' && 'A3横版'}
+                                </td>
+                                <td style={{ padding: '8px', color: '#cbd5e1' }}>
+                                  {value.header ? `${value.header.height} × ${value.header.width}` : '-'}
+                                </td>
+                                <td style={{ padding: '8px', color: '#cbd5e1' }}>
+                                  {value.footer ? `${value.footer.height} × ${value.footer.width}` : '-'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {parseSummary.header_footer_spec.text_indent && (
+                          <div style={{ marginTop: '12px', padding: '8px', background: '#1e293b', borderRadius: '4px', fontSize: '12px', color: '#cbd5e1' }}>
+                            <strong>文本缩进:</strong> {parseSummary.header_footer_spec.text_indent}
+                          </div>
+                        )}
+                        {parseSummary.header_footer_spec.layout_notes && parseSummary.header_footer_spec.layout_notes.length > 0 && (
+                          <div style={{ marginTop: '12px', padding: '8px', background: '#1e293b', borderRadius: '4px', fontSize: '12px', color: '#cbd5e1' }}>
+                            <strong>布局说明:</strong>
+                            <ul style={{ margin: '4px 0 0 20px', padding: 0 }}>
+                              {parseSummary.header_footer_spec.layout_notes.map((note: string, idx: number) => (
+                                <li key={idx} style={{ marginBottom: '4px' }}>{note}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 域代码使用说明 */}
+                    {parseSummary.field_code_usage && parseSummary.field_code_usage.uses_field_codes && (
+                      <div style={{ marginBottom: '20px', padding: '16px', background: '#2d3748', borderRadius: '8px' }}>
+                        <h4 style={{ margin: '0 0 12px 0', color: '#60a5fa' }}>⚙️ 域代码和样式</h4>
+                        <div style={{ display: 'grid', gap: '8px' }}>
+                          {parseSummary.field_code_usage.field_type && (
+                            <div style={{ padding: '8px', background: '#1e293b', borderRadius: '4px', fontSize: '13px', color: '#cbd5e1' }}>
+                              <strong>域类型:</strong> <span style={{ color: '#fbbf24' }}>{parseSummary.field_code_usage.field_type}</span>
+                            </div>
+                          )}
+                          {parseSummary.field_code_usage.auto_update && (
+                            <div style={{ padding: '8px', background: '#1e293b', borderRadius: '4px', fontSize: '13px', color: '#cbd5e1' }}>
+                              <strong>自动更新:</strong> {parseSummary.field_code_usage.auto_update}
+                            </div>
+                          )}
+                          {parseSummary.field_code_usage.plain_text_sections && parseSummary.field_code_usage.plain_text_sections.length > 0 && (
+                            <div style={{ padding: '8px', background: '#1e293b', borderRadius: '4px', fontSize: '13px', color: '#cbd5e1' }}>
+                              <strong>纯文字区段:</strong> {parseSummary.field_code_usage.plain_text_sections.join('、')}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 封面结构 */}
+                    {parseSummary.cover_structure && parseSummary.cover_structure.has_cover && (
+                      <div style={{ marginBottom: '20px', padding: '16px', background: '#2d3748', borderRadius: '8px' }}>
+                        <h4 style={{ margin: '0 0 12px 0', color: '#60a5fa' }}>📄 封面结构</h4>
+                        <div style={{ padding: '12px', background: '#1e293b', borderRadius: '6px' }}>
+                          <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', lineHeight: '2', color: '#cbd5e1' }}>
+                            {parseSummary.cover_structure.cover_elements.map((element: string, idx: number) => (
+                              <li key={idx}>{element}</li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div style={{ marginTop: '8px', fontSize: '12px', color: '#64748b' }}>
+                          📦 共 {parseSummary.cover_structure.cover_blocks_count} 个封面块
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
-                  <div className="kb-empty">模板尚未解析</div>
+                  <div style={{ padding: '40px', textAlign: 'center', color: '#94a3b8' }}>
+                    <div style={{ fontSize: '48px', marginBottom: '16px' }}>📋</div>
+                    <p style={{ fontSize: '16px', marginBottom: '8px' }}>暂无解析结构</p>
+                    <p style={{ fontSize: '14px', color: '#64748b' }}>模板分析完成后将显示详细的结构信息</p>
+                  </div>
                 )}
               </div>
             )}
@@ -1154,18 +1306,32 @@ export default function FormatTemplatesPage({ embedded, onBack }: Props) {
                   </div>
                 ) : (
                   <div className="kb-empty">
-                    <div style={{ marginBottom: '12px', fontSize: '16px' }}>模板尚未进行 LLM 分析</div>
-                    <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '16px' }}>
-                      点击上方"🔄 重新解析"按钮来生成分析结果
+                    <div style={{ marginBottom: '12px', fontSize: '18px', fontWeight: 'bold' }}>📋 模板尚未进行 LLM 分析</div>
+                    <div style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '20px', lineHeight: '1.6' }}>
+                      LLM 分析可以：<br/>
+                      • 自动识别模板结构和样式<br/>
+                      • 提取页眉页脚和特殊布局<br/>
+                      • 生成智能套用方案<br/><br/>
+                      <strong style={{ color: '#60a5fa' }}>点击下方按钮开始分析（需要 10-30 秒）</strong>
                     </div>
                     <button
                       className="sidebar-btn primary"
                       onClick={handleReanalyze}
                       disabled={!template || reanalyzing}
-                      style={{ fontSize: '14px', padding: '10px 20px' }}
+                      style={{ 
+                        fontSize: '16px', 
+                        padding: '12px 24px',
+                        fontWeight: 'bold',
+                        boxShadow: reanalyzing ? 'none' : '0 4px 12px rgba(96, 165, 250, 0.3)'
+                      }}
                     >
-                      {reanalyzing ? '🔄 分析中...' : '🔄 立即解析'}
+                      {reanalyzing ? '🔄 分析中，请稍候...' : '🚀 开始 LLM 分析'}
                     </button>
+                    {reanalyzing && (
+                      <div style={{ marginTop: '16px', fontSize: '13px', color: '#fbbf24' }}>
+                        ⏳ 正在调用 LLM 分析模板结构，请耐心等待...
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
