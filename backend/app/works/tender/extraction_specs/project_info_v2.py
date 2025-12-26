@@ -33,16 +33,23 @@ async def build_project_info_spec_async(pool=None) -> ExtractionSpec:
     import logging
     logger = logging.getLogger(__name__)
     
-    # 尝试从数据库加载prompt
+    # 尝试从数据库加载prompt（优先使用 V3 模块）
     prompt = None
     if pool:
         try:
             from app.services.prompt_loader import PromptLoaderService
             loader = PromptLoaderService(pool)
-            prompt = await loader.get_active_prompt("project_info")
+            # 优先尝试加载 V3 模块
+            prompt = await loader.get_active_prompt("project_info_v3")
             if prompt:
-                logger.info(f"✅ [Prompt] Loaded from DATABASE for project_info, length={len(prompt)}")
-                print(f"✅ [Prompt] Loaded from DATABASE for project_info, length={len(prompt)}")
+                logger.info(f"✅ [Prompt] Loaded from DATABASE for project_info_v3, length={len(prompt)}")
+                print(f"✅ [Prompt] Loaded from DATABASE for project_info_v3, length={len(prompt)}")
+            else:
+                # Fallback 到旧模块名（向后兼容）
+                prompt = await loader.get_active_prompt("project_info")
+                if prompt:
+                    logger.info(f"✅ [Prompt] Loaded from DATABASE for project_info (legacy), length={len(prompt)}")
+                    print(f"✅ [Prompt] Loaded from DATABASE for project_info (legacy), length={len(prompt)}")
         except Exception as e:
             logger.warning(f"⚠️ [Prompt] Failed to load from database: {e}")
             print(f"⚠️ [Prompt] Failed to load from database: {e}")

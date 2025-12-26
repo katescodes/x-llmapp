@@ -37,9 +37,9 @@ async def build_requirements_spec_async(pool=None) -> ExtractionSpec:
         try:
             from app.services.prompt_loader import PromptLoaderService
             loader = PromptLoaderService(pool)
-            prompt = await loader.get_active_prompt("requirements")
+            prompt = await loader.get_active_prompt("requirements_v1")
             if prompt:
-                logger.info(f"✅ [Prompt] Loaded from DATABASE for requirements, length={len(prompt)}")
+                logger.info(f"✅ [Prompt] Loaded from DATABASE for requirements_v1, length={len(prompt)}")
         except Exception as e:
             logger.warning(f"⚠️ [Prompt] Failed to load from database: {e}")
     
