@@ -274,6 +274,23 @@ class ExtractV2Service:
             f"stages_completed={len(stage_results)}/9"
         )
         
+        # ✅ Step 2.1: 追加调用 requirements 抽取（基准条款库）
+        try:
+            logger.info(f"ExtractV2: Starting requirements extraction for project={project_id}")
+            if run_id:
+                self.dao.update_run(run_id, "running", progress=0.95, message="正在生成招标要求基准条款库...")
+            
+            requirements = await self.extract_requirements_v1(
+                project_id=project_id,
+                model_id=model_id,
+                run_id=None,  # 不更新run状态，避免冲突
+            )
+            
+            logger.info(f"ExtractV2: Requirements extraction done - count={len(requirements)}")
+        except Exception as e:
+            logger.error(f"ExtractV2: Requirements extraction failed: {e}", exc_info=True)
+            # 不影响主流程，继续返回
+        
         # 返回完整结果
         return {
             **final_data,  # 直接展开九大类到顶层
@@ -352,6 +369,106 @@ class ExtractV2Service:
         logger.info(f"ExtractV2: extract_risks done risks={len(arr)}")
         
         return arr
+    
+    async def extract_requirements_v1(
+        self,
+        project_id: str,
+        model_id: Optional[str],
+        run_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        抽取招标要求 (v1) - 生成 tender_requirements 基准条款库
+        
+        从招标文件中抽取结构化的 requirements，用于后续审核
+        
+        Returns:
+            [
+                {
+                    "requirement_id": "qual_001",
+                    "dimension": "qualification",
+                    "req_type": "must_provide",
+                    "requirement_text": "...",
+                    "is_hard": true,
+                    "allow_deviation": false,
+                    "value_schema_json": {...},
+                    "evidence_chunk_ids": [...]
+                }
+            ]
+        """
+        logger.info(f"ExtractV2: extract_requirements start project_id={project_id}")
+        
+        # 1. 获取 embedding provider
+        embedding_provider = get_embedding_store().get_default()
+        if not embedding_provider:
+            raise ValueError("No embedding provider configured")
+        
+        # 2. 构建 spec
+        from app.works.tender.extraction_specs.requirements_v1 import build_requirements_spec_async
+        spec = await build_requirements_spec_async(self.pool)
+        
+        # 3. 调用引擎
+        result = await self.engine.run(
+            spec=spec,
+            retriever=self.retriever,
+            llm=self.llm,
+            project_id=project_id,
+            model_id=model_id,
+            run_id=run_id,
+            embedding_provider=embedding_provider,
+        )
+        
+        # 4. 解析结果
+        requirements = []
+        if isinstance(result.data, dict) and "requirements" in result.data:
+            requirements = result.data["requirements"]
+        elif isinstance(result.data, list):
+            requirements = result.data
+        
+        logger.info(
+            f"ExtractV2: extract_requirements done - "
+            f"requirements_count={len(requirements)}"
+        )
+        
+        # 5. 写入数据库
+        if requirements:
+            import uuid
+            
+            # 先删除旧的 requirements
+            with self.pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM tender_requirements WHERE project_id = %s",
+                        (project_id,)
+                    )
+                    conn.commit()
+            
+            # 插入新的 requirements
+            with self.pool.connection() as conn:
+                with conn.cursor() as cur:
+                    for req in requirements:
+                        cur.execute("""
+                            INSERT INTO tender_requirements (
+                                id, project_id, requirement_id, dimension, req_type,
+                                requirement_text, is_hard, allow_deviation, 
+                                value_schema_json, evidence_chunk_ids
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (
+                            str(uuid.uuid4()),
+                            project_id,
+                            req.get("requirement_id"),
+                            req.get("dimension"),
+                            req.get("req_type"),
+                            req.get("requirement_text"),
+                            req.get("is_hard", False),
+                            req.get("allow_deviation", False),
+                            req.get("value_schema_json"),  # JSONB
+                            req.get("evidence_chunk_ids", []),
+                        ))
+                    conn.commit()
+            
+            logger.info(f"ExtractV2: Saved {len(requirements)} requirements to DB")
+        
+        return requirements
     
     async def generate_directory_v2(
         self,
