@@ -23,40 +23,70 @@ type Props = {
 };
 
 /**
- * 渲染数组中的对象项（如商务条款、评分项等）
+ * 渲染对象数组为表格
  */
-const renderObjectItem = (item: any, idx: number, onEvidence?: (chunkIds: string[]) => void) => {
-  const fields = Object.entries(item).filter(([key]) => key !== 'evidence_chunk_ids');
-  const evidenceIds = item.evidence_chunk_ids || [];
+const renderObjectArrayTable = (
+  items: any[], 
+  onEvidence?: (chunkIds: string[]) => void
+) => {
+  if (items.length === 0) return null;
+  
+  // 获取所有可能的列（从第一个对象中提取，排除 evidence_chunk_ids）
+  const firstItem = items[0];
+  const columns = Object.keys(firstItem).filter(key => key !== 'evidence_chunk_ids');
   
   return (
-    <div key={idx} style={{ 
-      padding: '12px', 
-      marginBottom: idx < fields.length - 1 ? '8px' : 0,
-      background: 'rgba(15, 23, 42, 0.4)',
-      borderRadius: '6px',
-      border: '1px solid rgba(148, 163, 184, 0.2)'
-    }}>
-      {fields.map(([key, val]) => {
-        const fieldLabel = getFieldLabel(key);
-        return (
-          <div key={key} style={{ marginBottom: '6px', fontSize: '13px' }}>
-            <span style={{ color: '#94a3b8', marginRight: '8px' }}>{fieldLabel}:</span>
-            <span style={{ color: '#e2e8f0' }}>
-              {typeof val === 'boolean' ? (val ? '是' : '否') : String(val || '—')}
-            </span>
-          </div>
-        );
-      })}
-      {evidenceIds.length > 0 && onEvidence && (
-        <button 
-          onClick={() => onEvidence(evidenceIds)}
-          className="link-button"
-          style={{ marginTop: '6px', fontSize: '12px' }}
-        >
-          📎 证据 ({evidenceIds.length})
-        </button>
-      )}
+    <div className="tender-table-wrap" style={{ marginTop: 10 }}>
+      <table className="tender-table">
+        <thead>
+          <tr>
+            {columns.map(col => (
+              <th key={col}>{getFieldLabel(col)}</th>
+            ))}
+            <th style={{ width: 100 }}>证据</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item, idx) => {
+            const evidenceIds = item.evidence_chunk_ids || [];
+            return (
+              <tr key={idx}>
+                {columns.map(col => {
+                  const val = item[col];
+                  let displayValue = '—';
+                  
+                  if (val !== null && val !== undefined && val !== '') {
+                    if (typeof val === 'boolean') {
+                      displayValue = val ? '是' : '否';
+                    } else if (Array.isArray(val)) {
+                      displayValue = val.join('、');
+                    } else {
+                      displayValue = String(val);
+                    }
+                  }
+                  
+                  return (
+                    <td key={col} className="tender-cell">
+                      {displayValue}
+                    </td>
+                  );
+                })}
+                <td>
+                  {evidenceIds.length > 0 && onEvidence && (
+                    <button 
+                      onClick={() => onEvidence(evidenceIds)}
+                      className="link-button"
+                      style={{ fontSize: '12px' }}
+                    >
+                      📎 ({evidenceIds.length})
+                    </button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 };
@@ -84,24 +114,29 @@ const renderField = (
     const hasObjects = value.some(item => typeof item === 'object' && item !== null);
     
     if (hasObjects) {
-      // 渲染结构化对象数组
+      // 渲染为表格
       return (
-        <div key={label} className="tender-kv-item" style={{ gridColumn: '1 / -1' }}>
-          <div className="tender-kv-label">
-            {label} ({value.length} 项)
+        <div key={label} style={{ gridColumn: '1 / -1', marginTop: 16 }}>
+          <div style={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center',
+            marginBottom: 8 
+          }}>
+            <div style={{ fontWeight: 600, fontSize: '14px' }}>
+              {label} ({value.length} 项)
+            </div>
             {evidenceIds.length > 0 && onEvidence && (
               <button 
                 onClick={() => onEvidence(evidenceIds)}
                 className="link-button"
-                style={{ marginLeft: 8, fontSize: '12px' }}
+                style={{ fontSize: '12px' }}
               >
                 📎 证据 ({evidenceIds.length})
               </button>
             )}
           </div>
-          <div className="tender-kv-value">
-            {value.map((item, idx) => renderObjectItem(item, idx, onEvidence))}
-          </div>
+          {renderObjectArrayTable(value, onEvidence)}
         </div>
       );
     } else {
