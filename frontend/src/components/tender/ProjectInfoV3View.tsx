@@ -12,8 +12,9 @@ import {
   TenderInfoV3, 
   isTenderInfoV3,
   TENDER_INFO_V3_CATEGORIES,
-  TENDER_INFO_V3_CATEGORY_LABELS 
-} from '@/types/tenderInfoV3';
+  TENDER_INFO_V3_CATEGORY_LABELS,
+  TenderInfoV3Category
+} from '../../types/tenderInfoV3';
 
 type Props = {
   info: Record<string, any>;
@@ -121,7 +122,7 @@ const renderV3Category = (
   if (fields.length === 0) return null;
 
   return (
-    <div className="source-card" style={{ marginBottom: 16 }} key={categoryKey}>
+    <div className="source-card" style={{ marginBottom: 16 }} key={categoryKey as string}>
       <div style={{ 
         display: 'flex', 
         justifyContent: 'space-between', 

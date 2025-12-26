@@ -7,6 +7,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { api } from '../config/api';
 import ProjectInfoView from './tender/ProjectInfoView';
+import ProjectInfoV3View from './tender/ProjectInfoV3View';
 import RiskToolbar, { RiskFilters } from './tender/RiskToolbar';
 import RiskList from './tender/RiskList';
 import RiskDetail from './tender/RiskDetail';
@@ -190,11 +191,58 @@ export default function TenderWorkspace() {
     window.setTimeout(() => setToast(null), kind === 'error' ? 5000 : 3500); // 错误提示显示更久
   }, []);
   
+  // ✅ 项目run状态缓存（切换项目时不丢失）
+  const projectRunsCacheRef = useRef<Map<string, {
+    infoRun: TenderRun | null;
+    riskRun: TenderRun | null;
+    dirRun: TenderRun | null;
+    reviewRun: TenderRun | null;
+  }>>(new Map());
+  
   // Step5: 审核（改为选择规则文件资产）
   const [selectedBidder, setSelectedBidder] = useState('');
   const [selectedRuleAssetIds, setSelectedRuleAssetIds] = useState<string[]>([]);
   const [reviewItems, setReviewItems] = useState<ReviewItem[]>([]);
   const [reviewRun, setReviewRun] = useState<TenderRun | null>(null);
+
+  // ✅ 保存当前项目的run状态到缓存（移到所有state声明之后）
+  const saveCurrentProjectRuns = useCallback(() => {
+    if (!currentProject) return;
+    projectRunsCacheRef.current.set(currentProject.id, {
+      infoRun,
+      riskRun,
+      dirRun,
+      reviewRun,
+    });
+    console.log('[saveCurrentProjectRuns] 已保存项目run状态:', currentProject.id, { infoRun, riskRun, dirRun, reviewRun });
+  }, [currentProject, infoRun, riskRun, dirRun, reviewRun]);
+
+  // ✅ 每次run状态变化时，自动保存到缓存
+  useEffect(() => {
+    if (currentProject) {
+      saveCurrentProjectRuns();
+    }
+  }, [infoRun, riskRun, dirRun, reviewRun, currentProject, saveCurrentProjectRuns]);
+
+  // ✅ 恢复目标项目的run状态从缓存（只恢复状态，不恢复轮询）
+  const restoreProjectRuns = useCallback((projectId: string) => {
+    const cached = projectRunsCacheRef.current.get(projectId);
+    if (cached) {
+      console.log('[restoreProjectRuns] 恢复项目run状态:', projectId, cached);
+      setInfoRun(cached.infoRun);
+      setRiskRun(cached.riskRun);
+      setDirRun(cached.dirRun);
+      setReviewRun(cached.reviewRun);
+      return cached;
+    } else {
+      console.log('[restoreProjectRuns] 无缓存，清空run状态');
+      setInfoRun(null);
+      setRiskRun(null);
+      setDirRun(null);
+      setReviewRun(null);
+      return null;
+    }
+  }, []);
   
   // 证据面板
   const [evidencePanelOpen, setEvidencePanelOpen] = useState(true);
@@ -317,32 +365,78 @@ export default function TenderWorkspace() {
     }
   }, [currentProject]);
 
-  const loadProjectInfo = useCallback(async () => {
-    if (!currentProject) return;
+  const loadProjectInfo = useCallback(async (forceProjectId?: string) => {
+    // 使用传入的projectId或当前项目ID
+    const projectId = forceProjectId || currentProject?.id;
+    if (!projectId) return;
+    
+    // ✅ 加载前再次验证项目ID是否匹配（防止切换项目时加载错误数据）
+    if (!forceProjectId && currentProject && currentProject.id !== projectId) {
+      console.log('[loadProjectInfo] 项目已切换，跳过加载', { expectedProjectId: projectId, currentProjectId: currentProject.id });
+      return;
+    }
+    
     try {
-      const data = await api.get(`/api/apps/tender/projects/${currentProject.id}/project-info`);
+      const data = await api.get(`/api/apps/tender/projects/${projectId}/project-info`);
+      
+      // ✅ 加载后再次验证项目ID（防止异步加载完成时项目已切换）
+      if (currentProject && currentProject.id !== projectId) {
+        console.log('[loadProjectInfo] 加载完成时项目已切换，丢弃数据', { expectedProjectId: projectId, currentProjectId: currentProject.id });
+        return;
+      }
+      
       setProjectInfo(data);
     } catch (err) {
       console.error('Failed to load project info:', err);
     }
   }, [currentProject]);
 
-  const loadRisks = useCallback(async () => {
-    if (!currentProject) return;
+  const loadRisks = useCallback(async (forceProjectId?: string) => {
+    const projectId = forceProjectId || currentProject?.id;
+    if (!projectId) return;
+    
+    // ✅ 加载前验证项目ID
+    if (!forceProjectId && currentProject && currentProject.id !== projectId) {
+      console.log('[loadRisks] 项目已切换，跳过加载');
+      return;
+    }
+    
     try {
-      const data = await api.get(`/api/apps/tender/projects/${currentProject.id}/risks`);
+      const data = await api.get(`/api/apps/tender/projects/${projectId}/risks`);
+      
+      // ✅ 加载后验证项目ID
+      if (currentProject && currentProject.id !== projectId) {
+        console.log('[loadRisks] 加载完成时项目已切换，丢弃数据');
+        return;
+      }
+      
       setRisks(data);
     } catch (err) {
       console.error('Failed to load risks:', err);
     }
   }, [currentProject]);
 
-  const loadDirectory = useCallback(async (): Promise<DirectoryNode[]> => {
-    if (!currentProject) return [];
+  const loadDirectory = useCallback(async (forceProjectId?: string): Promise<DirectoryNode[]> => {
+    const projectId = forceProjectId || currentProject?.id;
+    if (!projectId) return [];
+    
+    // ✅ 加载前验证项目ID
+    if (!forceProjectId && currentProject && currentProject.id !== projectId) {
+      console.log('[loadDirectory] 项目已切换，跳过加载');
+      return [];
+    }
+    
     try {
-      console.log('[loadDirectory] 开始加载目录，项目ID:', currentProject.id);
-      const data = await api.get(`/api/apps/tender/projects/${currentProject.id}/directory`);
+      console.log('[loadDirectory] 开始加载目录，项目ID:', projectId);
+      const data = await api.get(`/api/apps/tender/projects/${projectId}/directory`);
       console.log('[loadDirectory] 加载到的目录数据:', data);
+      
+      // ✅ 加载后验证项目ID
+      if (currentProject && currentProject.id !== projectId) {
+        console.log('[loadDirectory] 加载完成时项目已切换，丢弃数据');
+        return [];
+      }
+      
       setDirectory(data);
       return data as DirectoryNode[];
     } catch (err) {
@@ -490,13 +584,28 @@ export default function TenderWorkspace() {
 
   // loadRuleSets 已删除 - 规则文件现在直接从 assets 中筛选
 
-  const loadReview = useCallback(async () => {
-    if (!currentProject) return;
+  const loadReview = useCallback(async (forceProjectId?: string) => {
+    const projectId = forceProjectId || currentProject?.id;
+    if (!projectId) return;
+    
+    // ✅ 加载前验证项目ID
+    if (!forceProjectId && currentProject && currentProject.id !== projectId) {
+      console.log('[loadReview] 项目已切换，跳过加载');
+      return;
+    }
+    
     try {
-      const data = await api.get(`/api/apps/tender/projects/${currentProject.id}/review`);
+      const data = await api.get(`/api/apps/tender/projects/${projectId}/review`);
       console.log('[loadReview] 获取到审核数据:', data);
       console.log('[loadReview] 数据类型:', Array.isArray(data) ? 'Array' : typeof data);
       console.log('[loadReview] 数据长度:', data?.length);
+      
+      // ✅ 加载后验证项目ID
+      if (currentProject && currentProject.id !== projectId) {
+        console.log('[loadReview] 加载完成时项目已切换，丢弃数据');
+        return;
+      }
+      
       setReviewItems(data);
       console.log('[loadReview] setReviewItems 调用完成');
     } catch (err) {
@@ -526,10 +635,24 @@ export default function TenderWorkspace() {
   };
 
   const selectProject = (proj: TenderProject) => {
+    console.log('[selectProject] 切换项目:', { from: currentProject?.id, to: proj.id });
+    
+    // ✅ 1. 保存当前项目的run状态
+    saveCurrentProjectRuns();
+    
+    // ✅ 2. 停止正在进行的轮询
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+      console.log('[selectProject] 已停止轮询');
+    }
+    
+    // ✅ 3. 更新当前项目
     setCurrentProject(proj);
     setActiveTab(1);
     setViewMode("projectInfo");
-    // 清空状态
+    
+    // ✅ 4. 清空数据状态（但不清空run状态）
     setAssets([]);
     setProjectInfo(null);
     setRisks([]);
@@ -542,6 +665,7 @@ export default function TenderWorkspace() {
     setSamplePreviewById({});
     setSelectedFormatTemplateId("");
     setTocStyleVars(null);
+    
     // 清空格式预览相关状态（避免 403 错误）
     setPreviewMode("content");
     setFormatPreviewUrl("");
@@ -550,7 +674,44 @@ export default function TenderWorkspace() {
       URL.revokeObjectURL(formatPreviewBlobUrl);
     }
     setFormatPreviewBlobUrl("");
+    
+    // ✅ 5. 恢复目标项目的run状态（轮询将在useEffect中恢复）
+    restoreProjectRuns(proj.id);
   };
+  
+  // ✅ 当项目切换且run状态恢复后，自动恢复running任务的轮询
+  useEffect(() => {
+    if (!currentProject) return;
+    
+    const projectId = currentProject.id;
+    
+    // 恢复各个running任务的轮询
+    if (infoRun?.status === 'running' && infoRun.id) {
+      console.log('[useEffect] 恢复项目信息抽取轮询:', infoRun.id);
+      pollRun(infoRun.id, projectId, () => loadProjectInfo(projectId));
+    }
+    
+    if (riskRun?.status === 'running' && riskRun.id) {
+      console.log('[useEffect] 恢复风险识别轮询:', riskRun.id);
+      pollRun(riskRun.id, projectId, () => loadRisks(projectId));
+    }
+    
+    if (dirRun?.status === 'running' && dirRun.id) {
+      console.log('[useEffect] 恢复目录生成轮询:', dirRun.id);
+      pollRun(dirRun.id, projectId, async () => {
+        const nodes = await loadDirectory(projectId);
+        if (nodes.length > 0) {
+          await loadBodiesForAllNodes(nodes);
+        }
+        await loadSampleFragments();
+      });
+    }
+    
+    if (reviewRun?.status === 'running' && reviewRun.id) {
+      console.log('[useEffect] 恢复审核轮询:', reviewRun.id);
+      pollRun(reviewRun.id, projectId, () => loadReview(projectId));
+    }
+  }, [currentProject, infoRun?.id, riskRun?.id, dirRun?.id, reviewRun?.id]); // 只监听id变化，避免频繁触发
   
   // 编辑项目
   const openEditProject = (proj: TenderProject) => {
@@ -689,13 +850,23 @@ export default function TenderWorkspace() {
 
   // -------------------- Run 轮询 --------------------
 
-  const pollRun = useCallback(async (runId: string, onSuccess: () => void) => {
+  const pollRun = useCallback(async (runId: string, projectId: string, onSuccess: () => void) => {
     if (pollTimerRef.current) {
       clearInterval(pollTimerRef.current);
     }
 
     const check = async () => {
       try {
+        // ✅ 检查当前项目是否仍然是启动轮询时的项目
+        if (!currentProject || currentProject.id !== projectId) {
+          console.log('[pollRun] 项目已切换，停止轮询', { runId, expectedProjectId: projectId, currentProjectId: currentProject?.id });
+          if (pollTimerRef.current) {
+            clearInterval(pollTimerRef.current);
+            pollTimerRef.current = null;
+          }
+          return;
+        }
+        
         const run: TenderRun = await api.get(`/api/apps/tender/runs/${runId}`);
         
         if (run.status === 'success') {
@@ -704,22 +875,46 @@ export default function TenderWorkspace() {
             clearInterval(pollTimerRef.current);
             pollTimerRef.current = null;
           }
-          onSuccess();
+          // ✅ 再次验证项目ID后才调用onSuccess
+          if (currentProject && currentProject.id === projectId) {
+            onSuccess();
+          } else {
+            console.log('[pollRun] 任务成功但项目已切换，跳过onSuccess回调');
+          }
         } else if (run.status === 'failed') {
           console.error('[pollRun] 任务失败:', { runId, kind: run.kind, message: run.message });
           if (pollTimerRef.current) {
             clearInterval(pollTimerRef.current);
             pollTimerRef.current = null;
           }
-          alert(`任务失败: ${run.message || 'unknown error'}`);
+          // ✅ 只有当前项目匹配时才显示错误
+          if (currentProject && currentProject.id === projectId) {
+            alert(`任务失败: ${run.message || 'unknown error'}`);
+          }
+        } else if (run.status === 'running') {
+          // ✅ 运行中：增量加载数据（项目信息四阶段）
+          if (run.kind === 'extract_project_info' && currentProject && currentProject.id === projectId) {
+            // 静默加载，使用projectId参数确保加载正确的项目数据
+            api.get(`/api/apps/tender/projects/${projectId}/project-info`)
+              .then(data => {
+                // 加载完成后再次验证项目ID
+                if (currentProject && currentProject.id === projectId) {
+                  setProjectInfo(data);
+                } else {
+                  console.log('[pollRun] 增量加载完成但项目已切换，丢弃数据');
+                }
+              })
+              .catch(err => console.warn('增量加载项目信息失败:', err));
+          }
         }
         
-        // 更新对应的 run 状态
-        if (run.kind === 'extract_project_info') setInfoRun(run);
-        else if (run.kind === 'extract_risks') setRiskRun(run);
-        else if (run.kind === 'generate_directory') setDirRun(run);
-        // extract_rule_set 已删除
-        else if (run.kind === 'review') setReviewRun(run);
+        // ✅ 只有当前项目匹配时才更新run状态
+        if (currentProject && currentProject.id === projectId) {
+          if (run.kind === 'extract_project_info') setInfoRun(run);
+          else if (run.kind === 'extract_risks') setRiskRun(run);
+          else if (run.kind === 'generate_directory') setDirRun(run);
+          else if (run.kind === 'review') setReviewRun(run);
+        }
       } catch (err) {
         console.error('Poll run failed:', err);
       }
@@ -727,7 +922,7 @@ export default function TenderWorkspace() {
 
     await check();
     pollTimerRef.current = setInterval(check, 2000);
-  }, []);
+  }, [currentProject]);
 
   useEffect(() => {
     return () => {
@@ -741,32 +936,54 @@ export default function TenderWorkspace() {
   
   const extractProjectInfo = async () => {
     if (!currentProject) return;
+    const projectId = currentProject.id; // ✅ 捕获当前项目ID
+    // 清空旧的项目信息
+    setProjectInfo(null);
     try {
-      const res = await api.post(`/api/apps/tender/projects/${currentProject.id}/extract/project-info`, { model_id: null });
-      pollRun(res.run_id, loadProjectInfo);
+      const res = await api.post(`/api/apps/tender/projects/${projectId}/extract/project-info`, { model_id: null });
+      // 设置新的run状态（此时后端已创建run记录）
+      setInfoRun({ id: res.run_id, status: 'running', progress: 0, message: '开始抽取...', kind: 'extract_project_info' } as TenderRun);
+      // ✅ 传入projectId，确保回调使用正确的项目
+      pollRun(res.run_id, projectId, () => loadProjectInfo(projectId));
     } catch (err) {
       alert(`抽取失败: ${err}`);
+      setInfoRun(null);
     }
   };
 
   const extractRisks = async () => {
     if (!currentProject) return;
+    const projectId = currentProject.id; // ✅ 捕获当前项目ID
+    // 清空旧的风险
+    setRisks([]);
+    setSelectedRiskId(null);
     try {
-      const res = await api.post(`/api/apps/tender/projects/${currentProject.id}/extract/risks`, { model_id: null });
-      pollRun(res.run_id, loadRisks);
+      const res = await api.post(`/api/apps/tender/projects/${projectId}/extract/risks`, { model_id: null });
+      // 设置新的run状态
+      setRiskRun({ id: res.run_id, status: 'running', progress: 0, message: '开始识别...', kind: 'extract_risks' } as TenderRun);
+      // ✅ 传入projectId
+      pollRun(res.run_id, projectId, () => loadRisks(projectId));
     } catch (err) {
       alert(`识别失败: ${err}`);
+      setRiskRun(null);
     }
   };
 
   const generateDirectory = async () => {
     if (!currentProject) return;
+    const projectId = currentProject.id; // ✅ 捕获当前项目ID
+    // 清空旧的目录
+    setDirectory([]);
+    setBodyByNodeId({});
     try {
-      console.log('[generateDirectory] 开始生成目录，项目ID:', currentProject.id);
-      const res = await api.post(`/api/apps/tender/projects/${currentProject.id}/directory/generate`, { model_id: null });
+      console.log('[generateDirectory] 开始生成目录，项目ID:', projectId);
+      const res = await api.post(`/api/apps/tender/projects/${projectId}/directory/generate`, { model_id: null });
       console.log('[generateDirectory] 生成目录任务已提交，run_id:', res.run_id);
-      pollRun(res.run_id, async () => {
-        const nodes = await loadDirectoryWithBodyMeta();
+      // 设置新的run状态
+      setDirRun({ id: res.run_id, status: 'running', progress: 0, message: '开始生成...', kind: 'generate_directory' } as TenderRun);
+      // ✅ 传入projectId，确保回调使用正确的项目
+      pollRun(res.run_id, projectId, async () => {
+        const nodes = await loadDirectory(projectId);
         console.log('[generateDirectory] 后端返回目录(前5条title):', (nodes || []).slice(0, 5).map(n => n?.title));
         if (nodes.length > 0) {
           await loadBodiesForAllNodes(nodes);
@@ -777,6 +994,7 @@ export default function TenderWorkspace() {
     } catch (err) {
       console.error('[generateDirectory] 生成失败:', err);
       alert(`生成失败: ${err}`);
+      setDirRun(null);
     }
   };
 
@@ -899,21 +1117,26 @@ export default function TenderWorkspace() {
 
   const runReview = async () => {
     if (!currentProject) return;
+    const projectId = currentProject.id; // ✅ 捕获当前项目ID
     if (!selectedBidder && assetsByKind.bid.length > 0) {
       alert('请选择投标人');
       return;
     }
     
     try {
-      const res = await api.post(`/api/apps/tender/projects/${currentProject.id}/review/run`, {
+      const res = await api.post(`/api/apps/tender/projects/${projectId}/review/run`, {
         model_id: null,
         custom_rule_asset_ids: selectedRuleAssetIds,
         bidder_name: selectedBidder || undefined,
         bid_asset_ids: [],
       });
-      pollRun(res.run_id, loadReview);
+      // 设置新的run状态
+      setReviewRun({ id: res.run_id, status: 'running', progress: 0, message: '开始审核...', kind: 'review' } as TenderRun);
+      // ✅ 传入projectId
+      pollRun(res.run_id, projectId, () => loadReview(projectId));
     } catch (err) {
       alert(`审核失败: ${err}`);
+      setReviewRun(null);
     }
   };
 
@@ -1427,7 +1650,7 @@ export default function TenderWorkspace() {
                   {infoRun && (
                     <div className="kb-import-results">
                       <div className="kb-import-item">
-                        状态: {infoRun.status} {infoRun.progress && `- ${infoRun.progress}%`}
+                        状态: {infoRun.status}
                       </div>
                       {infoRun.message && (
                         <div className="kb-import-item">{infoRun.message}</div>
@@ -1437,7 +1660,8 @@ export default function TenderWorkspace() {
                   
                   {projectInfo && (
                     <div style={{ marginTop: '16px' }}>
-                      <ProjectInfoView info={projectInfo.data_json} onEvidence={showEvidence} />
+                      {/* 使用 V3 组件展示九大类信息 */}
+                      <ProjectInfoV3View info={projectInfo.data_json} onEvidence={showEvidence} />
                       {projectInfo.evidence_chunk_ids.length > 0 && (
                         <button
                           onClick={() => showEvidence(projectInfo.evidence_chunk_ids)}
@@ -1470,7 +1694,7 @@ export default function TenderWorkspace() {
                   {riskRun && (
                     <div className="kb-import-results">
                       <div className="kb-import-item">
-                        状态: {riskRun.status} {riskRun.progress && `- ${riskRun.progress}%`}
+                        状态: {riskRun.status}
                       </div>
                       {riskRun.message && (
                         <div className="kb-import-item">{riskRun.message}</div>
@@ -1522,7 +1746,7 @@ export default function TenderWorkspace() {
                     {dirRun && (
                       <div className="kb-import-results">
                         <div className="kb-import-item">
-                          状态: {dirRun.status} {dirRun.progress && `- ${dirRun.progress}%`}
+                          状态: {dirRun.status}
                         </div>
                         {dirRun.message && (
                           <div className="kb-import-item" style={{ 
@@ -1785,7 +2009,7 @@ export default function TenderWorkspace() {
                   {reviewRun && (
                     <div className="kb-import-results">
                       <div className="kb-import-item">
-                        状态: {reviewRun.status} {reviewRun.progress && `- ${reviewRun.progress}%`}
+                        状态: {reviewRun.status}
                       </div>
                     </div>
                   )}

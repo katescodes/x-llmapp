@@ -231,9 +231,14 @@ export const TENDER_INFO_V3_CATEGORIES = [
 ] as const;
 
 /**
+ * V3 类别类型（从常量推导）
+ */
+export type TenderInfoV3Category = typeof TENDER_INFO_V3_CATEGORIES[number];
+
+/**
  * 类别显示名称映射
  */
-export const TENDER_INFO_V3_CATEGORY_LABELS: Record<string, string> = {
+export const TENDER_INFO_V3_CATEGORY_LABELS: Record<TenderInfoV3Category, string> = {
   project_overview: "项目概况",
   scope_and_lots: "范围与标段",
   schedule_and_submission: "进度与提交",
