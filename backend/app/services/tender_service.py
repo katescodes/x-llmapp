@@ -852,18 +852,15 @@ class TenderService:
             eids = v2_result.get("evidence_chunk_ids") or []
             trace = v2_result.get("retrieval_trace") or {}
             
-            # ✅ 构建要保存的数据：只保留核心字段（九大类 + schema_version）
+            # ✅ 构建要保存的数据：只保留核心字段（六大类 + schema_version）
             data_to_save = {
                 "schema_version": v2_result.get("schema_version", "tender_info_v3"),
                 "project_overview": v2_result.get("project_overview", {}),
-                "scope_and_lots": v2_result.get("scope_and_lots", {}),
-                "schedule_and_submission": v2_result.get("schedule_and_submission", {}),
                 "bidder_qualification": v2_result.get("bidder_qualification", {}),
                 "evaluation_and_scoring": v2_result.get("evaluation_and_scoring", {}),
                 "business_terms": v2_result.get("business_terms", {}),
                 "technical_requirements": v2_result.get("technical_requirements", {}),
                 "document_preparation": v2_result.get("document_preparation", {}),
-                "bid_security": v2_result.get("bid_security", {}),
             }
             
             obj = {"data_json": data_to_save, "evidence_chunk_ids": eids}

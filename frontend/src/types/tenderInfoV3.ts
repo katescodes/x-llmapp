@@ -1,7 +1,7 @@
 /**
  * Tender Info V3 类型定义
  * 
- * 对应后端 tender_info_v3.py 的九大类结构
+ * 对应后端 tender_info_v3.py 的六大类结构（已合并范围、进度、保证金到项目概况）
  */
 
 /**
@@ -10,65 +10,61 @@
 export type TenderInfoSchemaVersion = "tender_info_v3";
 
 /**
- * 1. 项目概况
+ * 标段信息
+ */
+export interface LotInfo {
+  lot_number?: string;
+  lot_name?: string;
+  scope?: string;
+  budget?: string;
+  evidence_chunk_ids?: string[];
+}
+
+/**
+ * 1. 项目概况（合并版：包含基本信息、范围、进度、保证金）
  */
 export interface ProjectOverview {
+  // 基本信息
   project_name?: string;
   project_number?: string;
-  budget_amount?: number;
-  control_price?: number;
-  max_price?: number;
-  purchaser?: string;
-  bidding_agent?: string;
-  owner?: string;
-  agency?: string;
+  owner_name?: string;
+  agency_name?: string;
   contact_person?: string;
   contact_phone?: string;
-  project_duration?: string;
-  quality_standard?: string;
-  funding_source?: string;
+  project_location?: string;
+  fund_source?: string;
   procurement_method?: string;
-  evaluation_method?: string;
-  evidence_chunk_ids?: string[];
-}
-
-/**
- * 2. 范围与标段
- */
-export interface ScopeAndLots {
-  lot_division?: string[];
-  procurement_packages?: string[];
-  procurement_content?: string;
-  procurement_scope?: string;
-  quantity_and_unit?: Array<{ item: string; quantity: number; unit: string }>;
-  delivery_location?: string;
-  delivery_time?: string;
-  service_scope?: string;
-  service_requirements?: string[];
-  evidence_chunk_ids?: string[];
-}
-
-/**
- * 3. 进度与提交
- */
-export interface ScheduleAndSubmission {
+  budget?: string;
+  max_price?: string;
+  
+  // 范围与标段
+  project_scope?: string;
+  lot_division?: string;
+  lots?: LotInfo[];
+  
+  // 进度与递交
   bid_deadline?: string;
-  submission_deadline?: string;
-  opening_time?: string;
-  bid_validity_period?: string;
-  performance_bond?: number;
-  bid_bond?: number;
-  bond_payment_method?: string;
-  bond_refund_time?: string;
-  bid_document_format?: string;
-  bid_document_copies?: number;
-  sealing_requirements?: string;
+  bid_opening_time?: string;
+  bid_opening_location?: string;
   submission_method?: string;
+  submission_address?: string;
+  implementation_schedule?: string;
+  key_milestones?: string;
+  
+  // 保证金与担保
+  bid_bond_amount?: string;
+  bid_bond_form?: string;
+  bid_bond_deadline?: string;
+  bid_bond_return?: string;
+  performance_bond?: string;
+  other_guarantees?: string;
+  
   evidence_chunk_ids?: string[];
+  [key: string]: any;  // 允许其他字段
 }
 
 /**
- * 4. 投标人资格
+ * 2. 投标人资格
  */
 export interface BidderQualification {
   qualification_requirements?: string[];
@@ -89,7 +85,7 @@ export interface BidderQualification {
 }
 
 /**
- * 5. 评审与评分
+ * 3. 评审与评分
  */
 export interface EvaluationAndScoring {
   evaluation_method?: string;
@@ -108,7 +104,7 @@ export interface EvaluationAndScoring {
 }
 
 /**
- * 6. 商务条款
+ * 4. 商务条款
  */
 export interface BusinessTerms {
   contract_terms?: string[];
@@ -128,7 +124,7 @@ export interface BusinessTerms {
 }
 
 /**
- * 7. 技术要求
+ * 5. 技术要求
  */
 export interface TechnicalRequirements {
   technical_specifications?: string[];
@@ -143,7 +139,7 @@ export interface TechnicalRequirements {
 }
 
 /**
- * 8. 文件编制
+ * 6. 文件编制
  */
 export interface DocumentPreparation {
   bid_document_structure?: string[];
@@ -170,31 +166,17 @@ export interface DocumentPreparation {
 /**
  * 9. 投标保证金
  */
-export interface BidSecurity {
-  bid_bond_amount?: number;
-  performance_bond_amount?: number;
-  payment_method?: string;
-  submission_form?: string;
-  refund_conditions?: string[];
-  guarantee_letter_required?: boolean;
-  bank_guarantee_required?: boolean;
-  evidence_chunk_ids?: string[];
-}
-
 /**
- * Tender Info V3 顶层结构
+ * Tender Info V3 顶层结构（六大类）
  */
 export interface TenderInfoV3 {
   schema_version: TenderInfoSchemaVersion;
   project_overview: ProjectOverview;
-  scope_and_lots: ScopeAndLots;
-  schedule_and_submission: ScheduleAndSubmission;
   bidder_qualification: BidderQualification;
   evaluation_and_scoring: EvaluationAndScoring;
   business_terms: BusinessTerms;
   technical_requirements: TechnicalRequirements;
   document_preparation: DocumentPreparation;
-  bid_security: BidSecurity;
 }
 
 /**
@@ -220,14 +202,11 @@ export function isTenderInfoV3(data: any): data is TenderInfoV3 {
  */
 export const TENDER_INFO_V3_CATEGORIES = [
   "project_overview",
-  "scope_and_lots",
-  "schedule_and_submission",
   "bidder_qualification",
   "evaluation_and_scoring",
   "business_terms",
   "technical_requirements",
   "document_preparation",
-  "bid_security",
 ] as const;
 
 /**
@@ -239,14 +218,11 @@ export type TenderInfoV3Category = typeof TENDER_INFO_V3_CATEGORIES[number];
  * 类别显示名称映射
  */
 export const TENDER_INFO_V3_CATEGORY_LABELS: Record<TenderInfoV3Category, string> = {
-  project_overview: "项目概况",
-  scope_and_lots: "范围与标段",
-  schedule_and_submission: "进度与提交",
+  project_overview: "项目概况（含范围、进度、保证金）",
   bidder_qualification: "投标人资格",
   evaluation_and_scoring: "评审与评分",
   business_terms: "商务条款",
   technical_requirements: "技术要求",
   document_preparation: "文件编制",
-  bid_security: "投标保证金",
 };
 

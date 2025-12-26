@@ -133,37 +133,31 @@ class ExtractV2Service:
         embedding_provider: str,
     ) -> Dict[str, Any]:
         """
-        九阶段顺序抽取项目信息（V3版本）
+        六阶段顺序抽取项目信息（V3版本 - 合并版）
         
-        Stage 1: project_overview (项目概览)
-        Stage 2: scope_and_lots (范围与标段)
-        Stage 3: schedule_and_submission (进度与递交)
-        Stage 4: bidder_qualification (投标人资格)
-        Stage 5: evaluation_and_scoring (评审与评分)
-        Stage 6: business_terms (商务条款)
-        Stage 7: technical_requirements (技术要求)
-        Stage 8: document_preparation (文件编制)
-        Stage 9: bid_security (保证金与担保)
+        Stage 1: project_overview (项目概览 - 含范围、进度、保证金)
+        Stage 2: bidder_qualification (投标人资格)
+        Stage 3: evaluation_and_scoring (评审与评分)
+        Stage 4: business_terms (商务条款)
+        Stage 5: technical_requirements (技术要求)
+        Stage 6: document_preparation (文件编制)
         """
         import json
         from app.works.tender.extraction_specs.project_info_v2 import build_project_info_spec_async
         
-        logger.info(f"ExtractV2: Starting STAGED extraction (V3 - 9 stages) for project={project_id}")
+        logger.info(f"ExtractV2: Starting STAGED extraction (V3 - 6 stages) for project={project_id}")
         
         # 构建统一的 spec（从 project_info 模块加载）
         spec = await build_project_info_spec_async(self.pool)
         
-        # 定义九个阶段
+        # 定义六个阶段
         stages = [
             {"stage": 1, "name": "项目概览", "key": "project_overview"},
-            {"stage": 2, "name": "范围与标段", "key": "scope_and_lots"},
-            {"stage": 3, "name": "进度与递交", "key": "schedule_and_submission"},
-            {"stage": 4, "name": "投标人资格", "key": "bidder_qualification"},
-            {"stage": 5, "name": "评审与评分", "key": "evaluation_and_scoring"},
-            {"stage": 6, "name": "商务条款", "key": "business_terms"},
-            {"stage": 7, "name": "技术要求", "key": "technical_requirements"},
-            {"stage": 8, "name": "文件编制", "key": "document_preparation"},
-            {"stage": 9, "name": "保证金与担保", "key": "bid_security"},
+            {"stage": 2, "name": "投标人资格", "key": "bidder_qualification"},
+            {"stage": 3, "name": "评审与评分", "key": "evaluation_and_scoring"},
+            {"stage": 4, "name": "商务条款", "key": "business_terms"},
+            {"stage": 5, "name": "技术要求", "key": "technical_requirements"},
+            {"stage": 6, "name": "文件编制", "key": "document_preparation"},
         ]
         
         # 存储各阶段结果
@@ -172,13 +166,13 @@ class ExtractV2Service:
         all_evidence_spans = []
         all_traces = []
         
-        # 顺序执行九个阶段
+        # 顺序执行六个阶段
         for stage_info in stages:
             stage_num = stage_info["stage"]
             stage_name = stage_info["name"]
             stage_key = stage_info["key"]
             
-            logger.info(f"ExtractV2: Executing Stage {stage_num}/9 - {stage_name}")
+            logger.info(f"ExtractV2: Executing Stage {stage_num}/6 - {stage_name}")
             
             # 构建上下文信息（前序阶段的结果）
             context_info = ""
@@ -193,7 +187,7 @@ class ExtractV2Service:
             try:
                 # 更新run状态：开始当前阶段
                 if run_id:
-                    progress = 0.05 + (stage_num - 1) * 0.1  # Stage 1: 0.05, Stage 2: 0.15, ..., Stage 9: 0.85
+                    progress = 0.05 + (stage_num - 1) * 0.15  # Stage 1: 0.05, Stage 2: 0.20, ..., Stage 6: 0.80
                     self.dao.update_run(run_id, "running", progress=progress, message=f"正在抽取：{stage_name}...")
                 
                 # 调用引擎执行当前阶段
@@ -234,7 +228,7 @@ class ExtractV2Service:
                     })
                 
                 logger.info(
-                    f"ExtractV2: Stage {stage_num}/9 done - "
+                    f"ExtractV2: Stage {stage_num}/6 done - "
                     f"data_type={type(stage_data).__name__} "
                     f"data_keys={list(stage_data.keys()) if isinstance(stage_data, dict) else 'N/A'} "
                     f"evidence={len(result.evidence_chunk_ids)}"
@@ -253,13 +247,13 @@ class ExtractV2Service:
                 
                 # 更新run进度
                 if run_id:
-                    progress = 0.05 + stage_num * 0.1  # Stage 1完成: 0.15, ..., Stage 9: 0.95
+                    progress = 0.05 + stage_num * 0.15  # Stage 1完成: 0.20, ..., Stage 6: 0.95
                     self.dao.update_run(run_id, "running", progress=progress, message=f"{stage_name}已完成")
                 
-                logger.info(f"ExtractV2: Stage {stage_num}/9 incremental update done")
+                logger.info(f"ExtractV2: Stage {stage_num}/6 incremental update done")
                 
             except Exception as e:
-                logger.error(f"ExtractV2: Stage {stage_num}/9 failed: {e}", exc_info=True)
+                logger.error(f"ExtractV2: Stage {stage_num}/6 failed: {e}", exc_info=True)
                 # 失败时设置默认值，但不影响其他阶段
                 stage_results[stage_key] = {}
         
@@ -271,7 +265,7 @@ class ExtractV2Service:
         
         logger.info(
             f"ExtractV2: STAGED extraction (V3) completed - "
-            f"stages_completed={len(stage_results)}/9"
+            f"stages_completed={len(stage_results)}/6"
         )
         
         # ✅ Step 2.1: 追加调用 requirements 抽取（基准条款库）

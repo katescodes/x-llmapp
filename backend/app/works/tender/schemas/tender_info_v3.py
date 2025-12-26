@@ -1,26 +1,33 @@
 """
-Tender Info V3 Schema - 九大类招标信息结构
+Tender Info V3 Schema - 六大类招标信息结构
 
 这是新版本的招标信息分类体系，取代旧的四类结构(base/technical_parameters/business_terms/scoring_criteria)
 
-九大类：
-1. project_overview - 项目概览
-2. scope_and_lots - 范围与标段
-3. schedule_and_submission - 进度与递交
-4. bidder_qualification - 投标人资格
-5. evaluation_and_scoring - 评审与评分
-6. business_terms - 商务条款
-7. technical_requirements - 技术要求
-8. document_preparation - 文件编制
-9. bid_security - 保证金与担保
+六大类：
+1. project_overview - 项目概览（合并了范围与标段、进度与递交、保证金与担保）
+2. bidder_qualification - 投标人资格
+3. evaluation_and_scoring - 评审与评分
+4. business_terms - 商务条款
+5. technical_requirements - 技术要求
+6. document_preparation - 文件编制
 """
 from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field
 
 
-# ============ 1. 项目概览 ============
+# ============ 1. 项目概览（合并版：包含范围、进度、保证金） ============
+class LotInfo(BaseModel):
+    """标段信息"""
+    lot_number: Optional[str] = Field(None, description="标段编号")
+    lot_name: Optional[str] = Field(None, description="标段名称")
+    scope: Optional[str] = Field(None, description="标段范围")
+    budget: Optional[str] = Field(None, description="标段预算")
+    evidence_chunk_ids: List[str] = Field(default_factory=list)
+
+
 class ProjectOverview(BaseModel):
-    """项目概览信息"""
+    """项目概览信息（含范围、进度、保证金）"""
+    # 基本信息
     project_name: Optional[str] = Field(None, description="项目名称")
     project_number: Optional[str] = Field(None, description="项目编号/招标编号")
     owner_name: Optional[str] = Field(None, description="采购人/业主/招标人")
@@ -33,39 +40,12 @@ class ProjectOverview(BaseModel):
     budget: Optional[str] = Field(None, description="预算金额")
     max_price: Optional[str] = Field(None, description="招标控制价/最高限价")
     
-    # 证据
-    evidence_chunk_ids: List[str] = Field(default_factory=list, description="证据chunk IDs")
-    
-    # 允许额外字段
-    class Config:
-        extra = "allow"
-
-
-# ============ 2. 范围与标段 ============
-class LotInfo(BaseModel):
-    """标段信息"""
-    lot_number: Optional[str] = Field(None, description="标段编号")
-    lot_name: Optional[str] = Field(None, description="标段名称")
-    scope: Optional[str] = Field(None, description="标段范围")
-    budget: Optional[str] = Field(None, description="标段预算")
-    evidence_chunk_ids: List[str] = Field(default_factory=list)
-
-
-class ScopeAndLots(BaseModel):
-    """范围与标段"""
+    # 范围与标段
     project_scope: Optional[str] = Field(None, description="项目范围/采购内容")
     lot_division: Optional[str] = Field(None, description="标段划分说明")
     lots: List[LotInfo] = Field(default_factory=list, description="各标段详情")
     
-    evidence_chunk_ids: List[str] = Field(default_factory=list)
-    
-    class Config:
-        extra = "allow"
-
-
-# ============ 3. 进度与递交 ============
-class ScheduleAndSubmission(BaseModel):
-    """进度与递交要求"""
+    # 进度与递交
     bid_deadline: Optional[str] = Field(None, description="投标截止时间")
     bid_opening_time: Optional[str] = Field(None, description="开标时间")
     bid_opening_location: Optional[str] = Field(None, description="开标地点")
@@ -74,13 +54,23 @@ class ScheduleAndSubmission(BaseModel):
     implementation_schedule: Optional[str] = Field(None, description="实施工期/交付期")
     key_milestones: Optional[str] = Field(None, description="关键里程碑")
     
-    evidence_chunk_ids: List[str] = Field(default_factory=list)
+    # 保证金与担保
+    bid_bond_amount: Optional[str] = Field(None, description="投标保证金金额")
+    bid_bond_form: Optional[str] = Field(None, description="保证金形式(转账/保函/支票等)")
+    bid_bond_deadline: Optional[str] = Field(None, description="保证金递交截止时间")
+    bid_bond_return: Optional[str] = Field(None, description="保证金退还条件")
+    performance_bond: Optional[str] = Field(None, description="履约保证金要求")
+    other_guarantees: Optional[str] = Field(None, description="其他担保要求")
     
+    # 证据
+    evidence_chunk_ids: List[str] = Field(default_factory=list, description="证据chunk IDs")
+    
+    # 允许额外字段
     class Config:
         extra = "allow"
 
 
-# ============ 4. 投标人资格 ============
+# ============ 2. 投标人资格 ============
 class QualificationItem(BaseModel):
     """资格条款"""
     req_type: Optional[str] = Field(None, description="要求类型(资质/业绩/人员/财务/其他)")
@@ -102,7 +92,7 @@ class BidderQualification(BaseModel):
         extra = "allow"
 
 
-# ============ 5. 评审与评分 ============
+# ============ 3. 评审与评分 ============
 class ScoringItem(BaseModel):
     """评分项"""
     category: Optional[str] = Field(None, description="评分类别(技术/商务/价格/其他)")
@@ -126,7 +116,7 @@ class EvaluationAndScoring(BaseModel):
         extra = "allow"
 
 
-# ============ 6. 商务条款 ============
+# ============ 4. 商务条款 ============
 class BusinessClause(BaseModel):
     """商务条款"""
     clause_type: Optional[str] = Field(None, description="条款类型(付款/交付/质保/验收/违约等)")
@@ -151,7 +141,7 @@ class BusinessTerms(BaseModel):
         extra = "allow"
 
 
-# ============ 7. 技术要求 ============
+# ============ 5. 技术要求 ============
 class TechnicalParameter(BaseModel):
     """技术参数"""
     name: Optional[str] = Field(None, description="参数/指标名称")
@@ -176,7 +166,7 @@ class TechnicalRequirements(BaseModel):
         extra = "allow"
 
 
-# ============ 8. 文件编制 ============
+# ============ 6. 文件编制 ============
 class RequiredForm(BaseModel):
     """必填表单"""
     form_name: Optional[str] = Field(None, description="表单名称")
@@ -199,40 +189,22 @@ class DocumentPreparation(BaseModel):
         extra = "allow"
 
 
-# ============ 9. 保证金与担保 ============
-class BidSecurity(BaseModel):
-    """保证金与担保"""
-    bid_bond_amount: Optional[str] = Field(None, description="投标保证金金额")
-    bid_bond_form: Optional[str] = Field(None, description="保证金形式(转账/保函/支票等)")
-    bid_bond_deadline: Optional[str] = Field(None, description="保证金递交截止时间")
-    bid_bond_return: Optional[str] = Field(None, description="保证金退还条件")
-    performance_bond: Optional[str] = Field(None, description="履约保证金要求")
-    other_guarantees: Optional[str] = Field(None, description="其他担保要求")
-    
-    evidence_chunk_ids: List[str] = Field(default_factory=list)
-    
-    class Config:
-        extra = "allow"
-
-
 # ============ 顶层结构 ============
 class TenderInfoV3(BaseModel):
     """
-    Tender Info V3 - 九大类招标信息
+    Tender Info V3 - 六大类招标信息
     
     这是新版本的招标信息结构，替代旧的四类结构
+    项目概览已合并了范围、进度、保证金信息
     """
     schema_version: Literal["tender_info_v3"] = Field("tender_info_v3", description="Schema版本标识")
     
-    project_overview: ProjectOverview = Field(default_factory=ProjectOverview, description="项目概览")
-    scope_and_lots: ScopeAndLots = Field(default_factory=ScopeAndLots, description="范围与标段")
-    schedule_and_submission: ScheduleAndSubmission = Field(default_factory=ScheduleAndSubmission, description="进度与递交")
+    project_overview: ProjectOverview = Field(default_factory=ProjectOverview, description="项目概览（含范围、进度、保证金）")
     bidder_qualification: BidderQualification = Field(default_factory=BidderQualification, description="投标人资格")
     evaluation_and_scoring: EvaluationAndScoring = Field(default_factory=EvaluationAndScoring, description="评审与评分")
     business_terms: BusinessTerms = Field(default_factory=BusinessTerms, description="商务条款")
     technical_requirements: TechnicalRequirements = Field(default_factory=TechnicalRequirements, description="技术要求")
     document_preparation: DocumentPreparation = Field(default_factory=DocumentPreparation, description="文件编制")
-    bid_security: BidSecurity = Field(default_factory=BidSecurity, description="保证金与担保")
     
     def to_dict_exclude_none(self) -> dict:
         """导出为 dict，排除 None 值"""
@@ -245,14 +217,11 @@ class TenderInfoV3(BaseModel):
 # ============ 常量定义 ============
 TENDER_INFO_V3_KEYS = [
     "project_overview",
-    "scope_and_lots",
-    "schedule_and_submission",
     "bidder_qualification",
     "evaluation_and_scoring",
     "business_terms",
     "technical_requirements",
     "document_preparation",
-    "bid_security",
 ]
 
 SCHEMA_VERSION_V3 = "tender_info_v3"
