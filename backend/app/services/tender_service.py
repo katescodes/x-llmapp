@@ -847,14 +847,29 @@ class TenderService:
                 run_id=run_id
             ))
             
-            # 使用 v2 结果，写入旧表以保证前端兼容
-            data = v2_result.get("data") or {}
+            # ✅ v2_result 已经是完整的 V3 结构，包含 schema_version 和九大类
+            # 提取证据和追踪信息
             eids = v2_result.get("evidence_chunk_ids") or []
             trace = v2_result.get("retrieval_trace") or {}
-            obj = {"data": data, "evidence_chunk_ids": eids}
             
-            # 写入旧表（保证前端兼容）
-            self.dao.upsert_project_info(project_id, data_json=data, evidence_chunk_ids=eids)
+            # ✅ 构建要保存的数据：只保留核心字段（九大类 + schema_version）
+            data_to_save = {
+                "schema_version": v2_result.get("schema_version", "tender_info_v3"),
+                "project_overview": v2_result.get("project_overview", {}),
+                "scope_and_lots": v2_result.get("scope_and_lots", {}),
+                "schedule_and_submission": v2_result.get("schedule_and_submission", {}),
+                "bidder_qualification": v2_result.get("bidder_qualification", {}),
+                "evaluation_and_scoring": v2_result.get("evaluation_and_scoring", {}),
+                "business_terms": v2_result.get("business_terms", {}),
+                "technical_requirements": v2_result.get("technical_requirements", {}),
+                "document_preparation": v2_result.get("document_preparation", {}),
+                "bid_security": v2_result.get("bid_security", {}),
+            }
+            
+            obj = {"data_json": data_to_save, "evidence_chunk_ids": eids}
+            
+            # ✅ 写入数据库（V3 格式）
+            self.dao.upsert_project_info(project_id, data_json=data_to_save, evidence_chunk_ids=eids)
             
             # 更新运行状态
             if run_id:
@@ -1161,11 +1176,28 @@ class TenderService:
         self.dao.replace_directory(project_id, nodes_with_tree)
         logger.info(f"[generate_directory] Saved {len(nodes_with_tree)} nodes")
         
-        # 7. 自动抽取范本(保留)
+        # ✨ 7. 自动填充范本（集成：一键完成目录生成+范本填充）
         try:
-            self._auto_extract_and_attach_samples(project_id)
+            logger.info(f"[generate_directory] Starting auto_fill_samples for project {project_id}")
+            diag = self.auto_fill_samples(project_id)
+            
+            # 记录填充结果
+            attached = diag.get("attached_sections", 0)
+            extracted = diag.get("tender_fragments_upserted", 0)
+            
+            if diag.get("ok"):
+                logger.info(
+                    f"[generate_directory] auto_fill_samples success: "
+                    f"extracted {extracted} fragments, attached {attached} sections"
+                )
+            else:
+                warnings = diag.get("warnings", [])
+                logger.warning(
+                    f"[generate_directory] auto_fill_samples partial success: "
+                    f"attached {attached} sections, warnings: {warnings}"
+                )
         except Exception as e:
-            logger.warning(f"自动抽取范本失败: {e}")
+            logger.error(f"[generate_directory] auto_fill_samples failed: {type(e).__name__}: {e}")
         
         # 8. 更新状态
         if run_id:
@@ -1173,7 +1205,7 @@ class TenderService:
                 run_id,
                 "success",
                 progress=1.0,
-                message="Directory generated",
+                message="Directory generated with auto-filled samples",
                 result_json=v2_result
             )
     
@@ -1341,6 +1373,7 @@ class TenderService:
         获取章节正文内容
         - 如果是用户编辑内容，返回 HTML
         - 如果是范本挂载，返回简化的预览HTML（从源文档生成）
+        - 如果是PDF语义匹配，直接返回content_html
         """
         body = self.dao.get_section_body(project_id, node_id)
         if not body:
@@ -1350,6 +1383,14 @@ class TenderService:
         
         # 用户编辑内容
         if source == "USER" and body.get("content_html"):
+            return {
+                "source": source,
+                "contentHtml": body["content_html"],
+                "fragmentId": body.get("fragment_id"),
+            }
+        
+        # PDF语义匹配 - 直接返回content_html（已在挂载时提取）
+        if source == "PDF_SEMANTIC_MATCH" and body.get("content_html"):
             return {
                 "source": source,
                 "contentHtml": body["content_html"],
@@ -1741,37 +1782,49 @@ class TenderService:
             # C) 允许 PDF / DOCX 都走 extractor；只有 extractor 真的抽不到内容才 fallback
             use_path = path
             
-            try:
-                from app.services.fragment.fragment_extractor import TenderSampleFragmentExtractor
-                
-                extractor = TenderSampleFragmentExtractor(self.dao)
-                summary = extractor.extract_and_upsert_summary(
-                    project_id=project_id,
-                    tender_docx_path=use_path,
-                    file_key=path,
-                )
-                
-                diag["body_items_count"] = int(summary.get("body_elements") or 0)
-                diag["tender_fragments_upserted"] = int(summary.get("upserted_fragments") or 0)
-                diag["fragments_detected_by_rules"] = int(summary.get("fragments_detected") or 0)
-                diag["llm_used"] = bool((summary.get("llm_spans_raw") or 0) > 0)
-                diag["tender_storage_path_ext"] = str(summary.get("input_ext") or os.path.splitext(use_path)[1].lower())
-
-                # 如果抽取结果为 0（PDF 扫描件/DOCX 无范本区域），fallback builtin
-                if diag["tender_fragments_upserted"] <= 0:
-                    ext_name = diag.get("tender_storage_path_ext", "").upper().replace(".", "")
-                    warnings.append(f"{ext_name} 未能抽取到范本片段（可能为扫描件、无范本区域或格式不规范），已使用内置范本库；建议上传标准格式招标文件")
-                    attached = self._auto_fill_samples_builtin(project_id, warnings)
-                    diag["attached_sections_builtin"] = attached
-                    diag["warnings"] = warnings
-                    diag["nodes"] = self.get_directory_with_body_meta(project_id)
-                    diag["ok"] = True
-                    return diag
-            except Exception as e:
-                warnings.append(f"extractor exception: {type(e).__name__}: {str(e)}")
-                logger.exception(f"[samples] extractor exception: project_id={project_id}")
+            # ✅ PDF文件跳过fragments抽取，直接使用语义搜索
+            pdf_ext = os.path.splitext(use_path)[1].lower()
+            if pdf_ext == ".pdf":
+                logger.info(f"[auto_fill_samples] PDF detected, skipping fragment extraction, using semantic search")
+                diag["tender_storage_path_ext"] = ".pdf"
+                diag["body_items_count"] = 0
                 diag["tender_fragments_upserted"] = 0
                 diag["fragments_detected_by_rules"] = 0
+                diag["llm_used"] = False
+                # 直接跳到语义搜索部分
+            else:
+                # DOCX文件走传统的fragments抽取流程
+                try:
+                    from app.services.fragment.fragment_extractor import TenderSampleFragmentExtractor
+                    
+                    extractor = TenderSampleFragmentExtractor(self.dao)
+                    summary = extractor.extract_and_upsert_summary(
+                        project_id=project_id,
+                        tender_docx_path=use_path,
+                        file_key=path,
+                    )
+                    
+                    diag["body_items_count"] = int(summary.get("body_elements") or 0)
+                    diag["tender_fragments_upserted"] = int(summary.get("upserted_fragments") or 0)
+                    diag["fragments_detected_by_rules"] = int(summary.get("fragments_detected") or 0)
+                    diag["llm_used"] = bool((summary.get("llm_spans_raw") or 0) > 0)
+                    diag["tender_storage_path_ext"] = str(summary.get("input_ext") or os.path.splitext(use_path)[1].lower())
+
+                    # 如果DOCX抽取结果为 0，fallback builtin
+                    if diag["tender_fragments_upserted"] <= 0:
+                        ext_name = diag.get("tender_storage_path_ext", "").upper().replace(".", "")
+                        warnings.append(f"{ext_name} 未能抽取到范本片段（可能为扫描件、无范本区域或格式不规范），已使用内置范本库；建议上传标准格式招标文件")
+                        attached = self._auto_fill_samples_builtin(project_id, warnings)
+                        diag["attached_sections_builtin"] = attached
+                        diag["warnings"] = warnings
+                        diag["nodes"] = self.get_directory_with_body_meta(project_id)
+                        diag["ok"] = True
+                        return diag
+                except Exception as e:
+                    warnings.append(f"extractor exception: {type(e).__name__}: {str(e)}")
+                    logger.exception(f"[samples] extractor exception: project_id={project_id}")
+                    diag["tender_fragments_upserted"] = 0
+                    diag["fragments_detected_by_rules"] = 0
 
             # 当前库内 fragments 总数（用于区分“本次抽取” vs “历史已存在”）
             try:
@@ -1783,8 +1836,20 @@ class TenderService:
                 from app.services.fragment.outline_attacher import OutlineSampleAttacher
 
                 nodes = self.dao.list_directory(project_id)
-                attacher = OutlineSampleAttacher(self.dao)
-                attached_count = int(attacher.attach(project_id, nodes) or 0)
+                attacher = OutlineSampleAttacher(self.dao, llm_client=self.llm)
+                
+                # ✅ 新策略：从目录标题出发，语义搜索PDF内容（适用于PDF）
+                # 旧策略：从fragments表查找（适用于DOCX）
+                if diag["tender_storage_path_ext"] == ".pdf":
+                    logger.info(f"[auto_fill_samples] Using PDF semantic search (keyword-only, LLM disabled) for project {project_id}")
+                    # ✅ 暂时禁用LLM验证，只使用关键词匹配
+                    attached_count = int(attacher.attach_from_pdf_semantic(
+                        project_id, nodes, min_confidence=0.4, use_llm=False  # ✅ 禁用LLM
+                    ) or 0)
+                else:
+                    logger.info(f"[auto_fill_samples] Using traditional fragment matching for project {project_id}")
+                    attached_count = int(attacher.attach(project_id, nodes, use_llm=True) or 0)
+                
                 diag["attached_sections_template_sample"] = attached_count
                 diag["attached_write_mode"] = "content_json"  # 诊断信息：写入模式
             except Exception as e:
