@@ -647,12 +647,14 @@ export default function TenderWorkspace() {
       console.log('[selectProject] 已停止轮询');
     }
     
-    // ✅ 3. 更新当前项目
-    setCurrentProject(proj);
-    setActiveTab(1);
-    setViewMode("projectInfo");
+    // ✅ 3. 先清空所有run状态（防止旧项目状态污染）
+    console.log('[selectProject] 清空run状态');
+    setInfoRun(null);
+    setRiskRun(null);
+    setDirRun(null);
+    setReviewRun(null);
     
-    // ✅ 4. 清空数据状态（但不清空run状态）
+    // ✅ 4. 清空所有数据状态
     setAssets([]);
     setProjectInfo(null);
     setRisks([]);
@@ -663,6 +665,13 @@ export default function TenderWorkspace() {
     setSamplesOpen(false);
     setSampleFragments([]);
     setSamplePreviewById({});
+    setSelectedRiskId(null);
+    setRiskFilters({
+      typeTab: 'all',
+      severity: 'all',
+      keyword: '',
+      sort: 'default',
+    });
     setSelectedFormatTemplateId("");
     setTocStyleVars(null);
     
@@ -675,8 +684,17 @@ export default function TenderWorkspace() {
     }
     setFormatPreviewBlobUrl("");
     
-    // ✅ 5. 恢复目标项目的run状态（轮询将在useEffect中恢复）
-    restoreProjectRuns(proj.id);
+    // ✅ 5. 更新当前项目（这会触发useEffect重新加载数据）
+    setCurrentProject(proj);
+    setActiveTab(1);
+    setViewMode("projectInfo");
+    
+    // ✅ 6. 延迟恢复目标项目的run状态（等待数据加载完成后再恢复）
+    // 使用setTimeout确保在useEffect加载数据之后执行
+    setTimeout(() => {
+      console.log('[selectProject] 延迟恢复run状态');
+      restoreProjectRuns(proj.id);
+    }, 100);
   };
   
   // ✅ 当项目切换且run状态恢复后，自动恢复running任务的轮询
@@ -1256,6 +1274,8 @@ export default function TenderWorkspace() {
 
   useEffect(() => {
     if (currentProject) {
+      console.log('[useEffect] 项目切换，加载新项目数据:', currentProject.id);
+      // 立即加载新项目的数据
       loadAssets();
       loadProjectInfo();
       loadRisks();
@@ -1263,7 +1283,7 @@ export default function TenderWorkspace() {
       loadReview();
       loadSampleFragments();
     }
-  }, [currentProject, loadAssets, loadProjectInfo, loadRisks, loadDirectory, loadReview, loadSampleFragments]);
+  }, [currentProject?.id]); // ✅ 只监听项目ID变化，避免无限循环
 
   // 切换项目时，恢复上次选择的格式模板（用于“自动套用格式”按钮）
   useEffect(() => {
