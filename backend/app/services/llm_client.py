@@ -147,7 +147,7 @@ def llm_json(
             "max_tokens": max_tokens,
         }
         
-        with httpx.Client(timeout=120.0) as client:
+        with httpx.Client(timeout=300.0) as client:  # ✅ 优化：增加到300秒（5分钟）避免Stage 2超时
             response = client.post(full_url, headers=headers, json=payload)
             response.raise_for_status()
             result = response.json()
@@ -278,7 +278,7 @@ async def generate_answer_with_llm(
     _apply_generation_overrides(payload, overrides, None)
 
     try:
-        async with httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=300.0, follow_redirects=False) as client:  # ✅ 优化：增加到300秒（5分钟）
             resp = await client.post(url, json=payload, headers=headers)
             if resp.status_code in (307, 308):
                 location = resp.headers.get("Location") or ""

@@ -35,6 +35,9 @@ class ExtractionEngine:
         model_id: Optional[str] = None,
         run_id: Optional[str] = None,
         embedding_provider: Optional[str] = None,
+        stage: Optional[int] = None,
+        stage_name: Optional[str] = None,
+        context_info: Optional[str] = None,
     ) -> ExtractionResult:
         """
         执行抽取任务
@@ -47,6 +50,9 @@ class ExtractionEngine:
             model_id: 模型 ID
             run_id: 运行 ID（用于追踪）
             embedding_provider: 嵌入提供者
+            stage: 当前执行的阶段（1-4，用于分阶段抽取）
+            stage_name: 阶段名称（如"项目基本信息"）
+            context_info: 上下文信息（前序阶段的结果）
             
         Returns:
             ExtractionResult: 抽取结果
@@ -98,28 +104,45 @@ class ExtractionEngine:
         ctx = build_marked_context(chunk_dicts)
         ctx_ms = int((time.time() - ctx_start) * 1000)
         
-        # 3. 调用 LLM
+        # 3. 构建 Prompt（支持 Stage 变量注入）
+        final_prompt = spec.prompt.strip()
+        
+        # 如果指定了 stage，替换变量
+        if stage is not None:
+            final_prompt = final_prompt.replace("{CURRENT_STAGE}", str(stage))
+            final_prompt = final_prompt.replace("{STAGE_NAME}", stage_name or "")
+            final_prompt = final_prompt.replace("{CONTEXT_INFO}", context_info or "无")
+        
+        # 4. 调用 LLM
         messages = [
-            {"role": "system", "content": spec.prompt.strip()},
+            {"role": "system", "content": final_prompt},
             {"role": "user", "content": f"招标文件原文片段：\n{ctx}"},
         ]
         
-        prompt_len = len(spec.prompt)
+        prompt_len = len(final_prompt)
         ctx_len = len(ctx)
-        logger.info(f"[ExtractionEngine] BEFORE_LLM project_id={project_id} run_id={run_id} prompt_len={prompt_len} ctx_len={ctx_len}")
+        logger.info(f"[ExtractionEngine] BEFORE_LLM project_id={project_id} run_id={run_id} stage={stage} prompt_len={prompt_len} ctx_len={ctx_len}")
         
         llm_start = time.time()
         
         try:
             print(f"[DEBUG] About to call LLM: llm={llm} llm_type={type(llm).__name__ if llm else 'None'}")
             
-            # 确保 max_tokens 足够大（至少 8192 for complex extractions）
+            # 动态设置max_tokens：评分标准需要更大的输出空间
+            # 使用传入的stage_name参数而非spec.stage_name（spec中不存在此字段）
+            if stage_name == "评分规则":
+                max_tokens = 16384  # 评分表可能有20-30个评分项，需要更大的输出空间
+            else:
+                max_tokens = 8192  # 其他Stage使用默认值
+            
+            logger.info(f"[ExtractionEngine] LLM_CALL stage_name={stage_name} max_tokens={max_tokens}")
+            
             out_text = await call_llm(
                 messages,
                 llm,
                 model_id,
                 temperature=spec.temperature,
-                max_tokens=8192
+                max_tokens=max_tokens
             )
             
             llm_ms = int((time.time() - llm_start) * 1000)
@@ -170,7 +193,7 @@ class ExtractionEngine:
                 f"LLM call failed for project_id={project_id} run_id={run_id}: {error_type}: {error_msg}"
             ) from llm_error
         
-        # 4. 解析 JSON
+        # 5. 解析 JSON
         parse_start = time.time()
         try:
             obj = extract_json(out_text)
@@ -188,7 +211,7 @@ class ExtractionEngine:
         
         parse_ms = int((time.time() - parse_start) * 1000)
         
-        # 5. 提取数据和证据
+        # 6. 提取数据和证据
         # 处理两种格式：dict（project-info）或 list（risks）
         if isinstance(obj, dict):
             data = obj.get("data") or obj
@@ -214,10 +237,10 @@ class ExtractionEngine:
             data = obj
             evidence_chunk_ids = []
         
-        # 6. 生成 evidence_spans
+        # 7. 生成 evidence_spans
         evidence_spans = self._generate_evidence_spans(all_chunks, evidence_chunk_ids)
         
-        # 7. 构建追踪信息
+        # 8. 构建追踪信息
         trace = self._build_trace(query_trace, spec, len(all_chunks), trace_enabled)
         
         logger.info(f"[ExtractionEngine] AFTER_PARSE project_id={project_id} run_id={run_id} ms={parse_ms} evidence_count={len(evidence_chunk_ids)}")

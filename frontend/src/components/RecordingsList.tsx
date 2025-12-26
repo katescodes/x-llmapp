@@ -28,6 +28,12 @@ const RecordingsList: React.FC = () => {
   const [viewingSummary, setViewingSummary] = useState<Recording | null>(null);
   const [playingAudio, setPlayingAudio] = useState<string | null>(null);
   const [transcribingId, setTranscribingId] = useState<string | null>(null);
+  
+  // 转写增强选项
+  const [showTranscribeDialog, setShowTranscribeDialog] = useState(false);
+  const [transcribeRecordingId, setTranscribeRecordingId] = useState<string | null>(null);
+  const [enhanceEnabled, setEnhanceEnabled] = useState(false);
+  const [enhancementType, setEnhancementType] = useState('punctuation');
 
   // 加载录音列表
   const loadRecordings = useCallback(async () => {
@@ -96,26 +102,42 @@ const RecordingsList: React.FC = () => {
     }
   };
 
-  // 手动转写
-  const handleTranscribe = async (recordingId: string) => {
-    if (!confirm('确定要转写这条录音吗？转写可能需要一些时间。')) return;
+  // 打开转写对话框
+  const openTranscribeDialog = (recordingId: string) => {
+    setTranscribeRecordingId(recordingId);
+    setShowTranscribeDialog(true);
+  };
 
-    setTranscribingId(recordingId);
+  // 手动转写
+  const handleTranscribe = async () => {
+    if (!transcribeRecordingId) return;
+
+    setShowTranscribeDialog(false);
+    setTranscribingId(transcribeRecordingId);
+    
     try {
       // 创建一个带超时的 fetch 请求（5分钟超时）
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000);
 
-      const response = await authFetch(`${apiBaseUrl}/api/recordings/${recordingId}/transcribe`, {
+      const response = await authFetch(`${apiBaseUrl}/api/recordings/${transcribeRecordingId}/transcribe`, {
         method: 'POST',
         signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          enhance: enhanceEnabled,
+          enhancement_type: enhancementType,
+          model_id: null // 使用默认模型
+        }),
       });
 
       clearTimeout(timeoutId);
 
       if (response.ok) {
         const data = await response.json();
-        alert(`转写成功！字数：${data.word_count}`);
+        alert(`转写成功！字数：${data.word_count}${enhanceEnabled ? '\n已应用LLM增强' : ''}`);
         loadRecordings();
       } else {
         const errorData = await response.json();
@@ -130,6 +152,7 @@ const RecordingsList: React.FC = () => {
       }
     } finally {
       setTranscribingId(null);
+      setTranscribeRecordingId(null);
     }
   };
 
@@ -365,7 +388,7 @@ const RecordingsList: React.FC = () => {
                   {(!recording.transcript || recording.word_count === 0) && recording.keep_audio && (
                     <button
                       className="action-btn transcribe"
-                      onClick={() => handleTranscribe(recording.id)}
+                      onClick={() => openTranscribeDialog(recording.id)}
                       disabled={transcribingId === recording.id}
                     >
                       {transcribingId === recording.id ? '🔄 转写中...' : '📝 转写'}
@@ -510,6 +533,129 @@ const RecordingsList: React.FC = () => {
             <div className="modal-footer">
               <button className="btn-secondary" onClick={() => setPlayingAudio(null)}>
                 关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* 转写设置对话框 */}
+      {showTranscribeDialog && (
+        <div className="modal-overlay" onClick={() => setShowTranscribeDialog(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+            <div className="modal-header">
+              <h3>🎙️ 转写设置</h3>
+              <button className="close-btn" onClick={() => setShowTranscribeDialog(false)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ padding: '20px' }}>
+              <div style={{ marginBottom: '20px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={enhanceEnabled}
+                    onChange={(e) => setEnhanceEnabled(e.target.checked)}
+                    style={{ marginRight: '10px', width: '18px', height: '18px' }}
+                  />
+                  <span style={{ fontSize: '15px', fontWeight: '500' }}>启用LLM文本增强</span>
+                </label>
+                <p style={{ 
+                  marginTop: '8px', 
+                  marginLeft: '28px', 
+                  fontSize: '13px', 
+                  color: '#94a3b8',
+                  lineHeight: '1.5'
+                }}>
+                  使用AI智能添加标点符号和段落划分，提升可读性
+                </p>
+              </div>
+              
+              {enhanceEnabled && (
+                <div style={{ 
+                  marginTop: '20px', 
+                  padding: '15px', 
+                  background: 'rgba(148, 163, 184, 0.1)', 
+                  borderRadius: '8px',
+                  border: '1px solid rgba(148, 163, 184, 0.2)'
+                }}>
+                  <label style={{ display: 'block', marginBottom: '10px', fontSize: '14px', fontWeight: '500' }}>
+                    增强模式：
+                  </label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <label style={{ display: 'flex', alignItems: 'flex-start', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        value="punctuation"
+                        checked={enhancementType === 'punctuation'}
+                        onChange={(e) => setEnhancementType(e.target.value)}
+                        style={{ marginRight: '10px', marginTop: '3px' }}
+                      />
+                      <div>
+                        <div style={{ fontSize: '14px', fontWeight: '500' }}>标点和段落</div>
+                        <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
+                          添加标点符号和段落，保持口语风格
+                        </div>
+                      </div>
+                    </label>
+                    
+                    <label style={{ display: 'flex', alignItems: 'flex-start', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        value="formal"
+                        checked={enhancementType === 'formal'}
+                        onChange={(e) => setEnhancementType(e.target.value)}
+                        style={{ marginRight: '10px', marginTop: '3px' }}
+                      />
+                      <div>
+                        <div style={{ fontSize: '14px', fontWeight: '500' }}>正式书面语</div>
+                        <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
+                          去除口语词，转换为正式文档
+                        </div>
+                      </div>
+                    </label>
+                    
+                    <label style={{ display: 'flex', alignItems: 'flex-start', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        value="meeting"
+                        checked={enhancementType === 'meeting'}
+                        onChange={(e) => setEnhancementType(e.target.value)}
+                        style={{ marginRight: '10px', marginTop: '3px' }}
+                      />
+                      <div>
+                        <div style={{ fontSize: '14px', fontWeight: '500' }}>会议纪要</div>
+                        <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
+                          整理为结构化会议纪要格式
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              )}
+              
+              <div style={{ 
+                marginTop: '20px', 
+                padding: '12px', 
+                background: 'rgba(34, 197, 94, 0.1)', 
+                borderRadius: '6px',
+                fontSize: '12px',
+                color: '#94a3b8'
+              }}>
+                💡 提示：转写可能需要几分钟，请耐心等待
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button 
+                className="btn-secondary" 
+                onClick={() => setShowTranscribeDialog(false)}
+              >
+                取消
+              </button>
+              <button 
+                className="btn-primary" 
+                onClick={handleTranscribe}
+                disabled={transcribingId !== null}
+              >
+                开始转写
               </button>
             </div>
           </div>

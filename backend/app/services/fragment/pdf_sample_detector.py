@@ -20,7 +20,9 @@ SAMPLE_KW = [
     "授权委托书","授权书","法定代表人","身份证明","委托书",
     "偏离","商务响应","技术响应","承诺函","声明","资格审查","资质","营业执照","样表","范本","格式",
     "保证金","投标保证金","履约保证","证书","证明","业绩","项目组织",
-    "设备清单","材料清单","工程量清单","施工方案","技术方案","实施方案","组织架构","人员配备"
+    "设备清单","材料清单","工程量清单","施工方案","技术方案","实施方案","组织架构","人员配备",
+    # ✅ 新增：测试1项目的标题关键词
+    "商务要求","合同条款","技术要求","货物服务","重要资料","货物报价"
 ]
 
 REGION_KW = ["投标文件格式","响应文件格式","样表","范本","格式","附件","投标文件","投标资料","标书"]
@@ -28,6 +30,29 @@ REGION_KW = ["投标文件格式","响应文件格式","样表","范本","格式
 def _has_kw(s: str, kws: List[str]) -> bool:
     t = (s or "").strip()
     return any(k in t for k in kws)
+
+def _clean_title(text: str) -> str:
+    """
+    清理标题文本：
+    - 去除尾部的点号（……）
+    - 去除尾部的括号内容（页码）
+    - 去除表格分隔符（|）
+    """
+    text = text.strip()
+    
+    # 去除表格分隔符
+    text = text.replace("|", "").strip()
+    
+    # 去除尾部的"………………（页码）"
+    text = re.sub(r'[…\.]+\s*[（\(][^）\)]*[）\)]\s*$', '', text)
+    
+    # 去除尾部的"………………"
+    text = re.sub(r'[…\.]+\s*$', '', text)
+    
+    # 去除尾部的空白和特殊字符
+    text = text.strip()
+    
+    return text
 
 def _title_score(it: Dict[str, Any], font_p85: float) -> float:
     if it.get("type") != "paragraph":
@@ -106,22 +131,70 @@ def locate_region(items: List[Dict[str, Any]], window_pages: int = 12) -> Tuple[
             "top_pages": sorted([(p, page_score[p]) for p in pages], key=lambda x: x[1], reverse=True)[:10]}
     return start, end, diag
 
+def _match_table_semantic(table_data: List[List[str]], title_to_type_fn) -> Tuple[str, Any, float]:
+    """
+    根据表格内容（tableData）进行语义匹配，返回：(推断的标题, FragmentType, 置信度)
+    
+    策略：根据表格的列头和关键字段，推断其语义类型
+    """
+    if not table_data or len(table_data) < 2:  # 至少要有表头+1行数据
+        return None, None, 0.0
+    
+    # 提取前5行的所有文本，进行语义分析
+    sample_text = " ".join([" ".join(row) for row in table_data[:5]])
+    sample_text_lower = sample_text.lower()
+    
+    # 定义语义规则
+    semantic_rules = [
+        # (推断标题, 匹配关键词列表, FragmentType或None, 最低置信度)
+        ("开标一览表", ["总投标价", "投标报价", "大写", "小写", "项目名称", "供货期"], "PRICE_QUOTE", 0.85),
+        ("投标函", ["投标函", "我方承诺", "法定代表人", "签字", "盖章"], "BID_LETTER", 0.90),
+        ("货物报价一览表", ["序号", "标的名称", "品牌", "规格型号", "单价", "总价", "合价"], "PRICE_DETAIL", 0.85),
+        ("对商务要求及合同条款的响应", ["商务要求", "合同条款", "响应内容", "偏离", "正偏离", "负偏离"], "BUSINESS_RESPONSE", 0.90),
+        ("对技术要求的响应", ["技术要求", "技术", "响应内容", "偏离", "正偏离", "负偏离"], "TECH_RESPONSE", 0.90),
+        ("货物服务技术方案", ["技术方案", "实施方案", "服务方案", "质量控制", "进度控制"], "TECH_PLAN", 0.75),
+        ("法定代表人身份证明及授权委托书", ["法定代表人", "身份证明", "授权", "委托书", "代理人"], "LEGAL_REP_AUTHORIZATION", 0.85),
+        ("各类资质证书及其他重要资料", ["资质证书", "营业执照", "许可证", "认证", "证书"], "QUALIFICATION_DOCS", 0.75),
+    ]
+    
+    best_match = (None, None, 0.0)
+    
+    for title, keywords, ftype_str, min_conf in semantic_rules:
+        # 计算匹配度
+        match_count = sum(1 for kw in keywords if kw in sample_text)
+        match_ratio = match_count / len(keywords) if keywords else 0.0
+        
+        if match_ratio >= 0.3:  # 至少匹配30%的关键词
+            confidence = min(0.95, min_conf + match_ratio * 0.10)
+            if confidence > best_match[2]:
+                # 获取FragmentType
+                ftype = title_to_type_fn(title) if title_to_type_fn else None
+                best_match = (title, ftype, confidence)
+    
+    return best_match
+
 def detect_pdf_fragments(items: List[Dict[str, Any]], title_normalize_fn, title_to_type_fn) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     输出 fragments:
     {title,norm_key,start_body_index,end_body_index,confidence,strategy}
+    
+    ✅ 策略：不依赖标题，直接通过表格内容的文字匹配来识别范本
     """
     # font percentile 85（用于判断"看起来像标题"）
     font_sizes = [float(it.get("fontSize") or 0) for it in items if it.get("type") == "paragraph" and (it.get("text") or "").strip()]
     font_sizes.sort()
     font_p85 = font_sizes[int(len(font_sizes) * 0.85)] if font_sizes else 12.0
 
-    r_start, r_end, region_diag = locate_region(items, window_pages=12)
+    # ✅ 改变策略：不使用locate_region，直接检查所有items
+    # 因为PDF范本表格没有明确标题，需要通过内容匹配
+    r_start, r_end, region_diag = 0, len(items), {"reason": "scan_all_for_semantic_match"}
     seg = items[r_start:r_end]
 
     # 1) 找标题候选（强约束：要么编号/要么包含范本关键词/要么能映射到已知类型）
     # ✅ 降低分数阈值，提高识别率
     heads = []
+    
+    # 1.1) 从段落中识别标题（原有逻辑）
     for it in seg:
         if it.get("type") != "paragraph":
             continue
@@ -133,32 +206,89 @@ def detect_pdf_fragments(items: List[Dict[str, Any]], title_normalize_fn, title_
             continue
 
         title = txt.split("\n")[0].strip()  # 标题一般第一行
+        title = _clean_title(title)  # ✅ 清理标题
         norm = title_normalize_fn(title)
         ftype = title_to_type_fn(norm) if norm else None
 
         # ✅ 放宽约束：只要有一定分数就保留
         if sc >= 6.0:
             # 高分直接通过
-            heads.append((int(it["bodyIndex"]), title, ftype, sc))
+            heads.append((int(it["bodyIndex"]), title, ftype, sc, "paragraph"))
         elif (ftype or _has_kw(title, SAMPLE_KW)):
             # 中等分数+有类型/关键词
-            heads.append((int(it["bodyIndex"]), title, ftype, sc))
+            heads.append((int(it["bodyIndex"]), title, ftype, sc, "paragraph"))
+    
+    # 1.2) ✅ 从表格中识别标题
+    for it in seg:
+        if it.get("type") != "table":
+            continue
+        
+        # ✅ 从tableData中提取标题（而不是text字段）
+        table_data = it.get("tableData", [])
+        if not table_data:
+            continue
+        
+        # 策略A: 查找明确的标题行（原有逻辑）
+        found_title_in_table = False
+        for row_idx, row in enumerate(table_data[:20]):  # 只检查前20行
+            if not row:
+                continue
+            
+            # 遍历该行的所有单元格
+            for cell_idx, cell in enumerate(row):
+                cell_clean = _clean_title(cell)
+                if not cell_clean:
+                    continue
+                
+                # 检查是否匹配标题模式
+                has_numbering = (H1.match(cell_clean) or H2.match(cell_clean) or 
+                               H3.match(cell_clean) or H4.match(cell_clean) or H5.match(cell_clean))
+                has_keyword = _has_kw(cell_clean, SAMPLE_KW)
+                
+                if has_numbering or has_keyword:
+                    # 找到标题
+                    norm = title_normalize_fn(cell_clean)
+                    ftype = title_to_type_fn(norm) if norm else None
+                    
+                    # 给表格标题一个中等分数（8.0）
+                    score = 8.0
+                    if has_numbering:
+                        score += 2.0  # 有编号加分
+                    if has_keyword:
+                        score += 1.0  # 有关键词加分
+                    
+                    heads.append((int(it["bodyIndex"]), cell_clean, ftype, score, "table_title"))
+                    found_title_in_table = True
+                    break  # 找到一个标题后，跳出单元格循环
+            
+            if found_title_in_table:
+                break  # 已经为这个表格添加了标题，跳出行循环
+        
+        # 策略B: ✅ 如果表格没有明确标题，使用语义匹配
+        if not found_title_in_table:
+            inferred_title, ftype, confidence = _match_table_semantic(table_data, title_to_type_fn)
+            # ✅ 调试：打印语义匹配结果
+            print(f"[DEBUG] 表格 bodyIndex={it['bodyIndex']}, page={it.get('pageNo')}: 推断标题='{inferred_title}', 置信度={confidence:.2f}")
+            if inferred_title and confidence > 0.70:
+                # 使用推断的标题
+                score = 7.0 + confidence * 3.0  # 根据置信度计算分数
+                heads.append((int(it["bodyIndex"]), inferred_title, ftype, score, "table_semantic"))
 
     # 2) 去重（标题相似只留一个，避免重复投标函/授权书）
     heads_sorted = sorted(heads, key=lambda x: x[0])
     kept = []
-    for (idx, title, ftype, sc) in heads_sorted:
+    for (idx, title, ftype, sc, source) in heads_sorted:
         dup = False
-        for (_, t2, _, _) in kept:
+        for (_, t2, _, _, _) in kept:
             if fuzz.token_set_ratio(title, t2) >= 92:
                 dup = True
                 break
         if not dup:
-            kept.append((idx, title, ftype, sc))
+            kept.append((idx, title, ftype, sc, source))
 
     # 3) 切片（到下一个标题为止；同时限制最大跨度，防止误扩展）
     fragments = []
-    for i, (sidx, title, ftype, sc) in enumerate(kept):
+    for i, (sidx, title, ftype, sc, source) in enumerate(kept):
         eidx = kept[i+1][0] - 1 if i + 1 < len(kept) else (r_end - 1)
         eidx = max(eidx, sidx)
 
@@ -178,7 +308,7 @@ def detect_pdf_fragments(items: List[Dict[str, Any]], title_normalize_fn, title_
             "start_body_index": int(sidx),
             "end_body_index": int(eidx),
             "confidence": min(0.95, 0.60 + sc / 20.0),
-            "strategy": "pdf_layout_titlecut",
+            "strategy": f"pdf_{source}",  # 记录来源：paragraph, table_title, table_semantic
         })
 
     diag = {

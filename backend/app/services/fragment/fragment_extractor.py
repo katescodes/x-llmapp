@@ -22,6 +22,7 @@ from app.services.fragment.llm_span_locator import TenderSampleSpanLocator, Tend
 from app.services.fragment.pdf_blocks import extract_pdf_body_items
 from app.services.fragment.pdf_layout_extractor import extract_pdf_items
 from app.services.fragment.pdf_sample_detector import detect_pdf_fragments
+from app.services.fragment.pdf_content_extractor import extract_fragment_content
 
 
 class TenderSampleFragmentExtractor:
@@ -670,6 +671,9 @@ class TenderSampleFragmentExtractor:
                 norm_key = frag.get("norm_key") or "OTHER"
                 title_norm = self.matcher.normalize(title)
 
+                # ✅ 新增：提取fragment的完整内容（包括表格和文字）
+                content = extract_fragment_content(items, s, e)
+                
                 diagnostics = {
                     "pdf_layout_diag": pdf_diag,
                     "pdf_detect_diag": det_diag,
@@ -693,11 +697,17 @@ class TenderSampleFragmentExtractor:
                         confidence=float(frag.get("confidence") or 0.7),
                         diagnostics_json=json.dumps(diagnostics, ensure_ascii=False),
                         blocks_json=json.dumps(blocks, ensure_ascii=False),
+                        # ✅ 新增：传入content参数
+                        content_type=content.get("type"),
+                        content_html=content.get("html"),
+                        content_text=content.get("text"),
+                        content_items=json.dumps(content.get("items", []), ensure_ascii=False),
                     )
                     upserted += 1
                     logger.info(
                         f"[samples][pdf] fragment upserted. project_id={project_id}, type={norm_key}, "
-                        f"title={title[:80]!r}, start={s}, end={e}, conf={frag.get('confidence')}"
+                        f"title={title[:80]!r}, start={s}, end={e}, conf={frag.get('confidence')}, "
+                        f"content_type={content.get('type')}, content_len={len(content.get('text', ''))}"
                     )
                 except Exception as ex:
                     errors.append(f"upsert_fragment failed: {type(ex).__name__}: {str(ex)}")

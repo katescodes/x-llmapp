@@ -32,13 +32,20 @@ export default function ProjectInfoView({ info, onEvidence }: Props) {
   // 从 data_json 中提取数据（兼容新旧格式）
   const dataJson = info?.data_json || info || {};
   const baseInfo = dataJson?.base || dataJson;
+  const baseEvidence = baseInfo?.evidence || {};
 
   const technical = useMemo(() => {
     const arr = asArray(dataJson?.technical_parameters || dataJson?.technicalParameters);
     return arr.map((x, idx) => ({
       category: String(x?.category || ""),
-      item: String(x?.item || ""),
-      requirement: String(x?.requirement || ""),
+      // 优先使用契约字段name，兼容旧的item
+      item: String(x?.name || x?.item || ""),
+      // 优先使用契约字段value，兼容旧的requirement
+      requirement: String(x?.value || x?.requirement || ""),
+      // 契约新增字段
+      unit: String(x?.unit || ""),
+      remark: String(x?.remark || ""),
+      // 子参数数组
       parameters: asArray(x?.parameters),
       evidence: asArray(x?.evidence_chunk_ids),
       _idx: idx,
@@ -48,8 +55,12 @@ export default function ProjectInfoView({ info, onEvidence }: Props) {
   const business = useMemo(() => {
     const arr = asArray(dataJson?.business_terms || dataJson?.businessTerms);
     return arr.map((x, idx) => ({
-      term: String(x?.term || ""),
-      requirement: String(x?.requirement || ""),
+      // 优先使用契约字段clause_type，兼容旧的term
+      term: String(x?.clause_type || x?.term || ""),
+      // 优先使用契约字段content，兼容旧的requirement
+      requirement: String(x?.content || x?.requirement || ""),
+      // 契约新增字段
+      clause_title: String(x?.clause_title || ""),
       evidence: asArray(x?.evidence_chunk_ids),
       _idx: idx,
     }));
@@ -94,9 +105,17 @@ export default function ProjectInfoView({ info, onEvidence }: Props) {
             {BASIC_FIELDS.map((f) => {
               const v = baseInfo?.[f.k];
               const text = (v === null || v === undefined || String(v).trim() === "") ? "—" : String(v);
+              const evidence = asArray(baseEvidence?.[f.k]);
               return (
                 <div key={f.k} className="tender-kv-item">
-                  <div className="tender-kv-label">{f.label}</div>
+                  <div className="tender-kv-label">
+                    {f.label}
+                    {evidence.length > 0 && (
+                      <span style={{ marginLeft: 8 }}>
+                        {showEvidenceBtn(evidence)}
+                      </span>
+                    )}
+                  </div>
                   <div className="tender-kv-value">{text}</div>
                 </div>
               );
@@ -138,7 +157,14 @@ export default function ProjectInfoView({ info, onEvidence }: Props) {
                     <td className="tender-cell">{t.requirement || "—"}</td>
                     <td className="tender-cell">
                       {t.parameters.length === 0 ? (
-                        "—"
+                        // 如果没有parameters数组，但有unit/remark，也显示
+                        (t.unit || t.remark) ? (
+                          <div className="kb-doc-meta">
+                            {t.unit && `单位：${t.unit}`}
+                            {t.unit && t.remark && " / "}
+                            {t.remark && `备注：${t.remark}`}
+                          </div>
+                        ) : "—"
                       ) : (
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                           {t.parameters.slice(0, 6).map((p: any, i: number) => (
@@ -171,16 +197,25 @@ export default function ProjectInfoView({ info, onEvidence }: Props) {
         {business.length === 0 ? (
           <div className="kb-empty" style={{ marginTop: 10 }}>未抽取到商务条款</div>
         ) : (
-          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
-            {business.map((b) => (
-              <div key={b._idx} className="kb-doc-card">
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                  <div className="kb-doc-title">{b.term || "条款"}</div>
-                  {showEvidenceBtn(b.evidence)}
-                </div>
-                <div className="tender-cell" style={{ marginTop: 6 }}>{b.requirement || "—"}</div>
-              </div>
-            ))}
+          <div className="tender-table-wrap" style={{ marginTop: 10 }}>
+            <table className="tender-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 180 }}>条款类型</th>
+                  <th>条款内容</th>
+                  <th style={{ width: 120 }}>证据</th>
+                </tr>
+              </thead>
+              <tbody>
+                {business.map((b) => (
+                  <tr key={b._idx}>
+                    <td>{b.term || "—"}</td>
+                    <td className="tender-cell">{b.requirement || "—"}</td>
+                    <td>{showEvidenceBtn(b.evidence)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>

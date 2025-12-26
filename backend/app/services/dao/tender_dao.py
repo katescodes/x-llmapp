@@ -1360,6 +1360,11 @@ class TenderDAO:
         end_body_index: int,
         confidence: Optional[float],
         diagnostics_json: Optional[str],
+        # ✅ 新增：content参数
+        content_type: Optional[str] = None,
+        content_html: Optional[str] = None,
+        content_text: Optional[str] = None,
+        content_items: Optional[str] = None,
     ) -> str:
         """
         插入或更新范本片段（去重）
@@ -1392,11 +1397,16 @@ class TenderDAO:
                   end_body_index=%s,
                   confidence=%s,
                   diagnostics_json=%s,
+                  content_type=%s,
+                  content_html=%s,
+                  content_text=%s,
+                  content_items=%s,
                   updated_at=NOW()
                 WHERE id=%s
                 """,
                 (source_file_sha256, title, title_norm, path_hint, heading_level,
-                 end_body_index, confidence, diagnostics_json, fid),
+                 end_body_index, confidence, diagnostics_json,
+                 content_type, content_html, content_text, content_items, fid),
             )
             return fid
         else:
@@ -1408,13 +1418,15 @@ class TenderDAO:
                   (id, owner_type, owner_id, source_file_key, source_file_sha256,
                    fragment_type, title, title_norm, path_hint, heading_level,
                    start_body_index, end_body_index, confidence, diagnostics_json,
+                   content_type, content_html, content_text, content_items,
                    created_at, updated_at)
                 VALUES
-                  (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                  (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
                 """,
                 (fid, owner_type, owner_id, source_file_key, source_file_sha256,
                  fragment_type, title, title_norm, path_hint, heading_level,
-                 start_body_index, end_body_index, confidence, diagnostics_json),
+                 start_body_index, end_body_index, confidence, diagnostics_json,
+                 content_type, content_html, content_text, content_items),
             )
             return fid
     

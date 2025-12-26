@@ -29,6 +29,14 @@ class UpdateRecordingRequest(BaseModel):
     tags: Optional[List[str]] = None
     notes: Optional[str] = None
 
+
+class TranscribeRequest(BaseModel):
+    """转写请求参数"""
+    enhance: bool = False  # 是否启用LLM增强
+    enhancement_type: str = "punctuation"  # 增强类型: punctuation, formal, meeting
+    model_id: Optional[str] = None  # LLM模型ID（可选）
+
+
 @router.get("")
 async def list_recordings(
     status: Optional[str] = Query(None, description="Filter by status: pending, imported, failed, all"),
@@ -253,18 +261,26 @@ async def generate_recording_summary(
             detail=f"生成摘要失败: {str(e)}"
         )
 
+from pydantic import BaseModel
+from typing import Optional
+
+# ... existing imports ...
+
+
 @router.post("/{recording_id}/transcribe")
 async def transcribe_recording(
     recording_id: str,
+    request: TranscribeRequest = TranscribeRequest(),
     current_user: TokenData = Depends(get_current_user)
 ):
     """
     手动转写录音文件
     
     用于重新转写或转写之前未转写的录音
+    支持LLM文本增强（标点符号和段落划分）
     需要认证
     """
-    print(f"[DEBUG] Transcribe request: recording_id={recording_id}, user_id={current_user.user_id}, username={current_user.username}")
+    print(f"[DEBUG] Transcribe request: recording_id={recording_id}, user_id={current_user.user_id}, enhance={request.enhance}, type={request.enhancement_type}")
     recording = recording_service.get_recording_by_id(recording_id, current_user.user_id)
     print(f"[DEBUG] Recording查询结果: found={recording is not None}")
     
@@ -292,15 +308,21 @@ async def transcribe_recording(
         
         filename = recording.get("filename", "audio.webm")
         
-        # 执行转写
+        # 执行转写（支持增强）
         transcript, duration = await transcribe_audio(
             audio_data=audio_data,
             filename=filename,
-            language="zh"
+            language="zh",
+            enhance=request.enhance,
+            enhancement_type=request.enhancement_type,
+            model_id=request.model_id
         )
         
         # 更新数据库
         word_count = len(transcript)
+        # 处理duration可能为None的情况
+        duration_int = int(duration) if duration is not None else 0
+        
         from app.services.db.postgres import get_conn
         
         with get_conn() as conn:
@@ -312,14 +334,14 @@ async def transcribe_recording(
                         duration = %s,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = %s
-                """, (transcript, word_count, int(duration), recording_id))
+                """, (transcript, word_count, duration_int, recording_id))
             conn.commit()
         
         return {
             "status": "success",
             "transcript": transcript,
             "word_count": word_count,
-            "duration": int(duration)
+            "duration": duration_int
         }
         
     except Exception as e:

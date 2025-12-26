@@ -20,6 +20,9 @@ services:
       - APP_SETTINGS_PATH=/app/data/app_settings.json
       - SEARCH_USAGE_STORAGE=/app/data/search_usage.json
       - MILVUS_LITE_PATH=/app/data/milvus.db
+      # 性能优化: 减少检索量以提升速度 (2025-12-25)
+      - V2_RETRIEVAL_TOPK_PER_QUERY=10
+      - V2_RETRIEVAL_TOPK_TOTAL=40
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=localgpt

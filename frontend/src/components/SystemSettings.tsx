@@ -161,12 +161,39 @@ const parseCurl = (command: string): CurlParseResult => {
 
 interface LLMSettingsProps {}
 
+// Prompt相关类型
+interface PromptModule {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+}
+
+interface PromptTemplate {
+  id: string;
+  module: string;
+  name: string;
+  description: string;
+  content: string;
+  version: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface HistoryItem {
+  id: string;
+  version: number;
+  change_note: string;
+  changed_at: string;
+}
+
 const SystemSettings: React.FC<LLMSettingsProps> = () => {
   const { token } = useAuth();
   const authFetch = useAuthFetch();
   
   // Tab state
-  const [currentTab, setCurrentTab] = useState<'llm' | 'embedding' | 'app' | 'asr'>('llm');
+  const [currentTab, setCurrentTab] = useState<'llm' | 'embedding' | 'app' | 'asr' | 'prompts'>('llm');
   
   // LLM states
   const [models, setModels] = useState<LLMModel[]>([]);
@@ -207,6 +234,18 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
   const [showAsrCurlHelper, setShowAsrCurlHelper] = useState(false);
   const [testingAsrConfig, setTestingAsrConfig] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<any>(null);
+  
+  // Prompt states
+  const [promptModules, setPromptModules] = useState<PromptModule[]>([]);
+  const [selectedModule, setSelectedModule] = useState<string>("");
+  const [prompts, setPrompts] = useState<PromptTemplate[]>([]);
+  const [selectedPrompt, setSelectedPrompt] = useState<PromptTemplate | null>(null);
+  const [editingContent, setEditingContent] = useState<string>("");
+  const [isEditingPrompt, setIsEditingPrompt] = useState(false);
+  const [promptHistory, setPromptHistory] = useState<HistoryItem[]>([]);
+  const [showPromptHistory, setShowPromptHistory] = useState(false);
+  const [changeNote, setChangeNote] = useState("");
+  const [promptLoading, setPromptLoading] = useState(false);
   const [showEmbeddingModal, setShowEmbeddingModal] = useState(false);
   const [editingEmbedding, setEditingEmbedding] = useState<EmbeddingProvider | null>(null);
   const [embeddingFormData, setEmbeddingFormData] = useState<EmbeddingProviderCreate>({
@@ -417,6 +456,109 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
     setShowAsrForm(true);
   };
   
+  // ===== Prompt管理函数 =====
+  
+  const loadPromptModules = async () => {
+    try {
+      const resp = await fetch(`/api/apps/tender/prompts/modules`);
+      const data = await resp.json();
+      if (data.ok) {
+        setPromptModules(data.modules);
+        if (data.modules.length > 0) {
+          setSelectedModule(data.modules[0].id);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load modules:", err);
+    }
+  };
+
+  const loadPrompts = async (module: string) => {
+    try {
+      const resp = await fetch(`/api/apps/tender/prompts/?module=${module}`);
+      const data = await resp.json();
+      if (data.ok) {
+        setPrompts(data.prompts);
+        if (data.prompts.length > 0) {
+          selectPrompt(data.prompts[0]);
+        } else {
+          setSelectedPrompt(null);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load prompts:", err);
+    }
+  };
+
+  const selectPrompt = (prompt: PromptTemplate) => {
+    setSelectedPrompt(prompt);
+    setEditingContent(prompt.content);
+    setIsEditingPrompt(false);
+    setShowPromptHistory(false);
+  };
+
+  const handlePromptSave = async () => {
+    if (!selectedPrompt || !changeNote.trim()) {
+      alert("请填写变更说明");
+      return;
+    }
+
+    setPromptLoading(true);
+    try {
+      const resp = await fetch(`/api/apps/tender/prompts/${selectedPrompt.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: editingContent,
+          change_note: changeNote,
+        }),
+      });
+      const data = await resp.json();
+
+      if (data.ok) {
+        alert(`保存成功！版本：v${data.version}`);
+        setIsEditingPrompt(false);
+        setChangeNote("");
+        loadPrompts(selectedModule);
+      }
+    } catch (err: any) {
+      console.error("Failed to save prompt:", err);
+      alert(`保存失败：${err.message}`);
+    } finally {
+      setPromptLoading(false);
+    }
+  };
+
+  const loadPromptHistory = async (promptId: string) => {
+    try {
+      const resp = await fetch(`/api/apps/tender/prompts/${promptId}/history`);
+      const data = await resp.json();
+      if (data.ok) {
+        setPromptHistory(data.history);
+        setShowPromptHistory(true);
+      }
+    } catch (err) {
+      console.error("Failed to load history:", err);
+    }
+  };
+
+  const viewPromptVersion = async (promptId: string, version: number) => {
+    try {
+      const resp = await fetch(`/api/apps/tender/prompts/${promptId}/history/${version}`);
+      const data = await resp.json();
+      if (data.ok) {
+        const versionData = data.version_data;
+        if (confirm(`查看版本 v${version} (${versionData.changed_at})\n变更说明: ${versionData.change_note}\n\n是否加载此版本内容到编辑器？`)) {
+          setEditingContent(versionData.content);
+          setIsEditingPrompt(true);
+          setShowPromptHistory(false);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load version:", err);
+    }
+  };
+  
   // ===== LLM模型管理函数 =====
 
   const loadModels = async () => {
@@ -520,7 +662,16 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
     if (token && currentTab === 'asr') {
       loadAsrConfigs();
     }
+    if (currentTab === 'prompts') {
+      loadPromptModules();
+    }
   }, [apiBaseUrl, token, currentTab]);
+  
+  useEffect(() => {
+    if (selectedModule) {
+      loadPrompts(selectedModule);
+    }
+  }, [selectedModule]);
 
   useEffect(() => {
     if (showCreateForm) {
@@ -1009,6 +1160,23 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
           }}
         >
           🎤 语音转文本
+        </button>
+        <button
+          onClick={() => setCurrentTab('prompts')}
+          style={{
+            padding: "10px 20px",
+            background: currentTab === 'prompts' ? "rgba(79, 70, 229, 0.2)" : "transparent",
+            color: currentTab === 'prompts' ? "#22c55e" : "#94a3b8",
+            border: "none",
+            borderBottom: currentTab === 'prompts' ? "2px solid #22c55e" : "none",
+            borderRadius: "6px 6px 0 0",
+            cursor: "pointer",
+            fontSize: "14px",
+            fontWeight: currentTab === 'prompts' ? "600" : "normal",
+            transition: "all 0.2s"
+          }}
+        >
+          📝 Prompt管理
         </button>
       </div>
 
@@ -2665,6 +2833,189 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
           </div>,
           document.body
         )}
+
+      {/* Prompt管理标签页 */}
+      {currentTab === 'prompts' && (
+        <div>
+          {/* 模块选择 */}
+          <div style={{ marginBottom: "20px", display: "flex", gap: "10px", flexWrap: "wrap" }}>
+            {promptModules.map((mod) => (
+              <button
+                key={mod.id}
+                onClick={() => setSelectedModule(mod.id)}
+                style={{
+                  padding: "10px 20px",
+                  border: selectedModule === mod.id ? "2px solid #22c55e" : "1px solid rgba(148, 163, 184, 0.2)",
+                  background: selectedModule === mod.id ? "rgba(34, 197, 94, 0.2)" : "rgba(15, 23, 42, 0.8)",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  color: "#e5e7eb",
+                  transition: "all 0.2s"
+                }}
+              >
+                {mod.icon} {mod.name}
+              </button>
+            ))}
+          </div>
+
+          {promptModules.find(m => m.id === selectedModule) && (
+            <div style={{ marginBottom: "20px", padding: "15px", background: "rgba(15, 23, 42, 0.8)", borderRadius: "6px", border: "1px solid rgba(148, 163, 184, 0.2)" }}>
+              <strong>{promptModules.find(m => m.id === selectedModule)?.icon} {promptModules.find(m => m.id === selectedModule)?.name}</strong>
+              <div style={{ color: "#94a3b8", marginTop: "5px", fontSize: "13px" }}>{promptModules.find(m => m.id === selectedModule)?.description}</div>
+            </div>
+          )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "250px 1fr", gap: "20px" }}>
+            {/* 左侧：Prompt列表 */}
+            <div>
+              <h3 style={{ marginTop: 0 }}>版本列表</h3>
+              {prompts.length === 0 ? (
+                <div style={{ color: "#94a3b8", padding: "20px", textAlign: "center", background: "rgba(15, 23, 42, 0.8)", borderRadius: "6px" }}>
+                  暂无Prompt模板
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                  {prompts.map((p) => (
+                    <div
+                      key={p.id}
+                      onClick={() => selectPrompt(p)}
+                      style={{
+                        padding: "12px",
+                        border: selectedPrompt?.id === p.id ? "2px solid #22c55e" : "1px solid rgba(148, 163, 184, 0.2)",
+                        borderRadius: "6px",
+                        cursor: "pointer",
+                        background: selectedPrompt?.id === p.id ? "rgba(34, 197, 94, 0.2)" : "rgba(15, 23, 42, 0.8)",
+                        transition: "all 0.2s"
+                      }}
+                    >
+                      <div style={{ fontWeight: 600 }}>{p.name}</div>
+                      <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "4px" }}>
+                        版本: v{p.version} | {p.is_active ? "✓ 激活" : "未激活"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 右侧：Prompt编辑器 */}
+            <div>
+              {selectedPrompt ? (
+                <>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                    <h3 style={{ margin: 0 }}>{selectedPrompt.name} (v{selectedPrompt.version})</h3>
+                    <div style={{ display: "flex", gap: "10px" }}>
+                      <button
+                        onClick={() => loadPromptHistory(selectedPrompt.id)}
+                        style={{ padding: "8px 16px", cursor: "pointer", background: "rgba(79, 70, 229, 0.2)", color: "#e5e7eb", border: "1px solid rgba(148, 163, 184, 0.2)", borderRadius: "6px" }}
+                      >
+                        📜 查看历史
+                      </button>
+                      {!isEditingPrompt ? (
+                        <button
+                          onClick={() => setIsEditingPrompt(true)}
+                          style={{ padding: "8px 16px", background: "linear-gradient(135deg, #4f46e5, #22c55e)", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}
+                        >
+                          ✏️ 编辑
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => { setIsEditingPrompt(false); setEditingContent(selectedPrompt.content); }}
+                            style={{ padding: "8px 16px", cursor: "pointer", background: "rgba(239, 68, 68, 0.2)", color: "#fca5a5", border: "1px solid rgba(239, 68, 68, 0.3)", borderRadius: "6px" }}
+                          >
+                            取消
+                          </button>
+                          <button
+                            onClick={handlePromptSave}
+                            disabled={promptLoading}
+                            style={{ padding: "8px 16px", background: "linear-gradient(135deg, #10b981, #22c55e)", color: "white", border: "none", borderRadius: "6px", cursor: promptLoading ? "not-allowed" : "pointer" }}
+                          >
+                            {promptLoading ? "保存中..." : "💾 保存"}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {isEditingPrompt && (
+                    <div style={{ marginBottom: "10px" }}>
+                      <input
+                        type="text"
+                        placeholder="变更说明（必填）"
+                        value={changeNote}
+                        onChange={(e) => setChangeNote(e.target.value)}
+                        style={{ width: "100%", padding: "8px", border: "1px solid rgba(148, 163, 184, 0.2)", borderRadius: "6px", background: "rgba(15, 23, 42, 0.8)", color: "#e5e7eb" }}
+                      />
+                    </div>
+                  )}
+
+                  {showPromptHistory ? (
+                    <div style={{ border: "1px solid rgba(148, 163, 184, 0.2)", borderRadius: "6px", padding: "20px", background: "rgba(15, 23, 42, 0.8)" }}>
+                      <h4>变更历史</h4>
+                      {promptHistory.length === 0 ? (
+                        <div style={{ color: "#94a3b8", textAlign: "center", padding: "20px" }}>暂无历史记录</div>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                          {promptHistory.map((h) => (
+                            <div
+                              key={h.id}
+                              style={{ padding: "12px", border: "1px solid rgba(148, 163, 184, 0.2)", borderRadius: "6px", cursor: "pointer", background: "rgba(30, 41, 59, 0.8)" }}
+                              onClick={() => viewPromptVersion(selectedPrompt.id, h.version)}
+                            >
+                              <div style={{ fontWeight: 600 }}>版本 v{h.version}</div>
+                              <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "4px" }}>
+                                {h.change_note}
+                              </div>
+                              <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "4px" }}>
+                                {new Date(h.changed_at).toLocaleString("zh-CN")}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <textarea
+                      value={editingContent}
+                      onChange={(e) => setEditingContent(e.target.value)}
+                      disabled={!isEditingPrompt}
+                      style={{
+                        width: "100%",
+                        height: "500px",
+                        padding: "12px",
+                        border: "1px solid rgba(148, 163, 184, 0.2)",
+                        borderRadius: "6px",
+                        fontFamily: "Consolas, Monaco, monospace",
+                        fontSize: "13px",
+                        lineHeight: "1.6",
+                        background: isEditingPrompt ? "rgba(15, 23, 42, 0.8)" : "rgba(30, 41, 59, 0.8)",
+                        color: "#e5e7eb",
+                        resize: "vertical",
+                      }}
+                    />
+                  )}
+
+                  <div style={{ marginTop: "10px", padding: "10px", background: "rgba(251, 191, 36, 0.1)", border: "1px solid rgba(251, 191, 36, 0.3)", borderRadius: "6px", fontSize: "12px", color: "#fbbf24" }}>
+                    <strong>💡 提示：</strong>
+                    <ul style={{ margin: "5px 0", paddingLeft: "20px" }}>
+                      <li>修改保存后，下次点击"开始提取/开始识别"等按钮时会自动使用最新版本</li>
+                      <li>支持Markdown格式，可以使用标题、列表、代码块等</li>
+                      <li>每次保存会自动创建新版本，可通过"查看历史"恢复旧版本</li>
+                      <li>建议修改前先填写详细的变更说明，便于后续追溯</li>
+                    </ul>
+                  </div>
+                </>
+              ) : (
+                <div style={{ textAlign: "center", color: "#94a3b8", padding: "60px", background: "rgba(15, 23, 42, 0.8)", borderRadius: "6px" }}>
+                  请选择一个Prompt模板
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* LLM 新增/编辑表单 */}
       {showCreateForm &&

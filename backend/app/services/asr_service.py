@@ -344,6 +344,9 @@ async def transcribe_audio(
     audio_data: bytes,
     filename: str,
     language: Optional[str] = None,
+    enhance: bool = False,
+    enhancement_type: str = "punctuation",
+    model_id: Optional[str] = None
 ) -> Tuple[str, float]:
     """
     使用远程 API 转录音频文件
@@ -352,6 +355,9 @@ async def transcribe_audio(
         audio_data: 音频文件的二进制数据
         filename: 文件名（用于确定格式）
         language: 可选的语言代码（如 'zh', 'en'）
+        enhance: 是否使用LLM增强标点符号和段落（默认False）
+        enhancement_type: 增强类型 ("punctuation", "formal", "meeting")
+        model_id: LLM模型ID（可选，不指定则使用默认模型）
         
     Returns:
         (转录后的文本, 音频时长)
@@ -431,6 +437,21 @@ async def transcribe_audio(
             len(text),
             duration,
         )
+        
+        # LLM文本增强（如果启用）
+        if enhance and text:
+            from .text_enhancement_service import enhance_transcription
+            try:
+                logger.info(f"Starting text enhancement (type={enhancement_type}, model={model_id})")
+                original_length = len(text)
+                text = await enhance_transcription(
+                    text=text,
+                    enhancement_type=enhancement_type,
+                    model_id=model_id
+                )
+                logger.info(f"Text enhancement completed: {original_length} → {len(text)} chars")
+            except Exception as e:
+                logger.warning(f"Text enhancement failed, using original: {e}")
         
         # 更新使用统计
         try:

@@ -267,6 +267,10 @@ app.include_router(declare.router)
 app.include_router(export.router)
 app.include_router(template_analysis.router)
 
+# Prompt管理
+from app.routers import prompts
+app.include_router(prompts.router)
+
 # Legacy tender APIs 已删除
 # if os.getenv("LEGACY_TENDER_APIS_ENABLED", "false").lower() in ("true", "1", "yes"):
 #     ... (legacy APIs removed)
