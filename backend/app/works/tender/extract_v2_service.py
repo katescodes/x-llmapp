@@ -25,68 +25,264 @@ class ExtractV2Service:
         self.retriever = RetrievalFacade(pool)
         self.llm = llm_orchestrator
         self.engine = ExtractionEngine()
+        # 创建DAO用于更新run状态和保存数据
+        from app.services.dao.tender_dao import TenderDAO
+        self.dao = TenderDAO(pool)
     
     async def extract_project_info_v2(
         self,
         project_id: str,
         model_id: Optional[str],
         run_id: Optional[str] = None,
+        use_staged: bool = True,
     ) -> Dict[str, Any]:
         """
-        抽取项目信息 (v2) - 使用平台 ExtractionEngine
+        抽取项目信息 (v3) - 九阶段顺序抽取
+        
+        ⚠️ V3 版本：九大类招标信息抽取
+        
+        优先从数据库加载最新的prompt模板，如果数据库中没有则使用文件fallback
+        
+        Args:
+            project_id: 项目ID
+            model_id: 模型ID
+            run_id: 运行ID
+            use_staged: 是否使用九阶段抽取（默认True）
         
         Returns:
             {
-                "data": {...},
+                "schema_version": "tender_info_v3",
+                "project_overview": {...},
+                "scope_and_lots": {...},
+                "schedule_and_submission": {...},
+                "bidder_qualification": {...},
+                "evaluation_and_scoring": {...},
+                "business_terms": {...},
+                "technical_requirements": {...},
+                "document_preparation": {...},
+                "bid_security": {...},
                 "evidence_chunk_ids": [...],
                 "evidence_spans": [...],
                 "retrieval_trace": {...}
             }
         """
-        logger.info(f"ExtractV2: extract_project_info start project_id={project_id}")
+        logger.info(f"ExtractV2: extract_project_info_v3 start project_id={project_id} use_staged={use_staged}")
         
         # 1. 获取 embedding provider
         embedding_provider = get_embedding_store().get_default()
         if not embedding_provider:
             raise ValueError("No embedding provider configured")
         
-        # 2. 构建 spec
-        spec = build_project_info_spec()
+        # 2. 构建 spec（使用异步版本，支持数据库加载）
+        from app.works.tender.extraction_specs.project_info_v2 import build_project_info_spec_async
         
-        # 3. 调用引擎
-        result = await self.engine.run(
-            spec=spec,
-            retriever=self.retriever,
-            llm=self.llm,
-            project_id=project_id,
-            model_id=model_id,
-            run_id=run_id,
-            embedding_provider=embedding_provider,
-        )
+        if use_staged:
+            # 使用九阶段抽取（V3版本）
+            return await self._extract_project_info_staged(
+                project_id=project_id,
+                model_id=model_id,
+                run_id=run_id,
+                embedding_provider=embedding_provider,
+            )
+        else:
+            # 使用原有的一次性抽取（不推荐，返回V3结构）
+            spec = await build_project_info_spec_async(self.pool)
+            
+            # 3. 调用引擎
+            result = await self.engine.run(
+                spec=spec,
+                retriever=self.retriever,
+                llm=self.llm,
+                project_id=project_id,
+                model_id=model_id,
+                run_id=run_id,
+                embedding_provider=embedding_provider,
+            )
+            
+            # 调试日志：查看实际返回的数据结构
+            logger.info(
+                f"ExtractV2: extract_project_info_v3 done "
+                f"evidence={len(result.evidence_chunk_ids)} "
+                f"data_keys={list(result.data.keys()) if isinstance(result.data, dict) else 'NOT_DICT'} "
+                f"data_type={type(result.data).__name__} "
+                f"data_empty={not bool(result.data)}"
+            )
+            
+            # 如果 data 是空的，记录警告
+            if not result.data or (isinstance(result.data, dict) and not result.data):
+                logger.warning(
+                    f"ExtractV2: extract_project_info_v3 returned EMPTY data! "
+                    f"project_id={project_id} "
+                    f"result.data={result.data}"
+            )
+            
+            # 4. 返回结果（V3结构：顶层直接是九大类）
+            return {
+                "schema_version": "tender_info_v3",
+                **result.data,  # 展开九大类
+                "evidence_chunk_ids": result.evidence_chunk_ids,
+                "evidence_spans": result.evidence_spans,
+                "retrieval_trace": result.retrieval_trace.__dict__ if result.retrieval_trace else {}
+            }
+    
+    async def _extract_project_info_staged(
+        self,
+        project_id: str,
+        model_id: Optional[str],
+        run_id: Optional[str],
+        embedding_provider: str,
+    ) -> Dict[str, Any]:
+        """
+        九阶段顺序抽取项目信息（V3版本）
         
-        # 调试日志：查看实际返回的数据结构
+        Stage 1: project_overview (项目概览)
+        Stage 2: scope_and_lots (范围与标段)
+        Stage 3: schedule_and_submission (进度与递交)
+        Stage 4: bidder_qualification (投标人资格)
+        Stage 5: evaluation_and_scoring (评审与评分)
+        Stage 6: business_terms (商务条款)
+        Stage 7: technical_requirements (技术要求)
+        Stage 8: document_preparation (文件编制)
+        Stage 9: bid_security (保证金与担保)
+        """
+        import json
+        from app.works.tender.extraction_specs.project_info_v2 import build_project_info_spec_async
+        
+        logger.info(f"ExtractV2: Starting STAGED extraction (V3 - 9 stages) for project={project_id}")
+        
+        # 构建统一的 spec（从 project_info 模块加载）
+        spec = await build_project_info_spec_async(self.pool)
+        
+        # 定义九个阶段
+        stages = [
+            {"stage": 1, "name": "项目概览", "key": "project_overview"},
+            {"stage": 2, "name": "范围与标段", "key": "scope_and_lots"},
+            {"stage": 3, "name": "进度与递交", "key": "schedule_and_submission"},
+            {"stage": 4, "name": "投标人资格", "key": "bidder_qualification"},
+            {"stage": 5, "name": "评审与评分", "key": "evaluation_and_scoring"},
+            {"stage": 6, "name": "商务条款", "key": "business_terms"},
+            {"stage": 7, "name": "技术要求", "key": "technical_requirements"},
+            {"stage": 8, "name": "文件编制", "key": "document_preparation"},
+            {"stage": 9, "name": "保证金与担保", "key": "bid_security"},
+        ]
+        
+        # 存储各阶段结果
+        stage_results = {}
+        all_evidence_chunk_ids = set()
+        all_evidence_spans = []
+        all_traces = []
+        
+        # 顺序执行九个阶段
+        for stage_info in stages:
+            stage_num = stage_info["stage"]
+            stage_name = stage_info["name"]
+            stage_key = stage_info["key"]
+            
+            logger.info(f"ExtractV2: Executing Stage {stage_num}/9 - {stage_name}")
+            
+            # 构建上下文信息（前序阶段的结果）
+            context_info = ""
+            if stage_num > 1:
+                context_parts = []
+                for prev_stage in stages[:stage_num-1]:
+                    prev_key = prev_stage["key"]
+                    if prev_key in stage_results:
+                        context_parts.append(f"{prev_stage['name']}: {json.dumps(stage_results[prev_key], ensure_ascii=False)[:300]}")
+                context_info = "\n".join(context_parts)
+            
+            try:
+                # 更新run状态：开始当前阶段
+                if run_id:
+                    progress = 0.05 + (stage_num - 1) * 0.1  # Stage 1: 0.05, Stage 2: 0.15, ..., Stage 9: 0.85
+                    self.dao.update_run(run_id, "running", progress=progress, message=f"正在抽取：{stage_name}...")
+                
+                # 调用引擎执行当前阶段
+                result = await self.engine.run(
+                    spec=spec,
+                    retriever=self.retriever,
+                    llm=self.llm,
+                    project_id=project_id,
+                    model_id=model_id,
+                    run_id=run_id,
+                    embedding_provider=embedding_provider,
+                    stage=stage_num,
+                    stage_name=stage_name,
+                    context_info=context_info,
+                )
+                
+                # 提取当前阶段的数据
+                stage_data = result.data.get(stage_key) if isinstance(result.data, dict) else result.data
+                
+                if not stage_data:
+                    logger.warning(f"ExtractV2: Stage {stage_num} returned EMPTY data")
+                    # 设置默认值
+                    stage_data = {}
+                
+                # 保存当前阶段结果
+                stage_results[stage_key] = stage_data
+                
+                # 收集证据
+                all_evidence_chunk_ids.update(result.evidence_chunk_ids)
+                all_evidence_spans.extend(result.evidence_spans)
+                
+                # 收集追踪信息
+                if result.retrieval_trace:
+                    all_traces.append({
+                        "stage": stage_num,
+                        "name": stage_name,
+                        "trace": result.retrieval_trace.__dict__
+                    })
+                
+                logger.info(
+                    f"ExtractV2: Stage {stage_num}/9 done - "
+                    f"data_type={type(stage_data).__name__} "
+                    f"data_keys={list(stage_data.keys()) if isinstance(stage_data, dict) else 'N/A'} "
+                    f"evidence={len(result.evidence_chunk_ids)}"
+                )
+                
+                # ✅ 增量更新：每完成一个阶段就写入数据库
+                incremental_data = {
+                    "schema_version": "tender_info_v3",
+                    **{k: stage_results.get(k, {}) for k in [s["key"] for s in stages]}
+                }
+                self.dao.upsert_project_info(
+                    project_id, 
+                    data_json=incremental_data, 
+                    evidence_chunk_ids=list(all_evidence_chunk_ids)
+                )
+                
+                # 更新run进度
+                if run_id:
+                    progress = 0.05 + stage_num * 0.1  # Stage 1完成: 0.15, ..., Stage 9: 0.95
+                    self.dao.update_run(run_id, "running", progress=progress, message=f"{stage_name}已完成")
+                
+                logger.info(f"ExtractV2: Stage {stage_num}/9 incremental update done")
+                
+            except Exception as e:
+                logger.error(f"ExtractV2: Stage {stage_num}/9 failed: {e}", exc_info=True)
+                # 失败时设置默认值，但不影响其他阶段
+                stage_results[stage_key] = {}
+        
+        # 合并所有阶段结果（V3结构）
+        final_data = {
+            "schema_version": "tender_info_v3",
+            **{stage["key"]: stage_results.get(stage["key"], {}) for stage in stages}
+        }
+        
         logger.info(
-            f"ExtractV2: extract_project_info done "
-            f"evidence={len(result.evidence_chunk_ids)} "
-            f"data_keys={list(result.data.keys()) if isinstance(result.data, dict) else 'NOT_DICT'} "
-            f"data_type={type(result.data).__name__} "
-            f"data_empty={not bool(result.data)}"
+            f"ExtractV2: STAGED extraction (V3) completed - "
+            f"stages_completed={len(stage_results)}/9"
         )
         
-        # 如果 data 是空的，记录警告
-        if not result.data or (isinstance(result.data, dict) and not result.data):
-            logger.warning(
-                f"ExtractV2: extract_project_info returned EMPTY data! "
-                f"project_id={project_id} "
-                f"result.data={result.data}"
-        )
-        
-        # 4. 返回结果（保持接口兼容）
+        # 返回完整结果
         return {
-            "data": result.data,
-            "evidence_chunk_ids": result.evidence_chunk_ids,
-            "evidence_spans": result.evidence_spans,
-            "retrieval_trace": result.retrieval_trace.__dict__ if result.retrieval_trace else {}
+            **final_data,  # 直接展开九大类到顶层
+            "evidence_chunk_ids": list(all_evidence_chunk_ids),
+            "evidence_spans": all_evidence_spans,
+            "retrieval_trace": {
+                "mode": "staged_v3",
+                "stages": all_traces
+            }
         }
     
     async def extract_risks_v2(
