@@ -15,6 +15,7 @@ import {
   TENDER_INFO_V3_CATEGORY_LABELS,
   TenderInfoV3Category
 } from '../../types/tenderInfoV3';
+import { getFieldLabel } from '../../types/fieldLabels';
 
 type Props = {
   info: Record<string, any>;
@@ -142,10 +143,8 @@ const renderV3Category = (
 
       <div className="tender-kv-grid">
         {fields.map(([key, value]) => {
-          // 转换字段名为中文标签
-          const fieldLabel = key
-            .replace(/_/g, ' ')
-            .replace(/\b\w/g, l => l.toUpperCase());
+          // 使用中文标签
+          const fieldLabel = getFieldLabel(key);
           
           return renderField(fieldLabel, value, [], onEvidence);
         })}
