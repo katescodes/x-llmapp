@@ -216,7 +216,7 @@ class ExtractV2Service:
                 if not stage_data:
                     logger.warning(f"ExtractV2: Stage {stage_num} returned EMPTY data")
                     # 设置默认值
-                        stage_data = {}
+                    stage_data = {}
                 
                 # 保存当前阶段结果
                 stage_results[stage_key] = stage_data
@@ -261,7 +261,7 @@ class ExtractV2Service:
             except Exception as e:
                 logger.error(f"ExtractV2: Stage {stage_num}/9 failed: {e}", exc_info=True)
                 # 失败时设置默认值，但不影响其他阶段
-                    stage_results[stage_key] = {}
+                stage_results[stage_key] = {}
         
         # 合并所有阶段结果（V3结构）
         final_data = {
