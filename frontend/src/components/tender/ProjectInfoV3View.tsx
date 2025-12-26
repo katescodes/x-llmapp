@@ -17,6 +17,79 @@ import {
 } from '../../types/tenderInfoV3';
 import { getFieldLabel } from '../../types/fieldLabels';
 
+/**
+ * 定义每个类别的字段显示顺序
+ * 用于控制前端展示顺序，不受后端JSON字段顺序影响
+ */
+const FIELD_DISPLAY_ORDER: Record<string, string[]> = {
+  project_overview: [
+    // 基本信息
+    'project_name',
+    'project_number',
+    'owner_name',
+    'agency_name',
+    'contact_person',
+    'contact_phone',
+    'project_location',
+    'fund_source',
+    'procurement_method',
+    'budget',
+    'max_price',
+    // 范围与标段
+    'project_scope',
+    'lot_division',
+    'lots',
+    // 进度与递交
+    'bid_deadline',
+    'bid_opening_time',
+    'bid_opening_location',
+    'submission_method',
+    'submission_address',
+    'implementation_schedule',
+    'key_milestones',
+    // 保证金与担保
+    'bid_bond_amount',
+    'bid_bond_form',
+    'bid_bond_deadline',
+    'bid_bond_return',
+    'performance_bond',
+    'other_guarantees',
+  ],
+  bidder_qualification: [
+    'general_requirements',
+    'special_requirements',
+    'qualification_items',
+    'must_provide_documents',
+  ],
+  evaluation_and_scoring: [
+    'evaluation_method',
+    'reject_conditions',
+    'scoring_items',
+    'price_scoring_method',
+  ],
+  business_terms: [
+    'payment_terms',
+    'delivery_terms',
+    'warranty_terms',
+    'acceptance_terms',
+    'liability_terms',
+    'clauses',
+  ],
+  technical_requirements: [
+    'technical_specifications',
+    'quality_standards',
+    'technical_parameters',
+    'technical_proposal_requirements',
+  ],
+  document_preparation: [
+    'bid_documents_structure',
+    'format_requirements',
+    'copies_required',
+    'required_forms',
+    'signature_and_seal',
+  ],
+};
+
 type Props = {
   info: Record<string, any>;
   onEvidence?: (chunkIds: string[]) => void;
@@ -206,10 +279,29 @@ const renderV3Category = (
   const label = TENDER_INFO_V3_CATEGORY_LABELS[categoryKey] || categoryKey;
   const evidenceIds = categoryData.evidence_chunk_ids || [];
 
-  // 过滤出非 evidence_chunk_ids 的字段
-  const fields = Object.entries(categoryData).filter(
-    ([key]) => key !== 'evidence_chunk_ids'
-  );
+  // ✅ 使用预定义的字段顺序，如果没有定义则使用原始顺序
+  const fieldOrder = FIELD_DISPLAY_ORDER[categoryKey as string];
+  
+  let fields: [string, any][];
+  if (fieldOrder) {
+    // 按预定义顺序排列字段
+    fields = fieldOrder
+      .filter(key => key !== 'evidence_chunk_ids' && key in categoryData)
+      .map(key => [key, categoryData[key]]);
+    
+    // 添加未在预定义顺序中的字段（兜底）
+    const definedKeys = new Set(fieldOrder);
+    Object.entries(categoryData).forEach(([key, value]) => {
+      if (key !== 'evidence_chunk_ids' && !definedKeys.has(key)) {
+        fields.push([key, value]);
+      }
+    });
+  } else {
+    // 没有预定义顺序，使用原始顺序
+    fields = Object.entries(categoryData).filter(
+      ([key]) => key !== 'evidence_chunk_ids'
+    );
+  }
 
   // 渲染所有字段，过滤掉 null 结果
   const renderedFields = fields
