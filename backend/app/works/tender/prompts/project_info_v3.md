@@ -1,6 +1,15 @@
-# 项目信息抽取提示词 (v3 - 九大类)
+# 项目信息抽取提示词 (v3 - 六大类)
 
-你是招投标助手。请从"招标文件原文片段"中抽取项目信息。
+你是招投标助手。请从"检索到的相关文档片段"中抽取项目信息。
+
+**重要说明：**
+- 你将收到若干个已分块的文档片段（每个片段约 1200 字符）
+- 这些片段是通过语义相似度检索得到的，最相关的排在前面
+- 片段可能来自招标文件的不同章节，可能不连续
+- 每个片段都标记了 `<chunk id="xxx">` 作为唯一标识
+- 请仔细阅读所有片段，提取相关信息
+- **宁可少，不要错**：只提取有明确证据的信息
+- **必须记录证据**：所有提取的信息都要填写 evidence_chunk_ids
 
 **重要：本次执行仅抽取 Stage {CURRENT_STAGE} 的内容，禁止输出其他 Stage 的内容。**
 
@@ -8,31 +17,29 @@
 
 ## 执行阶段说明
 
-当前共分为九个执行阶段（Stage），每次调用只能执行一个阶段：
+当前共分为六个执行阶段（Stage），每次调用只能执行一个阶段：
 
-- **Stage 1**：项目概览（project_overview）
-- **Stage 2**：范围与标段（scope_and_lots）
-- **Stage 3**：进度与递交（schedule_and_submission）
-- **Stage 4**：投标人资格（bidder_qualification）
-- **Stage 5**：评审与评分（evaluation_and_scoring）
-- **Stage 6**：商务条款（business_terms）
-- **Stage 7**：技术要求（technical_requirements）
-- **Stage 8**：文件编制（document_preparation）
-- **Stage 9**：保证金与担保（bid_security）
+- **Stage 1**：项目概况（project_overview）- 含基本信息、范围、进度、保证金
+- **Stage 2**：投标人资格（bidder_qualification）
+- **Stage 3**：评审与评分（evaluation_and_scoring）
+- **Stage 4**：商务条款（business_terms）
+- **Stage 5**：技术要求（technical_requirements）
+- **Stage 6**：文件编制（document_preparation）
 
 **本次执行：Stage {CURRENT_STAGE} - {STAGE_NAME}**
 
 ---
 
-## Stage 1：项目概览（project_overview）
+## Stage 1：项目概况（project_overview）
 
 ### 职责
-仅抽取项目基本信息，不得分析、推断、补齐。
+抽取项目全部基础信息，包括：基本信息、范围与标段、进度与递交、保证金与担保。
 
 ### 输出结构（JSON）
 ```json
 {
   "project_overview": {
+    // 基本信息
     "project_name": "项目名称",
     "project_number": "项目编号/招标编号",
     "owner_name": "采购人/业主/招标人",
@@ -44,29 +51,8 @@
     "procurement_method": "采购方式",
     "budget": "预算金额",
     "max_price": "招标控制价/最高限价",
-    "evidence_chunk_ids": ["CHUNK_xxx"]
-  }
-}
-```
-
-### 抽取原则
-1. **宁可少，不要错**：只抽取有明确证据的信息
-2. **宁可空，不要猜**：没有证据的字段留空字符串
-3. **仅引用权威位置**：招标公告 / 封面 / 项目概况等
-4. **不要推断**：不要基于其他信息推断时间、金额等
-5. **证据必须准确**：必须填写 evidence_chunk_ids
-
----
-
-## Stage 2：范围与标段（scope_and_lots）
-
-### 职责
-抽取项目范围、标段划分信息。
-
-### 输出结构（JSON）
-```json
-{
-  "scope_and_lots": {
+    
+    // 范围与标段
     "project_scope": "项目范围/采购内容",
     "lot_division": "标段划分说明",
     "lots": [
@@ -78,27 +64,8 @@
         "evidence_chunk_ids": ["CHUNK_xxx"]
       }
     ],
-    "evidence_chunk_ids": ["CHUNK_xxx"]
-  }
-}
-```
-
-### 抽取原则
-1. **完整性**：如有多个标段，全部提取
-2. **结构化**：每个标段独立记录
-3. **无标段时**：lots 为空数组，lot_division 为空字符串
-
----
-
-## Stage 3：进度与递交（schedule_and_submission）
-
-### 职责
-抽取投标时间、地点、工期等信息。
-
-### 输出结构（JSON）
-```json
-{
-  "schedule_and_submission": {
+    
+    // 进度与递交
     "bid_deadline": "投标截止时间",
     "bid_opening_time": "开标时间（注意：如果文档中只写'在开标当日投标截止时间前'，说明开标时间=投标截止时间）",
     "bid_opening_location": "开标地点",
@@ -106,19 +73,38 @@
     "submission_address": "递交地点",
     "implementation_schedule": "实施工期/交付期",
     "key_milestones": "关键里程碑",
+    
+    // 保证金与担保
+    "bid_bond_amount": "投标保证金金额",
+    "bid_bond_form": "保证金形式(转账/保函/支票等)",
+    "bid_bond_deadline": "保证金递交截止时间",
+    "bid_bond_return": "保证金退还条件",
+    "performance_bond": "履约保证金要求",
+    "other_guarantees": "其他担保要求",
+    
     "evidence_chunk_ids": ["CHUNK_xxx"]
   }
 }
 ```
 
 ### 抽取原则
-1. **时间准确性**：确保时间格式正确
-2. **不要推断时间**：没有明确说明的不填
-3. **工期与交付期**：区分清楚
+1. **完整性优先**：这是全面的基础信息阶段，涵盖4个方面
+2. **宁可少，不要错**：只抽取有明确证据的信息
+3. **宁可空，不要猜**：没有证据的字段留空字符串
+4. **从检索片段中提取**：只从提供的片段中提取，不依赖外部知识
+5. **跨片段综合**：相关信息可能分散在多个片段中，需要综合判断
+6. **不要推断**：不要基于其他信息推断时间、金额等
+7. **片段不完整时**：如果检索到的片段不包含某些信息，对应字段留空
+8. **证据必须准确**：必须填写 evidence_chunk_ids（使用 <chunk id="xxx"> 中的 id）
+
+### 特别注意
+- **范围与标段**：如有多个标段，全部提取；无标段时 lots 为空数组
+- **时间准确性**：确保时间格式正确，不要推断时间
+- **保证金金额**：保证金金额不能错
 
 ---
 
-## Stage 4：投标人资格（bidder_qualification）
+## Stage 2：投标人资格（bidder_qualification）
 
 ### 职责
 抽取所有资格要求（资质/业绩/人员/财务等）。
@@ -150,7 +136,7 @@
 
 ---
 
-## Stage 5：评审与评分（evaluation_and_scoring）
+## Stage 3：评审与评分（evaluation_and_scoring）
 
 ### 职责
 抽取评标办法、评分标准、评分项。
@@ -191,7 +177,7 @@
 
 ---
 
-## Stage 6：商务条款（business_terms）
+## Stage 4：商务条款（business_terms）
 
 ### 职责
 抽取所有商务/合同/管理相关条款。
@@ -226,7 +212,7 @@
 
 ---
 
-## Stage 7：技术要求（technical_requirements）
+## Stage 5：技术要求（technical_requirements）
 
 ### 核心原则：语义理解优先
 
@@ -294,7 +280,7 @@
 
 ---
 
-## Stage 8：文件编制（document_preparation）
+## Stage 6：文件编制（document_preparation）
 
 ### 职责
 抽取投标文件的结构、格式、表单要求。
@@ -324,33 +310,6 @@
 1. **所有必填表单都要列出**
 2. **格式要求要详细**
 3. **签章要求要明确**
-
----
-
-## Stage 9：保证金与担保（bid_security）
-
-### 职责
-抽取投标保证金、履约保证金等担保要求。
-
-### 输出结构（JSON）
-```json
-{
-  "bid_security": {
-    "bid_bond_amount": "投标保证金金额",
-    "bid_bond_form": "保证金形式(转账/保函/支票等)",
-    "bid_bond_deadline": "保证金递交截止时间",
-    "bid_bond_return": "保证金退还条件",
-    "performance_bond": "履约保证金要求",
-    "other_guarantees": "其他担保要求",
-    "evidence_chunk_ids": ["CHUNK_xxx"]
-  }
-}
-```
-
-### 抽取原则
-1. **金额准确**：保证金金额不能错
-2. **时间准确**：截止时间要明确
-3. **退还条件**：详细说明
 
 ---
 

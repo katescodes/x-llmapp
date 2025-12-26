@@ -32,7 +32,7 @@ INSERT INTO prompt_templates (
     'prompt_project_info_v3_001',
     'project_info_v3',
     '招标信息提取 V3',
-    '从招标文件中提取九大类结构化信息（项目概况、范围与标段、进度与提交、投标人资格、评审与评分、商务条款、技术要求、文件编制、投标保证金）',
+    '从招标文件中提取六大类结构化信息（项目概况【含范围、进度、保证金】、投标人资格、评审与评分、商务条款、技术要求、文件编制）',
     '<<FILE_CONTENT: backend/app/works/tender/prompts/project_info_v3.md>>',
     1,
     TRUE,
