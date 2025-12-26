@@ -23,6 +23,45 @@ type Props = {
 };
 
 /**
+ * 渲染数组中的对象项（如商务条款、评分项等）
+ */
+const renderObjectItem = (item: any, idx: number, onEvidence?: (chunkIds: string[]) => void) => {
+  const fields = Object.entries(item).filter(([key]) => key !== 'evidence_chunk_ids');
+  const evidenceIds = item.evidence_chunk_ids || [];
+  
+  return (
+    <div key={idx} style={{ 
+      padding: '12px', 
+      marginBottom: idx < fields.length - 1 ? '8px' : 0,
+      background: 'rgba(15, 23, 42, 0.4)',
+      borderRadius: '6px',
+      border: '1px solid rgba(148, 163, 184, 0.2)'
+    }}>
+      {fields.map(([key, val]) => {
+        const fieldLabel = getFieldLabel(key);
+        return (
+          <div key={key} style={{ marginBottom: '6px', fontSize: '13px' }}>
+            <span style={{ color: '#94a3b8', marginRight: '8px' }}>{fieldLabel}:</span>
+            <span style={{ color: '#e2e8f0' }}>
+              {typeof val === 'boolean' ? (val ? '是' : '否') : String(val || '—')}
+            </span>
+          </div>
+        );
+      })}
+      {evidenceIds.length > 0 && onEvidence && (
+        <button 
+          onClick={() => onEvidence(evidenceIds)}
+          className="link-button"
+          style={{ marginTop: '6px', fontSize: '12px' }}
+        >
+          📎 证据 ({evidenceIds.length})
+        </button>
+      )}
+    </div>
+  );
+};
+
+/**
  * 渲染单个字段
  */
 const renderField = (
@@ -33,53 +72,70 @@ const renderField = (
 ) => {
   // 处理空值
   if (value === null || value === undefined || value === '') {
-    return (
-      <div key={label} className="tender-kv-item">
-        <div className="tender-kv-label">{label}</div>
-        <div className="tender-kv-value">—</div>
-      </div>
-    );
+    return null; // 空值不渲染
   }
 
   // 处理数组
   if (Array.isArray(value)) {
-    return (
-      <div key={label} className="tender-kv-item" style={{ gridColumn: '1 / -1' }}>
-        <div className="tender-kv-label">
-          {label}
-          {evidenceIds.length > 0 && onEvidence && (
-            <button 
-              onClick={() => onEvidence(evidenceIds)}
-              className="link-button"
-              style={{ marginLeft: 8, fontSize: '12px' }}
-            >
-              📎 证据 ({evidenceIds.length})
-            </button>
-          )}
+    // 空数组不渲染
+    if (value.length === 0) return null;
+    
+    // 检查是否是对象数组（如 clauses, scoring_items 等）
+    const hasObjects = value.some(item => typeof item === 'object' && item !== null);
+    
+    if (hasObjects) {
+      // 渲染结构化对象数组
+      return (
+        <div key={label} className="tender-kv-item" style={{ gridColumn: '1 / -1' }}>
+          <div className="tender-kv-label">
+            {label} ({value.length} 项)
+            {evidenceIds.length > 0 && onEvidence && (
+              <button 
+                onClick={() => onEvidence(evidenceIds)}
+                className="link-button"
+                style={{ marginLeft: 8, fontSize: '12px' }}
+              >
+                📎 证据 ({evidenceIds.length})
+              </button>
+            )}
+          </div>
+          <div className="tender-kv-value">
+            {value.map((item, idx) => renderObjectItem(item, idx, onEvidence))}
+          </div>
         </div>
-        <div className="tender-kv-value">
-          <ul style={{ margin: 0, paddingLeft: 20 }}>
+      );
+    } else {
+      // 渲染简单数组（字符串数组）
+      return (
+        <div key={label} className="tender-kv-item" style={{ gridColumn: '1 / -1' }}>
+          <div className="tender-kv-label">
+            {label}
+            {evidenceIds.length > 0 && onEvidence && (
+              <button 
+                onClick={() => onEvidence(evidenceIds)}
+                className="link-button"
+                style={{ marginLeft: 8, fontSize: '12px' }}
+              >
+                📎 证据 ({evidenceIds.length})
+              </button>
+            )}
+          </div>
+          <div className="tender-kv-value">
             {value.map((item, idx) => (
-              <li key={idx}>{typeof item === 'object' ? JSON.stringify(item) : String(item)}</li>
+              <span key={idx}>
+                {String(item)}
+                {idx < value.length - 1 && '、'}
+              </span>
             ))}
-          </ul>
+          </div>
         </div>
-      </div>
-    );
+      );
+    }
   }
 
-  // 处理对象
+  // 处理对象（但不是数组）
   if (typeof value === 'object') {
-    return (
-      <div key={label} className="tender-kv-item" style={{ gridColumn: '1 / -1' }}>
-        <div className="tender-kv-label">{label}</div>
-        <div className="tender-kv-value">
-          <pre style={{ margin: 0, fontSize: '12px' }}>
-            {JSON.stringify(value, null, 2)}
-          </pre>
-        </div>
-      </div>
-    );
+    return null; // 嵌套对象暂不渲染（避免混乱）
   }
 
   // 处理普通值
@@ -120,7 +176,16 @@ const renderV3Category = (
     ([key]) => key !== 'evidence_chunk_ids'
   );
 
-  if (fields.length === 0) return null;
+  // 渲染所有字段，过滤掉 null 结果
+  const renderedFields = fields
+    .map(([key, value]) => {
+      const fieldLabel = getFieldLabel(key);
+      return renderField(fieldLabel, value, [], onEvidence);
+    })
+    .filter(Boolean); // 过滤掉 null 和 undefined
+
+  // 如果没有任何可渲染的字段，则不显示该类别
+  if (renderedFields.length === 0) return null;
 
   return (
     <div className="source-card" style={{ marginBottom: 16 }} key={categoryKey as string}>
@@ -142,12 +207,7 @@ const renderV3Category = (
       </div>
 
       <div className="tender-kv-grid">
-        {fields.map(([key, value]) => {
-          // 使用中文标签
-          const fieldLabel = getFieldLabel(key);
-          
-          return renderField(fieldLabel, value, [], onEvidence);
-        })}
+        {renderedFields}
       </div>
     </div>
   );
