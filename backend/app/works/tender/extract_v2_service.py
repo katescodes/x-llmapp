@@ -531,7 +531,30 @@ class ExtractV2Service:
         
         logger.info(f"ExtractV2: generate_directory done nodes={len(nodes)}")
         
-        # 5. 返回结果
+        # 5. 目录增强 - 利用 tender_info_v3 补充必填节点
+        try:
+            logger.info(f"ExtractV2: Attempting directory augmentation for project={project_id}")
+            
+            # 读取 tender_project_info
+            tender_info = self.dao.get_project_info(project_id)
+            if tender_info and tender_info.get("schema_version") == "tender_info_v3":
+                from app.works.tender.directory_augment_v1 import augment_directory_from_tender_info_v3
+                
+                augment_result = augment_directory_from_tender_info_v3(
+                    project_id=project_id,
+                    pool=self.pool,
+                    tender_info=tender_info
+                )
+                
+                logger.info(
+                    f"ExtractV2: Directory augmentation done - "
+                    f"added={augment_result['added_count']}, "
+                    f"titles={augment_result['enhanced_titles'][:5]}"
+                )
+        except Exception as e:
+            logger.warning(f"ExtractV2: Directory augmentation failed (non-fatal): {e}")
+        
+        # 6. 返回结果
         return {
             "data": result.data,
             "evidence_chunk_ids": result.evidence_chunk_ids,
