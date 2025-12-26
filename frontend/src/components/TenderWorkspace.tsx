@@ -355,10 +355,25 @@ export default function TenderWorkspace() {
     }
   }, []);
 
-  const loadAssets = useCallback(async () => {
-    if (!currentProject) return;
+  const loadAssets = useCallback(async (forceProjectId?: string) => {
+    const projectId = forceProjectId || currentProject?.id;
+    if (!projectId) return;
+    
+    // ✅ 加载前验证项目ID
+    if (!forceProjectId && currentProject && currentProject.id !== projectId) {
+      console.log('[loadAssets] 项目已切换，跳过加载');
+      return;
+    }
+    
     try {
-      const data = await api.get(`/api/apps/tender/projects/${currentProject.id}/assets`);
+      const data = await api.get(`/api/apps/tender/projects/${projectId}/assets`);
+      
+      // ✅ 加载后验证项目ID
+      if (currentProject && currentProject.id !== projectId) {
+        console.log('[loadAssets] 加载完成时项目已切换，丢弃数据');
+        return;
+      }
+      
       setAssets(data);
     } catch (err) {
       console.error('Failed to load assets:', err);
@@ -547,10 +562,25 @@ export default function TenderWorkspace() {
   }, [currentProject, loadBodyForNode]);
 
   // Step3：范本原文侧边栏数据
-  const loadSampleFragments = useCallback(async () => {
-    if (!currentProject) return;
+  const loadSampleFragments = useCallback(async (forceProjectId?: string) => {
+    const projectId = forceProjectId || currentProject?.id;
+    if (!projectId) return;
+    
+    // ✅ 加载前验证项目ID
+    if (!forceProjectId && currentProject && currentProject.id !== projectId) {
+      console.log('[loadSampleFragments] 项目已切换，跳过加载');
+      return;
+    }
+    
     try {
-      const data = await api.get(`/api/apps/tender/projects/${currentProject.id}/sample-fragments`);
+      const data = await api.get(`/api/apps/tender/projects/${projectId}/sample-fragments`);
+      
+      // ✅ 加载后验证项目ID
+      if (currentProject && currentProject.id !== projectId) {
+        console.log('[loadSampleFragments] 加载完成时项目已切换，丢弃数据');
+        return;
+      }
+      
       setSampleFragments(Array.isArray(data) ? (data as SampleFragment[]) : []);
     } catch (err) {
       console.warn("Failed to load sample fragments:", err);
@@ -1273,15 +1303,17 @@ export default function TenderWorkspace() {
   }, [loadFormatTemplates]);
 
   useEffect(() => {
-    if (currentProject) {
-      console.log('[useEffect] 项目切换，加载新项目数据:', currentProject.id);
-      // 立即加载新项目的数据
-      loadAssets();
-      loadProjectInfo();
-      loadRisks();
-      loadDirectory();
-      loadReview();
-      loadSampleFragments();
+    if (currentProject?.id) {
+      const projectId = currentProject.id;
+      console.log('[useEffect] 项目切换，加载新项目数据:', projectId);
+      
+      // ✅ 使用 forceProjectId 参数，避免闭包问题
+      loadAssets(projectId);
+      loadProjectInfo(projectId);
+      loadRisks(projectId);
+      loadDirectory(projectId);
+      loadReview(projectId);
+      loadSampleFragments(projectId);
     }
   }, [currentProject?.id]); // ✅ 只监听项目ID变化，避免无限循环
 
