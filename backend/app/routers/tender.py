@@ -8,9 +8,12 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+logger = logging.getLogger(__name__)
+
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from psycopg_pool import ConnectionPool
+import psycopg.rows
 
 from app.schemas.tender import (
     AssetOut,
@@ -22,7 +25,6 @@ from app.schemas.tender import (
     ProjectOut,
     ReviewItemOut,
     ReviewRunReq,
-    RiskOut,
     RunOut,
 )
 from app.schemas.project_delete import (
@@ -222,7 +224,14 @@ async def import_assets(
     try:
         return await svc.import_assets(project_id, kind, files, bidder_name)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        # 文件解析错误或业务逻辑错误，返回 400
+        error_msg = str(e)
+        if "文件解析失败" in error_msg or "DOCX parse failed" in error_msg or "BadZipFile" in error_msg:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"文件损坏或格式错误，无法解析: {error_msg}"
+            )
+        raise HTTPException(status_code=400, detail=error_msg)
 
 
 # ==================== 运行任务管理 ====================
@@ -235,6 +244,46 @@ def get_run(run_id: str, request: Request):
     if not row:
         raise HTTPException(status_code=404, detail="run not found")
     return row
+
+
+@router.get("/projects/{project_id}/runs/latest")
+def get_latest_runs(project_id: str, request: Request):
+    """获取项目的最新run状态（每种类型的最新一个）"""
+    dao = TenderDAO(_get_pool(request))
+    
+    # 查询各类型的最新run
+    kinds = ["extract_project_info", "extract_risks", "generate_directory", "review"]
+    result = {}
+    
+    with dao.pool.connection() as conn:
+        # 设置row_factory使返回dict
+        conn.row_factory = psycopg.rows.dict_row
+        for kind in kinds:
+            # 查询该类型的最新run
+            runs = conn.execute(
+                """
+                SELECT id, project_id, kind, status, progress, message, started_at, finished_at
+                FROM tender_runs
+                WHERE project_id = %s AND kind = %s
+                ORDER BY started_at DESC
+                LIMIT 1
+                """,
+                (project_id, kind)
+            ).fetchall()
+            
+            if runs:
+                run = runs[0]
+                result[kind] = {
+                    "id": run["id"],
+                    "status": run["status"],
+                    "progress": run["progress"],
+                    "message": run["message"],
+                    "kind": run["kind"],
+                }
+            else:
+                result[kind] = None
+    
+    return result
 
 
 # ==================== 项目信息抽取 ====================
@@ -324,15 +373,22 @@ def extract_risks(
     sync: int = 0,
     user=Depends(get_current_user_sync),
 ):
-    """识别风险
+    """识别风险（V3版本：提取 requirements 作为风险分析基础）
+    
+    新流程：
+    1. 提取 tender_requirements（调用 LLM）
+    2. 前端通过 /risk-analysis 接口聚合展示
     
     Args:
         sync: 同步执行模式，1=同步返回结果，0=后台任务（默认）
     """
     dao = TenderDAO(_get_pool(request))
     run_id = dao.create_run(project_id, "extract_risks")
-    dao.update_run(run_id, "running", progress=0.01, message="running")
-    svc = _svc(request)
+    dao.update_run(run_id, "running", progress=0.01, message="正在提取招标要求...")
+    
+    # 在路由层面获取依赖，确保在后台任务中可用（与 extract_project_info 相同模式）
+    pool = _get_pool(request)
+    llm = _get_llm(request)  # 从 app.state.llm_orchestrator 获取
     owner_id = user.user_id if user else None
     
     # 检查是否同步执行
@@ -340,10 +396,36 @@ def extract_risks(
 
     def job():
         try:
-            svc.extract_risks(project_id, req.model_id, run_id=run_id, owner_id=owner_id)
+            import asyncio
+            from app.works.tender.extract_v2_service import ExtractV2Service
+            
+            # 创建 ExtractV2Service，传递 llm orchestrator（与 TenderService.extract_project_info 相同）
+            extract_v2 = ExtractV2Service(pool, llm)
+            
+            # 调用 extract_requirements_v1（会自动写入 tender_requirements 表）
+            requirements = asyncio.run(extract_v2.extract_requirements_v1(
+                project_id=project_id,
+                model_id=req.model_id,
+                run_id=run_id
+            ))
+            
+            # 获取count
+            req_count = requirements.get("count", 0) if isinstance(requirements, dict) else len(requirements)
+            
+            # 更新运行状态
+            dao.update_run(
+                run_id, 
+                "success", 
+                progress=1.0, 
+                message=f"成功提取 {req_count} 条招标要求",
+                result_json={"count": req_count}
+            )
+            
+            logger.info(f"✅ Extract requirements for risk analysis: project={project_id}, count={req_count}")
+            
         except Exception as e:
             import logging
-            logging.getLogger(__name__).exception(f"Extract risks failed: {e}")
+            logging.getLogger(__name__).exception(f"Extract requirements for risks failed: {e}")
             dao.update_run(run_id, "failed", message=str(e))
 
     if run_sync:
@@ -363,36 +445,86 @@ def extract_risks(
         return {"run_id": run_id}
 
 
-@router.get("/projects/{project_id}/risks", response_model=List[RiskOut])
-def list_risks(project_id: str, request: Request):
-    """列出风险"""
-    dao = TenderDAO(_get_pool(request))
-    rows = dao.list_risks(project_id)
-    flags = get_feature_flags()
+@router.get("/projects/{project_id}/risk-analysis")
+def get_risk_analysis(project_id: str, request: Request):
+    """
+    获取风险分析聚合数据（基于 tender_requirements）
     
-    out = []
-    for r in rows:
-        risk_item = {
-            "id": r["id"],
-            "project_id": r["project_id"],
-            "risk_type": r["risk_type"],
-            "title": r["title"],
-            "description": r.get("description"),
-            "suggestion": r.get("suggestion"),
-            "severity": r.get("severity"),
-            "tags": r.get("tags") or [],
-            "evidence_chunk_ids": r.get("evidence_chunk_ids") or [],
-        }
-        
-        # 如果启用 EVIDENCE_SPANS_ENABLED，生成 evidence_spans
-        if flags.EVIDENCE_SPANS_ENABLED:
-            chunk_ids = risk_item["evidence_chunk_ids"]
-            if chunk_ids:
-                risk_item["evidence_spans"] = chunks_to_span_refs(chunk_ids)
-        
-        out.append(risk_item)
+    返回两张表：
+    1. must_reject_table: 废标项/关键硬性要求（is_hard=true）
+    2. checklist_table: 注意事项/得分点（is_hard=false）
     
-    return out
+    每行包含：
+    - 基础字段：dimension, req_type, requirement_text, allow_deviation, value_schema_json, evidence_chunk_ids
+    - 派生字段：severity, consequence/category, suggestion
+    """
+    from app.works.tender.risk import RiskAnalysisService
+    
+    pool = _get_pool(request)
+    service = RiskAnalysisService(pool)
+    
+    try:
+        result = service.build_risk_analysis(project_id)
+        return result.model_dump()
+    except Exception as e:
+        logger.error(f"Risk analysis failed for project {project_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Risk analysis failed: {str(e)}")
+
+
+@router.get("/projects/{project_id}/requirements")
+def get_requirements(project_id: str, request: Request):
+    """
+    获取招标要求基准条款库
+    
+    返回从招标文件中提取的结构化要求条款，用于标书审核
+    """
+    pool = _get_pool(request)
+    
+    try:
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 
+                        id,
+                        requirement_id,
+                        dimension,
+                        req_type,
+                        requirement_text,
+                        is_hard,
+                        allow_deviation,
+                        value_schema_json,
+                        evidence_chunk_ids,
+                        created_at
+                    FROM tender_requirements
+                    WHERE project_id = %s
+                    ORDER BY created_at ASC
+                """, (project_id,))
+                
+                rows = cur.fetchall()
+                
+                requirements = []
+                for row in rows:
+                    requirements.append({
+                        "id": row[0],
+                        "requirement_id": row[1],
+                        "dimension": row[2],
+                        "req_type": row[3],
+                        "requirement_text": row[4],
+                        "is_hard": row[5],
+                        "allow_deviation": row[6],
+                        "value_schema_json": row[7],
+                        "evidence_chunk_ids": row[8] or [],
+                        "created_at": row[9].isoformat() if row[9] else None
+                    })
+                
+                return {
+                    "count": len(requirements),
+                    "requirements": requirements
+                }
+    
+    except Exception as e:
+        logger.error(f"Failed to get requirements for project {project_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get requirements: {str(e)}")
 
 
 # ==================== 目录生成 ====================

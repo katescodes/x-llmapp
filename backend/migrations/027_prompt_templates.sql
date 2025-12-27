@@ -1,7 +1,7 @@
 -- Prompt模板管理表
 CREATE TABLE IF NOT EXISTS prompt_templates (
     id TEXT PRIMARY KEY,
-    module TEXT NOT NULL,  -- 模块名称：project_info, risks, directory, review
+    module TEXT NOT NULL,  -- 模块名称：project_info_v3, requirements_v1, bid_response_v1, risks_v2, directory_v2, review_v2
     name TEXT NOT NULL,    -- 显示名称
     description TEXT,      -- 描述
     content TEXT NOT NULL, -- Prompt内容（Markdown格式）

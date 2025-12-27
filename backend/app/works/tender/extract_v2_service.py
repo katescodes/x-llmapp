@@ -10,9 +10,8 @@ from psycopg_pool import ConnectionPool
 from app.platform.extraction.engine import ExtractionEngine
 from app.platform.retrieval.facade import RetrievalFacade
 from app.services.embedding_provider_store import get_embedding_store
-from .extraction_specs.project_info_v2 import build_project_info_spec
-from .extraction_specs.risks_v2 import build_risks_spec
-from .extraction_specs.directory_v2 import build_directory_spec
+from .extraction_specs.risks_v2 import build_risks_spec_async
+from .extraction_specs.directory_v2 import build_directory_spec_async
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +38,7 @@ class ExtractV2Service:
         """
         抽取项目信息 (v3) - 九阶段顺序抽取
         
-        ⚠️ V3 版本：九大类招标信息抽取
+        ⚠️ V3 版本：六大类招标信息抽取（合并版）
         
         优先从数据库加载最新的prompt模板，如果数据库中没有则使用文件fallback
         
@@ -78,11 +77,16 @@ class ExtractV2Service:
         
         if use_staged:
             # 使用九阶段抽取（V3版本）
+            # 从环境变量读取是否启用并行
+            import os
+            parallel_enabled = os.getenv("EXTRACT_PROJECT_INFO_PARALLEL", "false").lower() in ("true", "1", "yes")
+            
             return await self._extract_project_info_staged(
                 project_id=project_id,
                 model_id=model_id,
                 run_id=run_id,
                 embedding_provider=embedding_provider,
+                parallel=parallel_enabled,
             )
         else:
             # 使用原有的一次性抽取（不推荐，返回V3结构）
@@ -116,10 +120,10 @@ class ExtractV2Service:
                     f"result.data={result.data}"
             )
             
-            # 4. 返回结果（V3结构：顶层直接是九大类）
+            # 4. 返回结果（V3结构：顶层直接是六大类）
             return {
                 "schema_version": "tender_info_v3",
-                **result.data,  # 展开九大类
+                **result.data,  # 展开六大类
                 "evidence_chunk_ids": result.evidence_chunk_ids,
                 "evidence_spans": result.evidence_spans,
                 "retrieval_trace": result.retrieval_trace.__dict__ if result.retrieval_trace else {}
@@ -131,6 +135,7 @@ class ExtractV2Service:
         model_id: Optional[str],
         run_id: Optional[str],
         embedding_provider: str,
+        parallel: bool = False,
     ) -> Dict[str, Any]:
         """
         六阶段顺序抽取项目信息（V3版本 - 合并版）
@@ -141,11 +146,20 @@ class ExtractV2Service:
         Stage 4: business_terms (商务条款)
         Stage 5: technical_requirements (技术要求)
         Stage 6: document_preparation (文件编制)
+        
+        Args:
+            parallel: 是否并行执行所有Stage（默认False保持串行）
         """
         import json
+        import os
         from app.works.tender.extraction_specs.project_info_v2 import build_project_info_spec_async
         
-        logger.info(f"ExtractV2: Starting STAGED extraction (V3 - 6 stages) for project={project_id}")
+        # 从环境变量读取是否启用并行
+        parallel_enabled = os.getenv("EXTRACT_PROJECT_INFO_PARALLEL", "false").lower() in ("true", "1", "yes")
+        parallel = parallel or parallel_enabled
+        
+        mode = "PARALLEL" if parallel else "SERIAL"
+        logger.info(f"ExtractV2: Starting {mode} extraction (V3 - 6 stages) for project={project_id}")
         
         # 构建统一的 spec（从 project_info 模块加载）
         spec = await build_project_info_spec_async(self.pool)
@@ -165,6 +179,13 @@ class ExtractV2Service:
         all_evidence_chunk_ids = set()
         all_evidence_spans = []
         all_traces = []
+        
+        if parallel:
+            # 并行执行所有Stage
+            return await self._extract_stages_parallel(
+                stages, spec, project_id, model_id, run_id, embedding_provider,
+                stage_results, all_evidence_chunk_ids, all_evidence_spans, all_traces
+            )
         
         # 顺序执行六个阶段
         for stage_info in stages:
@@ -280,14 +301,14 @@ class ExtractV2Service:
                 run_id=None,  # 不更新run状态，避免冲突
             )
             
-            logger.info(f"ExtractV2: Requirements extraction done - count={len(requirements)}")
+            logger.info(f"ExtractV2: Requirements extraction done - count={requirements.get('count', 0)}")
         except Exception as e:
             logger.error(f"ExtractV2: Requirements extraction failed: {e}", exc_info=True)
             # 不影响主流程，继续返回
         
         # 返回完整结果
         return {
-            **final_data,  # 直接展开九大类到顶层
+            **final_data,  # 直接展开六大类到顶层
             "evidence_chunk_ids": list(all_evidence_chunk_ids),
             "evidence_spans": all_evidence_spans,
             "retrieval_trace": {
@@ -327,7 +348,7 @@ class ExtractV2Service:
             raise ValueError("No embedding provider configured")
         
         # 2. 构建 spec
-        spec = build_risks_spec()
+        spec = await build_risks_spec_async(self.pool)
         
         # 3. 调用引擎
         result = await self.engine.run(
@@ -409,6 +430,7 @@ class ExtractV2Service:
             model_id=model_id,
             run_id=run_id,
             embedding_provider=embedding_provider,
+            module_name="requirements_v1",  # 传递 module_name 用于 max_tokens 设置
         )
         
         # 4. 解析结果
@@ -437,9 +459,24 @@ class ExtractV2Service:
                     conn.commit()
             
             # 插入新的 requirements
+            from psycopg.types.json import Json
+            
             with self.pool.connection() as conn:
                 with conn.cursor() as cur:
                     for req in requirements:
+                        # 处理 JSONB 字段 - 无论是 dict 还是 None 都需要正确处理
+                        value_schema = req.get("value_schema_json")
+                        if value_schema is not None:
+                            if isinstance(value_schema, dict):
+                                value_schema = Json(value_schema)
+                            # 如果是其他类型（如字符串），尝试解析为dict再包装
+                            elif isinstance(value_schema, str):
+                                import json
+                                try:
+                                    value_schema = Json(json.loads(value_schema))
+                                except:
+                                    value_schema = None  # 解析失败则设为None
+                        
                         cur.execute("""
                             INSERT INTO tender_requirements (
                                 id, project_id, requirement_id, dimension, req_type,
@@ -455,14 +492,18 @@ class ExtractV2Service:
                             req.get("requirement_text"),
                             req.get("is_hard", False),
                             req.get("allow_deviation", False),
-                            req.get("value_schema_json"),  # JSONB
+                            value_schema,  # JSONB - 已包装或为None
                             req.get("evidence_chunk_ids", []),
                         ))
                     conn.commit()
             
             logger.info(f"ExtractV2: Saved {len(requirements)} requirements to DB")
         
-        return requirements
+        # 返回统计信息（dict格式）
+        return {
+            "count": len(requirements),
+            "requirements": requirements
+        }
     
     async def generate_directory_v2(
         self,
@@ -501,7 +542,7 @@ class ExtractV2Service:
             raise ValueError("No embedding provider configured")
         
         # 2. 构建 spec
-        spec = build_directory_spec()
+        spec = await build_directory_spec_async(self.pool)
         
         # 3. 调用引擎
         result = await self.engine.run(
@@ -594,4 +635,208 @@ class ExtractV2Service:
         
         return spans
     
+    async def _extract_stages_parallel(
+        self,
+        stages: List[Dict],
+        spec: Any,
+        project_id: str,
+        model_id: Optional[str],
+        run_id: Optional[str],
+        embedding_provider: str,
+        stage_results: Dict,
+        all_evidence_chunk_ids: set,
+        all_evidence_spans: List,
+        all_traces: List,
+    ) -> Dict[str, Any]:
+        """
+        并行执行所有Stage（6个Stage同时执行）
+        
+        实时更新message字段，展示所有正在进行的Stage
+        """
+        import json
+        import asyncio
+        from app.platform.extraction.parallel import ParallelExtractor, ParallelExtractionTask
+        import time
+        
+        parallel_start = time.time()
+        logger.info(f"[PARALLEL_TIMING] ========== PARALLEL EXTRACTION START at {parallel_start:.3f} ==========")
+        logger.info(f"ExtractV2: Starting PARALLEL extraction with {len(stages)} stages")
+        
+        # 创建并行任务
+        tasks = []
+        for stage_info in stages:
+            task = ParallelExtractionTask(
+                task_id=f"stage_{stage_info['stage']}",
+                spec=spec,
+                project_id=project_id,
+                stage=stage_info['stage'],
+                stage_name=stage_info['name'],
+                module_name="project_info",
+            )
+            tasks.append(task)
+        
+        # 跟踪正在执行的Stage
+        active_stages = set()
+        completed_stages = set()
+        
+        def update_progress_message():
+            """更新进度消息，显示所有活跃的Stage"""
+            if run_id:
+                active_names = [stages[s-1]['name'] for s in sorted(active_stages)]
+                completed_count = len(completed_stages)
+                total = len(stages)
+                progress = completed_count / total
+                
+                if active_names:
+                    # 构建消息：正在抽取：项目概览、投标人资格、评审与评分...
+                    msg = f"正在抽取：{('、').join(active_names)}"
+                    if completed_count > 0:
+                        msg += f" ({completed_count}/{total}已完成)"
+                else:
+                    msg = f"并行抽取完成 ({completed_count}/{total})"
+                
+                self.dao.update_run(run_id, "running", progress=progress, message=msg)
+                logger.info(f"[ParallelExtract] {msg}")
+        
+        def on_task_start(stage_num: int):
+            """任务开始回调"""
+            active_stages.add(stage_num)
+            update_progress_message()
+        
+        def on_task_complete(stage_num: int):
+            """任务完成回调"""
+            if stage_num in active_stages:
+                active_stages.remove(stage_num)
+            completed_stages.add(stage_num)
+            update_progress_message()
+        
+        # 创建并行抽取器
+        extractor = ParallelExtractor(max_concurrent=6)  # 6个Stage并发
+        
+        # 包装执行函数以添加回调
+        async def execute_with_callbacks(task: ParallelExtractionTask):
+            """执行单个任务并触发回调"""
+            import time
+            stage_num = task.stage
+            stage_name = task.stage_name
+            
+            # 记录精确开始时间
+            task_start = time.time()
+            logger.info(f"[PARALLEL_TIMING] Stage {stage_num} ({stage_name}) START at {task_start:.3f}")
+            
+            # 开始回调
+            on_task_start(stage_num)
+            
+            try:
+                # 执行抽取
+                result = await self.engine.run(
+                    spec=task.spec,
+                    retriever=self.retriever,
+                    llm=self.llm,
+                    project_id=task.project_id,
+                    model_id=model_id,
+                    run_id=run_id,
+                    embedding_provider=embedding_provider,
+                    stage=task.stage,
+                    stage_name=task.stage_name,
+                    module_name=task.module_name,
+                )
+                
+                # 记录精确完成时间
+                task_end = time.time()
+                duration = task_end - task_start
+                logger.info(f"[PARALLEL_TIMING] Stage {stage_num} ({stage_name}) END at {task_end:.3f}, duration={duration:.2f}s")
+                
+                # 完成回调
+                on_task_complete(stage_num)
+                
+                return result
+                
+            except Exception as e:
+                task_end = time.time()
+                duration = task_end - task_start
+                logger.error(f"[PARALLEL_TIMING] Stage {stage_num} ({stage_name}) FAILED at {task_end:.3f}, duration={duration:.2f}s, error={e}", exc_info=True)
+                on_task_complete(stage_num)
+                raise
+        
+        # 并行执行所有任务
+        try:
+            results = await asyncio.gather(*[execute_with_callbacks(task) for task in tasks], return_exceptions=True)
+            
+            # 处理结果
+            for idx, result in enumerate(results):
+                stage_info = stages[idx]
+                stage_key = stage_info['key']
+                
+                if isinstance(result, Exception):
+                    logger.error(f"ExtractV2: Stage {stage_info['stage']} failed: {result}")
+                    stage_results[stage_key] = {}
+                else:
+                    # 提取数据
+                    stage_data = result.data.get(stage_key) if isinstance(result.data, dict) else result.data
+                    if not stage_data:
+                        stage_data = {}
+                    
+                    stage_results[stage_key] = stage_data
+                    
+                    # 收集证据
+                    all_evidence_chunk_ids.update(result.evidence_chunk_ids)
+                    all_evidence_spans.extend(result.evidence_spans)
+                    
+                    # 收集追踪信息
+                    if result.retrieval_trace:
+                        all_traces.append({
+                            "stage": stage_info['stage'],
+                            "name": stage_info['name'],
+                            "trace": result.retrieval_trace.__dict__
+                        })
+                    
+                    logger.info(f"ExtractV2: Stage {stage_info['stage']}/6 completed in parallel mode")
+            
+        except Exception as e:
+            logger.error(f"ExtractV2: Parallel extraction failed: {e}", exc_info=True)
+            # 失败时设置默认值
+            for stage_info in stages:
+                if stage_info['key'] not in stage_results:
+                    stage_results[stage_info['key']] = {}
+        
+        # 合并所有阶段结果（V3结构）
+        final_data = {
+            "schema_version": "tender_info_v3",
+            **{stage["key"]: stage_results.get(stage["key"], {}) for stage in stages}
+        }
+        
+        parallel_end = time.time()
+        total_duration = parallel_end - parallel_start
+        logger.info(f"[PARALLEL_TIMING] ========== PARALLEL EXTRACTION END at {parallel_end:.3f}, TOTAL={total_duration:.2f}s ==========")
+        
+        logger.info(
+            f"ExtractV2: PARALLEL extraction completed - "
+            f"stages_completed={len([r for r in results if not isinstance(r, Exception)])}/6"
+        )
+        
+        # 继续执行requirements抽取等后续步骤（与串行版本相同）
+        try:
+            logger.info(f"ExtractV2: Starting requirements extraction for project={project_id}")
+            if run_id:
+                self.dao.update_run(run_id, "running", progress=0.95, message="正在生成招标要求基准条款库...")
+            
+            requirements = await self.extract_requirements_v1(
+                project_id=project_id,
+                model_id=model_id,
+                run_id=None,
+            )
+            
+            logger.info(f"ExtractV2: Requirements extraction done - count={requirements.get('count', 0)}")
+        except Exception as req_err:
+            logger.error(f"ExtractV2: Requirements extraction failed (non-fatal): {req_err}")
+        
+        return {
+            "schema_version": "tender_info_v3",
+            **final_data,
+            "evidence_chunk_ids": list(all_evidence_chunk_ids),
+            "evidence_spans": all_evidence_spans,
+            "retrieval_trace": all_traces,
+        }
+
 

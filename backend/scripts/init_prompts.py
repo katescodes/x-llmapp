@@ -4,42 +4,56 @@
 """
 import asyncio
 import os
-from app.services.db.postgres import get_pool
+from app.services.db.postgres import _get_pool
 import uuid
 
 
 async def init_prompts():
     """初始化Prompt模板数据"""
-    pool = get_pool()
+    pool = _get_pool()
     
     # 定义所有Prompt模板
     prompts = [
         {
-            "id": "prompt_project_info_v2",
-            "module": "project_info",
-            "name": "项目信息提取 v2",
-            "description": "提取项目基本信息、技术参数、商务条款、评分标准（契约字段 + v0.3.0宽泛提取）",
-            "file_path": "backend/app/works/tender/prompts/project_info_v2.md"
+            "id": "prompt_project_info_v3",
+            "module": "project_info_v3",
+            "name": "招标信息提取 V3",
+            "description": "提取招标文件的六大类信息（V3合并版）：项目概览、投标人资格、评审与评分、商务条款、技术要求、文件编制",
+            "file_path": "backend/app/works/tender/prompts/project_info_v3.md"
+        },
+        {
+            "id": "prompt_requirements_v1",
+            "module": "requirements_v1",
+            "name": "招标要求抽取 V1",
+            "description": "从招标文件中抽取结构化的招标要求（基准条款库），包括资格要求、技术要求、商务要求等7个维度",
+            "file_path": "backend/app/works/tender/prompts/requirements_v1.md"
+        },
+        {
+            "id": "prompt_bid_response_v1",
+            "module": "bid_response_v1",
+            "name": "投标响应要素抽取 V1",
+            "description": "从投标文件中抽取结构化的响应要素，包括资格响应、技术响应、商务响应等7个维度",
+            "file_path": "backend/app/works/tender/prompts/bid_response_v1.md"
         },
         {
             "id": "prompt_risks_v2",
-            "module": "risks",
-            "name": "风险识别 v2",
+            "module": "risks_v2",
+            "name": "风险识别 V2",
             "description": "识别招标文件中的法律、技术、商务、合规风险",
             "file_path": "backend/app/works/tender/prompts/risks_v2.md"
         },
         {
             "id": "prompt_directory_v2",
-            "module": "directory",
-            "name": "目录生成 v2",
+            "module": "directory_v2",
+            "name": "目录生成 V2",
             "description": "自动生成投标文件语义大纲和章节结构",
             "file_path": "backend/app/works/tender/prompts/directory_v2.md"
         },
         {
             "id": "prompt_review_v2",
-            "module": "review",
-            "name": "审核评估 v2",
-            "description": "对投标文件进行合规性和完整性审核",
+            "module": "review_v2",
+            "name": "审核评估 V2",
+            "description": "基于检索驱动+分维度生成的审核服务",
             "file_path": "backend/app/works/tender/prompts/review_v2.md"
         }
     ]

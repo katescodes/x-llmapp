@@ -17,7 +17,7 @@ class PromptTemplateCreate(BaseModel):
     """创建Prompt模板"""
     module: str = Field(
         ..., 
-        description="模块名称：project_info_v3(新), requirements_v1(新), bid_response_v1(新), review_v3(新), project_info(旧), risks, directory, review(旧)"
+        description="模块名称：project_info, requirements, bid_response, risks, directory, review"
     )
     name: str = Field(..., description="显示名称")
     description: Optional[str] = None
@@ -53,35 +53,24 @@ def list_modules():
         "ok": True,
         "modules": [
             {
-                "id": "project_info_v3",
-                "name": "招标信息提取 (V3)",
-                "description": "提取招标文件的九大类信息：项目概况、范围与标段、进度与提交、投标人资格、评审与评分、商务条款、技术要求、文件编制、投标保证金",
-                "icon": "📋",
-                "version": "v3",
-                "category": "extraction"
-            },
-            {
                 "id": "project_info",
-                "name": "项目信息提取 (Legacy)",
-                "description": "[旧版] 提取项目基本信息、技术参数、商务条款、评分标准",
+                "name": "招标信息提取",
+                "description": "提取招标文件的六大类信息：项目概览、投标人资格、评审与评分、商务条款、技术要求、文件编制",
                 "icon": "📋",
-                "deprecated": True,
                 "category": "extraction"
             },
             {
-                "id": "requirements_v1",
+                "id": "requirements",
                 "name": "招标要求抽取",
                 "description": "从招标文件中抽取结构化的招标要求（基准条款库），包括资格要求、技术要求、商务要求等7个维度",
                 "icon": "📝",
-                "version": "v1",
                 "category": "extraction"
             },
             {
-                "id": "bid_response_v1",
+                "id": "bid_response",
                 "name": "投标响应要素抽取",
                 "description": "从投标文件中抽取结构化的响应要素，包括资格响应、技术响应、商务响应等7个维度",
                 "icon": "📄",
-                "version": "v1",
                 "category": "extraction"
             },
             {
@@ -99,19 +88,10 @@ def list_modules():
                 "category": "generation"
             },
             {
-                "id": "review_v3",
-                "name": "审核评估 (V3)",
-                "description": "[新版] 基于 requirements × responses + 规则引擎的智能审核",
-                "icon": "✅",
-                "version": "v3",
-                "category": "review"
-            },
-            {
                 "id": "review",
-                "name": "审核评估 (Legacy)",
-                "description": "[旧版] 对投标文件进行合规性和完整性审核",
-                "icon": "✓",
-                "deprecated": True,
+                "name": "审核评估",
+                "description": "基于 requirements × responses + 规则引擎的智能审核",
+                "icon": "✅",
                 "category": "review"
             }
         ]
@@ -152,6 +132,20 @@ def list_prompts(
     prompts = []
     for row in rows:
         row_dict = dict(zip(columns, row))
+        
+        # 处理时间字段：可能已经是字符串（psycopg3）或 datetime 对象
+        created_at = row_dict.get("created_at")
+        if created_at and hasattr(created_at, "isoformat"):
+            created_at = created_at.isoformat()
+        elif created_at:
+            created_at = str(created_at)
+        
+        updated_at = row_dict.get("updated_at")
+        if updated_at and hasattr(updated_at, "isoformat"):
+            updated_at = updated_at.isoformat()
+        elif updated_at:
+            updated_at = str(updated_at)
+        
         prompts.append({
             "id": row_dict["id"],
             "module": row_dict["module"],
@@ -160,8 +154,8 @@ def list_prompts(
             "content": row_dict["content"],
             "version": row_dict["version"],
             "is_active": row_dict["is_active"],
-            "created_at": row_dict["created_at"].isoformat() if row_dict.get("created_at") else None,
-            "updated_at": row_dict["updated_at"].isoformat() if row_dict.get("updated_at") else None,
+            "created_at": created_at,
+            "updated_at": updated_at,
         })
     
     return {"ok": True, "prompts": prompts}
@@ -190,6 +184,19 @@ def get_prompt(prompt_id: str):
             columns = [desc[0] for desc in cur.description]
             row_dict = dict(zip(columns, row))
     
+    # 处理时间字段
+    created_at = row_dict.get("created_at")
+    if created_at and hasattr(created_at, "isoformat"):
+        created_at = created_at.isoformat()
+    elif created_at:
+        created_at = str(created_at)
+    
+    updated_at = row_dict.get("updated_at")
+    if updated_at and hasattr(updated_at, "isoformat"):
+        updated_at = updated_at.isoformat()
+    elif updated_at:
+        updated_at = str(updated_at)
+    
     return {
         "ok": True,
         "prompt": {
@@ -200,8 +207,8 @@ def get_prompt(prompt_id: str):
             "content": row_dict["content"],
             "version": row_dict["version"],
             "is_active": row_dict["is_active"],
-            "created_at": row_dict["created_at"].isoformat() if row_dict.get("created_at") else None,
-            "updated_at": row_dict["updated_at"].isoformat() if row_dict.get("updated_at") else None,
+            "created_at": created_at,
+            "updated_at": updated_at,
         }
     }
 
@@ -320,11 +327,19 @@ def get_prompt_history(prompt_id: str):
     history = []
     for row in rows:
         row_dict = dict(zip(columns, row))
+        
+        # 处理时间字段
+        changed_at = row_dict.get("changed_at")
+        if changed_at and hasattr(changed_at, "isoformat"):
+            changed_at = changed_at.isoformat()
+        elif changed_at:
+            changed_at = str(changed_at)
+        
         history.append({
             "id": row_dict["id"],
             "version": row_dict["version"],
             "change_note": row_dict["change_note"],
-            "changed_at": row_dict["changed_at"].isoformat() if row_dict.get("changed_at") else None,
+            "changed_at": changed_at,
         })
     
     return {"ok": True, "history": history}
@@ -353,13 +368,20 @@ def get_prompt_version(prompt_id: str, version: int):
             columns = [desc[0] for desc in cur.description]
             row_dict = dict(zip(columns, row))
     
+    # 处理时间字段
+    changed_at = row_dict.get("changed_at")
+    if changed_at and hasattr(changed_at, "isoformat"):
+        changed_at = changed_at.isoformat()
+    elif changed_at:
+        changed_at = str(changed_at)
+    
     return {
         "ok": True,
         "version_data": {
             "content": row_dict["content"],
             "version": row_dict["version"],
             "change_note": row_dict["change_note"],
-            "changed_at": row_dict["changed_at"].isoformat() if row_dict.get("changed_at") else None,
+            "changed_at": changed_at,
         }
     }
 

@@ -1,5 +1,7 @@
--- 初始化 V3 Prompt 模板数据
--- 将新增的三个 prompt 模板插入到 prompt_templates 表
+-- 注意：此迁移文件已废弃，请使用 scripts/init_prompts.py 脚本初始化Prompt数据
+
+-- 初始化 Prompt 模板数据
+-- 新版模块：project_info_v3, requirements_v1, bid_response_v1, risks_v2, directory_v2, review_v2
 
 -- 1. 招标信息提取 V3 (project_info_v3)
 INSERT INTO prompt_templates (

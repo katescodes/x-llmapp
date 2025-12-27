@@ -14,6 +14,8 @@ services:
       - ./data:/app/data
       - ./storage:/app/storage
       - ./:/repo  # 挂载整个 repo 用于测试（包含 backend/tests/）
+    env_file:
+      - .env  # 从 .env 文件加载环境变量
     environment:
       - BUILDKIT_PROVENANCE=0
       - LLM_STORE_PATH=/app/data/llm_models.json
@@ -62,6 +64,9 @@ services:
       - V2_RETRIEVAL_TOPK_PER_QUERY=30
       - V2_RETRIEVAL_TOPK_TOTAL=120
       - EXTRACT_TRACE_ENABLED=true
+      # 并行抽取配置
+      - EXTRACT_PROJECT_INFO_PARALLEL=true
+      - EXTRACT_MAX_CONCURRENT=6
       # === Step 10: 异步任务队列 ===
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -131,6 +136,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./storage:/app/storage
+    env_file:
+      - .env  # 从 .env 文件加载环境变量
     environment:
       - BUILDKIT_PROVENANCE=0
       - LLM_STORE_PATH=/app/data/llm_models.json
@@ -161,6 +168,10 @@ services:
       - REVIEW_MODE=NEW_ONLY
       - RULES_MODE=NEW_ONLY
       - MILVUS_COLLECTION_DOCSEG=doc_segments_v1
+      # 并行抽取配置
+      - EXTRACT_PROJECT_INFO_PARALLEL=true
+      - EXTRACT_MAX_CONCURRENT=6
+      - EXTRACT_TRACE_ENABLED=true
     networks:
       - localgpt-net
 

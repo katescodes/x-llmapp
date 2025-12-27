@@ -43,8 +43,11 @@ async def call_llm(
         if model_id:
             logger.info(f"[call_llm] No orchestrator, using direct LLM client with model_id={model_id}")
             from app.services.llm_client import llm_chat
-            # 转换messages格式并调用
-            result = llm_chat(messages, model_id=model_id, temperature=temperature, max_tokens=max_tokens or 4096)
+            # 转换messages格式并调用（在线程池中执行，避免阻塞）
+            import asyncio
+            result = await asyncio.to_thread(
+                llm_chat, messages, model_id=model_id, temperature=temperature, max_tokens=max_tokens or 4096
+            )
             return result
         else:
             logger.error("[call_llm] LLM orchestrator is None and no model_id provided!")
@@ -72,7 +75,10 @@ async def call_llm(
         
         try:
             # 尝试 (messages, model_id, temperature, max_tokens) 签名
-            res = fn(
+            # 在线程池中执行，避免阻塞事件循环
+            import asyncio
+            res = await asyncio.to_thread(
+                fn,
                 messages=messages,
                 model_id=model_id,
                 temperature=temperature,

@@ -15,17 +15,6 @@ export type TenderProjectDoc = {
   created_at?: string;
 };
 
-export type TenderRisk = {
-  id: string;
-  risk_type: "mustReject" | "other";
-  title: string;
-  description?: string | null;
-  suggestion?: string | null;
-  severity: "low" | "medium" | "high";
-  tags: string[];
-  evidence_chunk_ids: string[];
-};
-
 export type TenderDirectoryNode = {
   id: string;
   parent_id?: string | null;

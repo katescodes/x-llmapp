@@ -1,9 +1,9 @@
 /**
- * ProjectInfoV3View - 自动适配 V3 九大类的展示组件
+ * ProjectInfoV3View - 自动适配 V3 六大类的展示组件
  * 
  * 特性：
  * 1. 自动检测 schema_version
- * 2. V3 结构：展示九大类
+ * 2. V3 结构：展示六大类
  * 3. 旧结构：回退到旧版展示
  * 4. 支持证据链查看
  */
@@ -92,7 +92,7 @@ const FIELD_DISPLAY_ORDER: Record<string, string[]> = {
 
 type Props = {
   info: Record<string, any>;
-  onEvidence?: (chunkIds: string[]) => void;
+  onEvidence?: (chunkIds: string[], highlightText?: string) => void;
 };
 
 /**
@@ -100,7 +100,7 @@ type Props = {
  */
 const renderObjectArrayTable = (
   items: any[], 
-  onEvidence?: (chunkIds: string[]) => void
+  onEvidence?: (chunkIds: string[], highlightText?: string) => void
 ) => {
   if (items.length === 0) return null;
   
@@ -147,7 +147,13 @@ const renderObjectArrayTable = (
                 <td>
                   {evidenceIds.length > 0 && onEvidence && (
                     <button 
-                      onClick={() => onEvidence(evidenceIds)}
+                      onClick={() => {
+                        // 从 item 中提取第一个字符串值作为高亮文本
+                        const highlightText = columns
+                          .map(col => item[col])
+                          .find(val => typeof val === 'string' && val.trim().length > 0) || '';
+                        onEvidence(evidenceIds, highlightText);
+                      }}
                       className="link-button"
                       style={{ fontSize: '12px' }}
                     >
@@ -171,7 +177,7 @@ const renderField = (
   label: string, 
   value: any, 
   evidenceIds: string[] = [],
-  onEvidence?: (chunkIds: string[]) => void
+  onEvidence?: (chunkIds: string[], highlightText?: string) => void
 ) => {
   // 处理空值
   if (value === null || value === undefined || value === '') {
@@ -201,7 +207,7 @@ const renderField = (
             </div>
             {evidenceIds.length > 0 && onEvidence && (
               <button 
-                onClick={() => onEvidence(evidenceIds)}
+                onClick={() => onEvidence(evidenceIds, label)}
                 className="link-button"
                 style={{ fontSize: '12px' }}
               >
@@ -220,7 +226,7 @@ const renderField = (
             {label}
             {evidenceIds.length > 0 && onEvidence && (
               <button 
-                onClick={() => onEvidence(evidenceIds)}
+                onClick={() => onEvidence(evidenceIds, value.join('、'))}
                 className="link-button"
                 style={{ marginLeft: 8, fontSize: '12px' }}
               >
@@ -253,7 +259,7 @@ const renderField = (
         {label}
         {evidenceIds.length > 0 && onEvidence && (
           <button 
-            onClick={() => onEvidence(evidenceIds)}
+            onClick={() => onEvidence(evidenceIds, String(value))}
             className="link-button"
             style={{ marginLeft: 8, fontSize: '12px' }}
           >
@@ -272,7 +278,7 @@ const renderField = (
 const renderV3Category = (
   categoryKey: keyof TenderInfoV3,
   categoryData: any,
-  onEvidence?: (chunkIds: string[]) => void
+  onEvidence?: (chunkIds: string[], highlightText?: string) => void
 ) => {
   if (!categoryData || categoryKey === 'schema_version') return null;
 
@@ -325,7 +331,7 @@ const renderV3Category = (
         <h4 style={{ margin: 0 }}>{label}</h4>
         {evidenceIds.length > 0 && onEvidence && (
           <button 
-            onClick={() => onEvidence(evidenceIds)}
+            onClick={() => onEvidence(evidenceIds, label)}
             className="link-button"
           >
             📎 查看证据 ({evidenceIds.length})
@@ -354,7 +360,7 @@ export default function ProjectInfoV3View({ info, onEvidence }: Props) {
     return isTenderInfoV3(dataJson);
   }, [dataJson]);
 
-  // 如果是 V3 结构，渲染九大类
+  // 如果是 V3 结构，渲染六大类
   if (isV3) {
     const tenderInfoV3 = dataJson as TenderInfoV3;
 
@@ -375,7 +381,7 @@ export default function ProjectInfoV3View({ info, onEvidence }: Props) {
               color: '#52c41a',
               fontWeight: 'normal' 
             }}>
-              ✓ V3 九大类
+              ✓ V3 六大类
             </span>
           </h3>
           <button 
@@ -392,7 +398,7 @@ export default function ProjectInfoV3View({ info, onEvidence }: Props) {
             <code>{JSON.stringify(tenderInfoV3, null, 2)}</code>
           </pre>
         ) : (
-          // 九大类卡片视图
+          // 六大类卡片视图
           <div>
             {TENDER_INFO_V3_CATEGORIES.map((categoryKey) => {
               const categoryData = tenderInfoV3[categoryKey];
@@ -446,7 +452,7 @@ export default function ProjectInfoV3View({ info, onEvidence }: Props) {
           <p style={{ margin: 0 }}>
             当前数据使用旧版格式。
             <br />
-            请重新抽取项目信息以使用新版 V3 九大类结构。
+            请重新抽取项目信息以使用新版 V3 六大类结构。
           </p>
           <pre className="md-pre" style={{ marginTop: 12 }}>
             <code>{JSON.stringify(dataJson, null, 2)}</code>

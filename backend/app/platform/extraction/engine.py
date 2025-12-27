@@ -38,6 +38,7 @@ class ExtractionEngine:
         stage: Optional[int] = None,
         stage_name: Optional[str] = None,
         context_info: Optional[str] = None,
+        module_name: Optional[str] = None,
     ) -> ExtractionResult:
         """
         执行抽取任务
@@ -63,8 +64,11 @@ class ExtractionEngine:
         
         # 使用 print 确保能看到输出
         print(f"[DEBUG ExtractionEngine] START project_id={project_id} llm_type={type(llm).__name__ if llm else 'None'} llm_is_none={llm is None}")
-        logger.info(f"[ExtractionEngine] START project_id={project_id} run_id={run_id} mode={mode} llm={type(llm).__name__ if llm else 'None'}")
+        logger.info(f"[ExtractionEngine] START project_id={project_id} run_id={run_id} mode={mode} llm={type(llm).__name__ if llm else 'None'} stage={stage} stage_name={stage_name}")
         overall_start = time.time()
+        
+        # 记录精确开始时间（用于并行验证）
+        logger.info(f"[ENGINE_TIMING] Stage {stage or 'N/A'} ({stage_name or 'N/A'}) engine.run() START at {overall_start:.3f}")
         
         # 1. 执行检索
         retrieval_start = time.time()
@@ -124,14 +128,17 @@ class ExtractionEngine:
         logger.info(f"[ExtractionEngine] BEFORE_LLM project_id={project_id} run_id={run_id} stage={stage} prompt_len={prompt_len} ctx_len={ctx_len}")
         
         llm_start = time.time()
+        logger.info(f"[LLM_TIMING] Stage {stage or 'N/A'} LLM call START at {llm_start:.3f}")
         
         try:
             print(f"[DEBUG] About to call LLM: llm={llm} llm_type={type(llm).__name__ if llm else 'None'}")
             
-            # 动态设置max_tokens：评分标准需要更大的输出空间
+            # 动态设置max_tokens：评分标准和招标要求需要更大的输出空间
             # 使用传入的stage_name参数而非spec.stage_name（spec中不存在此字段）
             if stage_name == "评分规则":
                 max_tokens = 16384  # 评分表可能有20-30个评分项，需要更大的输出空间
+            elif module_name and module_name.startswith("requirements"):
+                max_tokens = 16384  # 招标要求可能有几十条，需要更大的输出空间
             else:
                 max_tokens = 8192  # 其他Stage使用默认值
             
@@ -147,6 +154,9 @@ class ExtractionEngine:
             
             llm_ms = int((time.time() - llm_start) * 1000)
             out_len = len(out_text) if out_text else 0
+            
+            llm_end = time.time()
+            logger.info(f"[LLM_TIMING] Stage {stage or 'N/A'} LLM call END at {llm_end:.3f}, duration={(llm_end - llm_start):.2f}s")
             
             print(f"[DEBUG] LLM returned: out_len={out_len}")
             if out_text:
@@ -268,14 +278,19 @@ class ExtractionEngine:
         trace_enabled: bool,
         run_id: Optional[str] = None,
         mode: str = "unknown",
+        parallel: bool = True,
     ) -> tuple[List[RetrievedChunk], Dict[str, Any]]:
         """
         执行检索（支持单查询、多查询列表、多查询字典）
+        
+        Args:
+            parallel: 是否并行执行多个查询（默认True）
         
         Returns:
             (chunks, query_trace)
         """
         import time
+        import asyncio
         queries = spec.queries
         
         # 归一化查询为字典格式
@@ -290,27 +305,53 @@ class ExtractionEngine:
         chunk_id_set = set()
         query_trace = {}
         
-        for query_name, query_text in queries_dict.items():
-            try:
-                logger.info(f"[ExtractionEngine] BEFORE_RETRIEVAL project_id={project_id} run_id={run_id} query_name={query_name} query_text={query_text[:100]} top_k={spec.topk_per_query}")
+        # 如果启用并行且有多个查询，并行执行
+        if parallel and len(queries_dict) > 1:
+            logger.info(f"[ExtractionEngine] PARALLEL_RETRIEVAL project_id={project_id} run_id={run_id} query_count={len(queries_dict)}")
+            
+            async def retrieve_one_query(query_name: str, query_text: str):
+                """单个查询的执行函数"""
+                try:
+                    logger.info(f"[ExtractionEngine] BEFORE_RETRIEVAL project_id={project_id} run_id={run_id} query_name={query_name} query_text={query_text[:100]} top_k={spec.topk_per_query}")
+                    
+                    query_start = time.time()
+                    query_chunks = await retriever.retrieve(
+                        query=query_text,
+                        project_id=project_id,
+                        doc_types=spec.doc_types,
+                        embedding_provider=embedding_provider,
+                        top_k=spec.topk_per_query,
+                    )
+                    query_ms = int((time.time() - query_start) * 1000)
+                    
+                    logger.info(f"[ExtractionEngine] AFTER_RETRIEVAL_QUERY project_id={project_id} run_id={run_id} query_name={query_name} count={len(query_chunks)} ms={query_ms}")
+                    
+                    trace_info = {
+                        "query": query_text if trace_enabled else None,
+                        "retrieved_count": len(query_chunks),
+                        "top_ids": [c.chunk_id for c in query_chunks[:5]] if trace_enabled else []
+                    }
+                    
+                    logger.info(f"  Query '{query_name}': retrieved {len(query_chunks)} chunks")
+                    
+                    return query_name, query_chunks, trace_info
+                    
+                except Exception as e:
+                    logger.warning(f"  Query '{query_name}' failed: {e}")
+                    return query_name, [], {"error": str(e), "retrieved_count": 0}
+            
+            # 并行执行所有查询
+            tasks = [retrieve_one_query(name, text) for name, text in queries_dict.items()]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 处理结果
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.error(f"[ExtractionEngine] PARALLEL_QUERY_EXCEPTION: {result}")
+                    continue
                 
-                query_start = time.time()
-                query_chunks = await retriever.retrieve(
-                    query=query_text,
-                    project_id=project_id,
-                    doc_types=spec.doc_types,
-                    embedding_provider=embedding_provider,
-                    top_k=spec.topk_per_query,
-                )
-                query_ms = int((time.time() - query_start) * 1000)
-                
-                logger.info(f"[ExtractionEngine] AFTER_RETRIEVAL_QUERY project_id={project_id} run_id={run_id} query_name={query_name} count={len(query_chunks)} ms={query_ms}")
-                
-                query_trace[query_name] = {
-                    "query": query_text if trace_enabled else None,
-                    "retrieved_count": len(query_chunks),
-                    "top_ids": [c.chunk_id for c in query_chunks[:5]] if trace_enabled else []
-                }
+                query_name, query_chunks, trace_info = result
+                query_trace[query_name] = trace_info
                 
                 # 去重合并
                 for chunk_obj in query_chunks:
@@ -328,12 +369,55 @@ class ExtractionEngine:
                     if chunk.chunk_id not in chunk_id_set:
                         chunk_id_set.add(chunk.chunk_id)
                         all_chunks.append(chunk)
-                
-                logger.info(f"  Query '{query_name}': retrieved {len(query_chunks)} chunks")
-                
-            except Exception as e:
-                logger.warning(f"  Query '{query_name}' failed: {e}")
-                query_trace[query_name] = {"error": str(e), "retrieved_count": 0}
+        
+        else:
+            # 串行执行（单查询或禁用并行）
+            logger.info(f"[ExtractionEngine] SERIAL_RETRIEVAL project_id={project_id} run_id={run_id} query_count={len(queries_dict)}")
+            
+            for query_name, query_text in queries_dict.items():
+                try:
+                    logger.info(f"[ExtractionEngine] BEFORE_RETRIEVAL project_id={project_id} run_id={run_id} query_name={query_name} query_text={query_text[:100]} top_k={spec.topk_per_query}")
+                    
+                    query_start = time.time()
+                    query_chunks = await retriever.retrieve(
+                        query=query_text,
+                        project_id=project_id,
+                        doc_types=spec.doc_types,
+                        embedding_provider=embedding_provider,
+                        top_k=spec.topk_per_query,
+                    )
+                    query_ms = int((time.time() - query_start) * 1000)
+                    
+                    logger.info(f"[ExtractionEngine] AFTER_RETRIEVAL_QUERY project_id={project_id} run_id={run_id} query_name={query_name} count={len(query_chunks)} ms={query_ms}")
+                    
+                    query_trace[query_name] = {
+                        "query": query_text if trace_enabled else None,
+                        "retrieved_count": len(query_chunks),
+                        "top_ids": [c.chunk_id for c in query_chunks[:5]] if trace_enabled else []
+                    }
+                    
+                    # 去重合并
+                    for chunk_obj in query_chunks:
+                        # 转换为 RetrievedChunk（如果不是）
+                        if not isinstance(chunk_obj, RetrievedChunk):
+                            chunk = RetrievedChunk(
+                                chunk_id=chunk_obj.chunk_id,
+                                text=chunk_obj.text,
+                                meta=chunk_obj.meta if hasattr(chunk_obj, 'meta') else {},
+                                score=chunk_obj.score if hasattr(chunk_obj, 'score') else None
+                            )
+                        else:
+                            chunk = chunk_obj
+                        
+                        if chunk.chunk_id not in chunk_id_set:
+                            chunk_id_set.add(chunk.chunk_id)
+                            all_chunks.append(chunk)
+                    
+                    logger.info(f"  Query '{query_name}': retrieved {len(query_chunks)} chunks")
+                    
+                except Exception as e:
+                    logger.warning(f"  Query '{query_name}' failed: {e}")
+                    query_trace[query_name] = {"error": str(e), "retrieved_count": 0}
         
         # 截断到总量限制
         if len(all_chunks) > spec.topk_total:

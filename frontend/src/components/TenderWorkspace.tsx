@@ -8,9 +8,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { api } from '../config/api';
 import ProjectInfoView from './tender/ProjectInfoView';
 import ProjectInfoV3View from './tender/ProjectInfoV3View';
-import RiskToolbar, { RiskFilters } from './tender/RiskToolbar';
-import RiskList from './tender/RiskList';
-import RiskDetail from './tender/RiskDetail';
+import RiskAnalysisTables from './tender/RiskAnalysisTables';
 import DirectoryToolbar from './tender/DirectoryToolbar';
 import DocumentCanvas from './tender/DocumentCanvas';
 import SampleSidebar, { SamplePreviewState } from './tender/SampleSidebar';
@@ -18,7 +16,8 @@ import ReviewTable from './tender/ReviewTable';
 import RichTocPreview from './template/RichTocPreview';
 import { templateSpecToTemplateStyle, templateSpecToTocItems } from './template/templatePreviewUtils';
 import FormatTemplatesPage from './FormatTemplatesPage';
-import type { TenderRisk, SampleFragment, SampleFragmentPreview } from '../types/tender';
+import type { SampleFragment, SampleFragmentPreview } from '../types/tender';
+import type { RiskAnalysisData } from '../types/riskAnalysis';
 
 // ==================== 类型定义 ====================
 
@@ -135,7 +134,7 @@ export default function TenderWorkspace() {
   const [uploadKind, setUploadKind] = useState<TenderAssetKind>('tender');
   const [bidderName, setBidderName] = useState('');
   const [files, setFiles] = useState<File[]>([]);
-  const [assets, setAssets] = useState<TenderAsset[]>([]);
+  const [uploading, setUploading] = useState(false);
   
   // 五步工作流
   const [activeTab, setActiveTab] = useState<number>(1);
@@ -143,110 +142,266 @@ export default function TenderWorkspace() {
   // 视图模式：项目信息（含 Step1-5）/ 嵌入式模板管理
   const [viewMode, setViewMode] = useState<"projectInfo" | "formatTemplates">("projectInfo");
   
-  // Step1: 项目信息
-  const [projectInfo, setProjectInfo] = useState<ProjectInfo | null>(null);
-  const [infoRun, setInfoRun] = useState<TenderRun | null>(null);
+  // ========== 新架构：按项目ID存储所有状态 ==========
   
-  // Step2: 风险
-  const [risks, setRisks] = useState<TenderRisk[]>([]);
-  const [riskRun, setRiskRun] = useState<TenderRun | null>(null);
-  const [selectedRiskId, setSelectedRiskId] = useState<string | null>(null);
-  const [riskFilters, setRiskFilters] = useState<RiskFilters>({
-    typeTab: 'all',
-    severity: 'all',
-    keyword: '',
-    sort: 'default',
-  });
+  // 每个项目的完整状态
+  interface ProjectState {
+    // 数据
+    assets: TenderAsset[];
+    projectInfo: ProjectInfo | null;
+    riskAnalysisData: RiskAnalysisData | null;
+    directory: DirectoryNode[];
+    reviewItems: ReviewItem[];
+    evidenceChunks: Chunk[];
+    bodyByNodeId: Record<string, string>;
+    
+    // 运行状态
+    runs: {
+      info: TenderRun | null;
+      risk: TenderRun | null;
+      directory: TenderRun | null;
+      review: TenderRun | null;
+    };
+    
+    // UI状态
+    samplesOpen: boolean;
+    sampleFragments: SampleFragment[];
+    samplePreviewById: Record<string, SamplePreviewState>;
+    selectedFormatTemplateId: string;
+    tocStyleVars: any;
+    previewMode: "content" | "format";
+    formatPreviewUrl: string;
+    formatDownloadUrl: string;
+    formatPreviewBlobUrl: string;
+    selectedBidder: string;
+    selectedRuleAssetIds: string[];
+  }
   
-  // Step3: 目录（统一富文本框，支持样式切换）
-  const [directory, setDirectory] = useState<DirectoryNode[]>([]);
-  const [dirRun, setDirRun] = useState<TenderRun | null>(null);
-
-  // Step3 新版：画布模式下按节点缓存正文（刷新不丢，数据源仍以接口为准）
-  const [bodyByNodeId, setBodyByNodeId] = useState<Record<string, string>>({});
-
-  // Step3：范本原文侧边栏（按标题粒度预览）
-  const [samplesOpen, setSamplesOpen] = useState(false);
-  const [sampleFragments, setSampleFragments] = useState<SampleFragment[]>([]);
-  const [samplePreviewById, setSamplePreviewById] = useState<Record<string, SamplePreviewState>>({});
+  // 创建空状态
+  const createEmptyState = useCallback((): ProjectState => ({
+    assets: [],
+    projectInfo: null,
+    riskAnalysisData: null,
+    directory: [],
+    reviewItems: [],
+    evidenceChunks: [],
+    bodyByNodeId: {},
+    runs: {
+      info: null,
+      risk: null,
+      directory: null,
+      review: null,
+    },
+    samplesOpen: false,
+    sampleFragments: [],
+    samplePreviewById: {},
+    selectedFormatTemplateId: "",
+    tocStyleVars: null,
+    previewMode: "content",
+    formatPreviewUrl: "",
+    formatDownloadUrl: "",
+    formatPreviewBlobUrl: "",
+    selectedBidder: "",
+    selectedRuleAssetIds: [],
+  }), []);
   
-  // Step3: 格式模板选择（用于"自动套用格式" & 目录/正文画布样式）
+  // 所有项目的状态存储
+  const projectStatesRef = useRef<Map<string, ProjectState>>(new Map());
+  
+  // 强制重渲染计数器
+  const [renderCounter, setRenderCounter] = useState(0);
+  const forceRerender = useCallback(() => setRenderCounter(c => c + 1), []);
+  
+  // 获取当前项目状态
+  const getProjectState = useCallback((projectId: string): ProjectState => {
+    let state = projectStatesRef.current.get(projectId);
+    if (!state) {
+      state = createEmptyState();
+      // 尝试从localStorage恢复formatTemplateId
+      const savedTemplateId = localStorage.getItem(`tender.formatTemplateId.${projectId}`);
+      if (savedTemplateId) {
+        state.selectedFormatTemplateId = savedTemplateId;
+      }
+      projectStatesRef.current.set(projectId, state);
+    }
+    return state;
+  }, [createEmptyState]);
+  
+  // 更新项目状态
+  const updateProjectState = useCallback((projectId: string, updates: Partial<ProjectState> | ((prev: ProjectState) => Partial<ProjectState>)) => {
+    const current = getProjectState(projectId);
+    const updateObj = typeof updates === 'function' ? updates(current) : updates;
+    const updated = { ...current, ...updateObj };
+    projectStatesRef.current.set(projectId, updated);
+    
+    // 如果是当前项目，触发重渲染
+    if (currentProject?.id === projectId) {
+      forceRerender();
+    }
+  }, [currentProject?.id, getProjectState, forceRerender]);
+  
+  // 当前项目状态（用于渲染）
+  const state = currentProject ? getProjectState(currentProject.id) : createEmptyState();
+  
+  // ========== 兼容层：提供旧的setState接口 ==========
+  // 这样可以保持旧代码不变，逐步迁移
+  
+  const assets = state.assets;
+  const setAssets = useCallback((value: TenderAsset[] | ((prev: TenderAsset[]) => TenderAsset[])) => {
+    if (!currentProject) return;
+    const newValue = typeof value === 'function' ? value(state.assets) : value;
+    updateProjectState(currentProject.id, { assets: newValue });
+  }, [currentProject, state.assets, updateProjectState]);
+  
+  const projectInfo = state.projectInfo;
+  const setProjectInfo = useCallback((value: ProjectInfo | null) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { projectInfo: value });
+  }, [currentProject, updateProjectState]);
+  
+  const infoRun = state.runs.info;
+  const setInfoRun = useCallback((value: TenderRun | null) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { runs: { ...state.runs, info: value } });
+  }, [currentProject, state.runs, updateProjectState]);
+  
+  const riskAnalysisData = state.riskAnalysisData;
+  const setRiskAnalysisData = useCallback((value: RiskAnalysisData | null) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { riskAnalysisData: value });
+  }, [currentProject, updateProjectState]);
+  
+  const riskRun = state.runs.risk;
+  const setRiskRun = useCallback((value: TenderRun | null) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { runs: { ...state.runs, risk: value } });
+  }, [currentProject, state.runs, updateProjectState]);
+  
+  const directory = state.directory;
+  const setDirectory = useCallback((value: DirectoryNode[] | ((prev: DirectoryNode[]) => DirectoryNode[])) => {
+    if (!currentProject) return;
+    const newValue = typeof value === 'function' ? value(state.directory) : value;
+    updateProjectState(currentProject.id, { directory: newValue });
+  }, [currentProject, state.directory, updateProjectState]);
+  
+  const dirRun = state.runs.directory;
+  const setDirRun = useCallback((value: TenderRun | null) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { runs: { ...state.runs, directory: value } });
+  }, [currentProject, state.runs, updateProjectState]);
+  
+  const bodyByNodeId = state.bodyByNodeId;
+  const setBodyByNodeId = useCallback((value: Record<string, string> | ((prev: Record<string, string>) => Record<string, string>)) => {
+    if (!currentProject) return;
+    const newValue = typeof value === 'function' ? value(state.bodyByNodeId) : value;
+    updateProjectState(currentProject.id, { bodyByNodeId: newValue });
+  }, [currentProject, state.bodyByNodeId, updateProjectState]);
+  
+  const samplesOpen = state.samplesOpen;
+  const setSamplesOpen = useCallback((value: boolean | ((prev: boolean) => boolean)) => {
+    if (!currentProject) return;
+    const newValue = typeof value === 'function' ? value(state.samplesOpen) : value;
+    updateProjectState(currentProject.id, { samplesOpen: newValue });
+  }, [currentProject, state.samplesOpen, updateProjectState]);
+  
+  const sampleFragments = state.sampleFragments;
+  const setSampleFragments = useCallback((value: SampleFragment[]) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { sampleFragments: value });
+  }, [currentProject, updateProjectState]);
+  
+  const samplePreviewById = state.samplePreviewById;
+  const setSamplePreviewById = useCallback((value: Record<string, SamplePreviewState> | ((prev: Record<string, SamplePreviewState>) => Record<string, SamplePreviewState>)) => {
+    if (!currentProject) return;
+    const newValue = typeof value === 'function' ? value(state.samplePreviewById) : value;
+    updateProjectState(currentProject.id, { samplePreviewById: newValue });
+  }, [currentProject, state.samplePreviewById, updateProjectState]);
+  
+  const selectedFormatTemplateId = state.selectedFormatTemplateId;
+  const setSelectedFormatTemplateId = useCallback((value: string) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { selectedFormatTemplateId: value });
+    localStorage.setItem(`tender.formatTemplateId.${currentProject.id}`, value);
+  }, [currentProject, updateProjectState]);
+  
+  const tocStyleVars = state.tocStyleVars;
+  const setTocStyleVars = useCallback((value: any) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { tocStyleVars: value });
+  }, [currentProject, updateProjectState]);
+  
+  const previewMode = state.previewMode;
+  const setPreviewMode = useCallback((value: "content" | "format") => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { previewMode: value });
+  }, [currentProject, updateProjectState]);
+  
+  const formatPreviewUrl = state.formatPreviewUrl;
+  const setFormatPreviewUrl = useCallback((value: string) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { formatPreviewUrl: value });
+  }, [currentProject, updateProjectState]);
+  
+  const formatDownloadUrl = state.formatDownloadUrl;
+  const setFormatDownloadUrl = useCallback((value: string) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { formatDownloadUrl: value });
+  }, [currentProject, updateProjectState]);
+  
+  const formatPreviewBlobUrl = state.formatPreviewBlobUrl;
+  const setFormatPreviewBlobUrl = useCallback((value: string) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { formatPreviewBlobUrl: value });
+  }, [currentProject, updateProjectState]);
+  
+  const reviewItems = state.reviewItems;
+  const setReviewItems = useCallback((value: ReviewItem[]) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { reviewItems: value });
+  }, [currentProject, updateProjectState]);
+  
+  const reviewRun = state.runs.review;
+  const setReviewRun = useCallback((value: TenderRun | null) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { runs: { ...state.runs, review: value } });
+  }, [currentProject, state.runs, updateProjectState]);
+  
+  const selectedBidder = state.selectedBidder;
+  const setSelectedBidder = useCallback((value: string) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { selectedBidder: value });
+  }, [currentProject, updateProjectState]);
+  
+  const selectedRuleAssetIds = state.selectedRuleAssetIds;
+  const setSelectedRuleAssetIds = useCallback((value: string[] | ((prev: string[]) => string[])) => {
+    if (!currentProject) return;
+    const newValue = typeof value === 'function' ? value(state.selectedRuleAssetIds) : value;
+    updateProjectState(currentProject.id, { selectedRuleAssetIds: newValue });
+  }, [currentProject, state.selectedRuleAssetIds, updateProjectState]);
+  
+  const evidenceChunks = state.evidenceChunks;
+  const setEvidenceChunks = useCallback((value: Chunk[]) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { evidenceChunks: value });
+  }, [currentProject, updateProjectState]);
+  
+  // ========== 兼容层结束 ==========
+  
+  // 全局共享状态（不按项目隔离）
   const [formatTemplates, setFormatTemplates] = useState<FormatTemplateOption[]>([]);
-  const [selectedFormatTemplateId, setSelectedFormatTemplateId] = useState<string>("");
-  const [tocStyleVars, setTocStyleVars] = useState<any>(null);
   const [applyingFormat, setApplyingFormat] = useState(false);
   const [autoFillingSamples, setAutoFillingSamples] = useState(false);
-
-  // Step3: 内嵌格式预览（方案A）
-  const [previewMode, setPreviewMode] = useState<"content" | "format">("content");
-  const [formatPreviewUrl, setFormatPreviewUrl] = useState<string>("");
-  const [formatDownloadUrl, setFormatDownloadUrl] = useState<string>("");
-  const [formatPreviewBlobUrl, setFormatPreviewBlobUrl] = useState<string>("");
   const [formatPreviewLoading, setFormatPreviewLoading] = useState<boolean>(false);
 
   // 轻量 Toast（不引入第三方库）
   const [toast, setToast] = useState<{ kind: 'success' | 'error' | 'warning'; msg: string; detail?: string } | null>(null);
   const showToast = useCallback((kind: 'success' | 'error' | 'warning', msg: string, detail?: string) => {
     setToast({ kind, msg, detail });
-    window.setTimeout(() => setToast(null), kind === 'error' ? 5000 : 3500); // 错误提示显示更久
+    window.setTimeout(() => setToast(null), kind === 'error' ? 5000 : 3500);
   }, []);
   
-  // ✅ 项目run状态缓存（切换项目时不丢失）
-  const projectRunsCacheRef = useRef<Map<string, {
-    infoRun: TenderRun | null;
-    riskRun: TenderRun | null;
-    dirRun: TenderRun | null;
-    reviewRun: TenderRun | null;
-  }>>(new Map());
-  
-  // Step5: 审核（改为选择规则文件资产）
-  const [selectedBidder, setSelectedBidder] = useState('');
-  const [selectedRuleAssetIds, setSelectedRuleAssetIds] = useState<string[]>([]);
-  const [reviewItems, setReviewItems] = useState<ReviewItem[]>([]);
-  const [reviewRun, setReviewRun] = useState<TenderRun | null>(null);
-
-  // ✅ 保存当前项目的run状态到缓存（移到所有state声明之后）
-  const saveCurrentProjectRuns = useCallback(() => {
-    if (!currentProject) return;
-    projectRunsCacheRef.current.set(currentProject.id, {
-      infoRun,
-      riskRun,
-      dirRun,
-      reviewRun,
-    });
-    console.log('[saveCurrentProjectRuns] 已保存项目run状态:', currentProject.id, { infoRun, riskRun, dirRun, reviewRun });
-  }, [currentProject, infoRun, riskRun, dirRun, reviewRun]);
-
-  // ✅ 每次run状态变化时，自动保存到缓存
-  useEffect(() => {
-    if (currentProject) {
-      saveCurrentProjectRuns();
-    }
-  }, [infoRun, riskRun, dirRun, reviewRun, currentProject, saveCurrentProjectRuns]);
-
-  // ✅ 恢复目标项目的run状态从缓存（只恢复状态，不恢复轮询）
-  const restoreProjectRuns = useCallback((projectId: string) => {
-    const cached = projectRunsCacheRef.current.get(projectId);
-    if (cached) {
-      console.log('[restoreProjectRuns] 恢复项目run状态:', projectId, cached);
-      setInfoRun(cached.infoRun);
-      setRiskRun(cached.riskRun);
-      setDirRun(cached.dirRun);
-      setReviewRun(cached.reviewRun);
-      return cached;
-    } else {
-      console.log('[restoreProjectRuns] 无缓存，清空run状态');
-      setInfoRun(null);
-      setRiskRun(null);
-      setDirRun(null);
-      setReviewRun(null);
-      return null;
-    }
-  }, []);
-  
-  // 证据面板
+  // 证据面板（全局状态）
   const [evidencePanelOpen, setEvidencePanelOpen] = useState(true);
-  const [evidenceChunks, setEvidenceChunks] = useState<Chunk[]>([]);
   
   // 模板详情弹窗
   const [showTemplateDetail, setShowTemplateDetail] = useState(false);
@@ -254,8 +409,117 @@ export default function TenderWorkspace() {
   const [templateDetailSummary, setTemplateDetailSummary] = useState<any>(null);
   const [templateDetailTab, setTemplateDetailTab] = useState<'preview' | 'spec' | 'diagnostics'>('preview');
   
-  // 轮询 ref
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 轮询管理：每个项目独立的轮询timers
+  const pollTimersRef = useRef<Map<string, Map<string, ReturnType<typeof setInterval>>>>(new Map());
+  
+  // 停止指定项目的轮询
+  const stopPolling = useCallback((projectId: string, taskType?: 'info' | 'risk' | 'directory' | 'review') => {
+    const timers = pollTimersRef.current.get(projectId);
+    if (!timers) return;
+    
+    if (taskType) {
+      // 停止指定任务的轮询
+      const timer = timers.get(taskType);
+      if (timer) {
+        clearInterval(timer);
+        timers.delete(taskType);
+        console.log(`[stopPolling] 已停止项目 ${projectId} 的 ${taskType} 轮询`);
+      }
+    } else {
+      // 停止所有轮询
+      timers.forEach((timer, type) => {
+        clearInterval(timer);
+        console.log(`[stopPolling] 已停止项目 ${projectId} 的 ${type} 轮询`);
+      });
+      timers.clear();
+    }
+  }, []);
+  
+  // 停止项目的所有轮询
+  const stopAllPolling = useCallback((projectId: string) => {
+    stopPolling(projectId);
+  }, [stopPolling]);
+  
+  // 启动轮询
+  const startPolling = useCallback((
+    projectId: string,
+    taskType: 'info' | 'risk' | 'directory' | 'review',
+    runId: string,
+    onSuccess: () => void
+  ) => {
+    // 先停止已有的轮询
+    stopPolling(projectId, taskType);
+    
+    const check = async () => {
+      try {
+        // 验证项目是否切换
+        if (currentProject?.id !== projectId) {
+          console.log(`[startPolling] 项目已切换，停止 ${taskType} 轮询`);
+          stopPolling(projectId, taskType);
+          return;
+        }
+        
+        const run: TenderRun = await api.get(`/api/apps/tender/runs/${runId}`);
+        
+        if (run.status === 'success') {
+          console.log(`[startPolling] ${taskType} 任务完成`);
+          stopPolling(projectId, taskType);
+          
+          // 只在当前项目时才调用回调
+          if (currentProject?.id === projectId) {
+            onSuccess();
+          }
+        } else if (run.status === 'failed') {
+          console.error(`[startPolling] ${taskType} 任务失败:`, run.message);
+          stopPolling(projectId, taskType);
+          
+          if (currentProject?.id === projectId) {
+            alert(`任务失败: ${run.message || 'unknown error'}`);
+          }
+        } else if (run.status === 'running') {
+          // 运行中：增量加载数据
+          if (taskType === 'info' && currentProject?.id === projectId) {
+            api.get(`/api/apps/tender/projects/${projectId}/project-info`)
+              .then(data => {
+                if (currentProject?.id === projectId) {
+                  setProjectInfo(data);
+                }
+              })
+              .catch(err => console.warn('增量加载项目信息失败:', err));
+          }
+        }
+        
+        // 更新run状态
+        if (currentProject?.id === projectId) {
+          const state = getProjectState(projectId);
+          updateProjectState(projectId, {
+            runs: {
+              ...state.runs,
+              [taskType]: run
+            }
+          });
+        }
+      } catch (err) {
+        console.error(`[startPolling] ${taskType} 轮询失败:`, err);
+      }
+    };
+    
+    // 立即执行一次
+    check();
+    
+    // 设置定时器
+    const timer = setInterval(check, 2000);
+    
+    // 保存timer
+    let timers = pollTimersRef.current.get(projectId);
+    if (!timers) {
+      timers = new Map();
+      pollTimersRef.current.set(projectId, timers);
+    }
+    timers.set(taskType, timer);
+    
+    console.log(`[startPolling] 已启动项目 ${projectId} 的 ${taskType} 轮询`);
+  }, [currentProject, stopPolling, getProjectState, updateProjectState]);
 
   // -------------------- 格式预览加载（使用 fetch + Blob URL 以携带 Authorization） --------------------
   
@@ -417,7 +681,8 @@ export default function TenderWorkspace() {
     }
     
     try {
-      const data = await api.get(`/api/apps/tender/projects/${projectId}/risks`);
+      // 使用新的 risk-analysis API
+      const data = await api.get(`/api/apps/tender/projects/${projectId}/risk-analysis`);
       
       // ✅ 加载后验证项目ID
       if (currentProject && currentProject.id !== projectId) {
@@ -425,9 +690,11 @@ export default function TenderWorkspace() {
         return;
       }
       
-      setRisks(data);
+      setRiskAnalysisData(data);
     } catch (err) {
-      console.error('Failed to load risks:', err);
+      console.error('Failed to load risk analysis:', err);
+      // 失败时清空数据
+      setRiskAnalysisData(null);
     }
   }, [currentProject]);
 
@@ -667,100 +934,18 @@ export default function TenderWorkspace() {
   const selectProject = (proj: TenderProject) => {
     console.log('[selectProject] 切换项目:', { from: currentProject?.id, to: proj.id });
     
-    // ✅ 1. 保存当前项目的run状态
-    saveCurrentProjectRuns();
-    
-    // ✅ 2. 停止正在进行的轮询
-    if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current);
-      pollTimerRef.current = null;
-      console.log('[selectProject] 已停止轮询');
+    // 停止当前项目的所有轮询
+    if (currentProject?.id) {
+      stopAllPolling(currentProject.id);
     }
     
-    // ✅ 3. 先清空所有run状态（防止旧项目状态污染）
-    console.log('[selectProject] 清空run状态');
-    setInfoRun(null);
-    setRiskRun(null);
-    setDirRun(null);
-    setReviewRun(null);
-    
-    // ✅ 4. 清空所有数据状态
-    setAssets([]);
-    setProjectInfo(null);
-    setRisks([]);
-    setDirectory([]);
-    setReviewItems([]);
-    setEvidenceChunks([]);
-    setBodyByNodeId({});
-    setSamplesOpen(false);
-    setSampleFragments([]);
-    setSamplePreviewById({});
-    setSelectedRiskId(null);
-    setRiskFilters({
-      typeTab: 'all',
-      severity: 'all',
-      keyword: '',
-      sort: 'default',
-    });
-    setSelectedFormatTemplateId("");
-    setTocStyleVars(null);
-    
-    // 清空格式预览相关状态（避免 403 错误）
-    setPreviewMode("content");
-    setFormatPreviewUrl("");
-    setFormatDownloadUrl("");
-    if (formatPreviewBlobUrl) {
-      URL.revokeObjectURL(formatPreviewBlobUrl);
-    }
-    setFormatPreviewBlobUrl("");
-    
-    // ✅ 5. 更新当前项目（这会触发useEffect重新加载数据）
+    // 切换项目（状态由 ProjectState Map 管理，不需要清空）
     setCurrentProject(proj);
     setActiveTab(1);
     setViewMode("projectInfo");
-    
-    // ✅ 6. 延迟恢复目标项目的run状态（等待数据加载完成后再恢复）
-    // 使用setTimeout确保在useEffect加载数据之后执行
-    setTimeout(() => {
-      console.log('[selectProject] 延迟恢复run状态');
-      restoreProjectRuns(proj.id);
-    }, 100);
   };
   
   // ✅ 当项目切换且run状态恢复后，自动恢复running任务的轮询
-  useEffect(() => {
-    if (!currentProject) return;
-    
-    const projectId = currentProject.id;
-    
-    // 恢复各个running任务的轮询
-    if (infoRun?.status === 'running' && infoRun.id) {
-      console.log('[useEffect] 恢复项目信息抽取轮询:', infoRun.id);
-      pollRun(infoRun.id, projectId, () => loadProjectInfo(projectId));
-    }
-    
-    if (riskRun?.status === 'running' && riskRun.id) {
-      console.log('[useEffect] 恢复风险识别轮询:', riskRun.id);
-      pollRun(riskRun.id, projectId, () => loadRisks(projectId));
-    }
-    
-    if (dirRun?.status === 'running' && dirRun.id) {
-      console.log('[useEffect] 恢复目录生成轮询:', dirRun.id);
-      pollRun(dirRun.id, projectId, async () => {
-        const nodes = await loadDirectory(projectId);
-        if (nodes.length > 0) {
-          await loadBodiesForAllNodes(nodes);
-        }
-        await loadSampleFragments();
-      });
-    }
-    
-    if (reviewRun?.status === 'running' && reviewRun.id) {
-      console.log('[useEffect] 恢复审核轮询:', reviewRun.id);
-      pollRun(reviewRun.id, projectId, () => loadReview(projectId));
-    }
-  }, [currentProject, infoRun?.id, riskRun?.id, dirRun?.id, reviewRun?.id]); // 只监听id变化，避免频繁触发
-  
   // 编辑项目
   const openEditProject = (proj: TenderProject) => {
     setEditingProject(proj);
@@ -857,6 +1042,7 @@ export default function TenderWorkspace() {
     }
     files.forEach(f => formData.append('files', f));
 
+    setUploading(true);
     try {
       const newAssets = await api.post(
         `/api/apps/tender/projects/${currentProject.id}/assets/import`,
@@ -868,6 +1054,8 @@ export default function TenderWorkspace() {
       alert('上传成功');
     } catch (err) {
       alert(`上传失败: ${err}`);
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -897,102 +1085,32 @@ export default function TenderWorkspace() {
   };
 
   // -------------------- Run 轮询 --------------------
+  // 已重构为 startPolling / stopPolling
 
-  const pollRun = useCallback(async (runId: string, projectId: string, onSuccess: () => void) => {
-    if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current);
-    }
-
-    const check = async () => {
-      try {
-        // ✅ 检查当前项目是否仍然是启动轮询时的项目
-        if (!currentProject || currentProject.id !== projectId) {
-          console.log('[pollRun] 项目已切换，停止轮询', { runId, expectedProjectId: projectId, currentProjectId: currentProject?.id });
-          if (pollTimerRef.current) {
-            clearInterval(pollTimerRef.current);
-            pollTimerRef.current = null;
-          }
-          return;
-        }
-        
-        const run: TenderRun = await api.get(`/api/apps/tender/runs/${runId}`);
-        
-        if (run.status === 'success') {
-          console.log('[pollRun] 任务成功完成:', { runId, kind: run.kind });
-          if (pollTimerRef.current) {
-            clearInterval(pollTimerRef.current);
-            pollTimerRef.current = null;
-          }
-          // ✅ 再次验证项目ID后才调用onSuccess
-          if (currentProject && currentProject.id === projectId) {
-            onSuccess();
-          } else {
-            console.log('[pollRun] 任务成功但项目已切换，跳过onSuccess回调');
-          }
-        } else if (run.status === 'failed') {
-          console.error('[pollRun] 任务失败:', { runId, kind: run.kind, message: run.message });
-          if (pollTimerRef.current) {
-            clearInterval(pollTimerRef.current);
-            pollTimerRef.current = null;
-          }
-          // ✅ 只有当前项目匹配时才显示错误
-          if (currentProject && currentProject.id === projectId) {
-            alert(`任务失败: ${run.message || 'unknown error'}`);
-          }
-        } else if (run.status === 'running') {
-          // ✅ 运行中：增量加载数据（项目信息四阶段）
-          if (run.kind === 'extract_project_info' && currentProject && currentProject.id === projectId) {
-            // 静默加载，使用projectId参数确保加载正确的项目数据
-            api.get(`/api/apps/tender/projects/${projectId}/project-info`)
-              .then(data => {
-                // 加载完成后再次验证项目ID
-                if (currentProject && currentProject.id === projectId) {
-                  setProjectInfo(data);
-                } else {
-                  console.log('[pollRun] 增量加载完成但项目已切换，丢弃数据');
-                }
-              })
-              .catch(err => console.warn('增量加载项目信息失败:', err));
-          }
-        }
-        
-        // ✅ 只有当前项目匹配时才更新run状态
-        if (currentProject && currentProject.id === projectId) {
-          if (run.kind === 'extract_project_info') setInfoRun(run);
-          else if (run.kind === 'extract_risks') setRiskRun(run);
-          else if (run.kind === 'generate_directory') setDirRun(run);
-          else if (run.kind === 'review') setReviewRun(run);
-        }
-      } catch (err) {
-        console.error('Poll run failed:', err);
-      }
-    };
-
-    await check();
-    pollTimerRef.current = setInterval(check, 2000);
-  }, [currentProject]);
-
-  useEffect(() => {
-    return () => {
-      if (pollTimerRef.current) {
-        clearInterval(pollTimerRef.current);
-      }
-    };
-  }, []);
-
-  // -------------------- Step操作（省略，与之前相同）--------------------
+  // -------------------- Step操作 --------------------
   
   const extractProjectInfo = async () => {
     if (!currentProject) return;
-    const projectId = currentProject.id; // ✅ 捕获当前项目ID
+    const projectId = currentProject.id;
+    
     // 清空旧的项目信息
     setProjectInfo(null);
+    
     try {
       const res = await api.post(`/api/apps/tender/projects/${projectId}/extract/project-info`, { model_id: null });
-      // 设置新的run状态（此时后端已创建run记录）
-      setInfoRun({ id: res.run_id, status: 'running', progress: 0, message: '开始抽取...', kind: 'extract_project_info' } as TenderRun);
-      // ✅ 传入projectId，确保回调使用正确的项目
-      pollRun(res.run_id, projectId, () => loadProjectInfo(projectId));
+      
+      // 设置新的run状态
+      const newRun: TenderRun = { 
+        id: res.run_id, 
+        status: 'running', 
+        progress: 0, 
+        message: '开始抽取...', 
+        kind: 'extract_project_info' 
+      } as TenderRun;
+      setInfoRun(newRun);
+      
+      // 启动轮询
+      startPolling(projectId, 'info', res.run_id, () => loadProjectInfo(projectId));
     } catch (err) {
       alert(`抽取失败: ${err}`);
       setInfoRun(null);
@@ -1001,16 +1119,26 @@ export default function TenderWorkspace() {
 
   const extractRisks = async () => {
     if (!currentProject) return;
-    const projectId = currentProject.id; // ✅ 捕获当前项目ID
-    // 清空旧的风险
-    setRisks([]);
-    setSelectedRiskId(null);
+    const projectId = currentProject.id;
+    
+    // 清空旧的风险数据
+    setRiskAnalysisData(null);
+    
     try {
       const res = await api.post(`/api/apps/tender/projects/${projectId}/extract/risks`, { model_id: null });
+      
       // 设置新的run状态
-      setRiskRun({ id: res.run_id, status: 'running', progress: 0, message: '开始识别...', kind: 'extract_risks' } as TenderRun);
-      // ✅ 传入projectId
-      pollRun(res.run_id, projectId, () => loadRisks(projectId));
+      const newRun: TenderRun = { 
+        id: res.run_id, 
+        status: 'running', 
+        progress: 0, 
+        message: '开始识别...', 
+        kind: 'extract_risks' 
+      } as TenderRun;
+      setRiskRun(newRun);
+      
+      // 启动轮询
+      startPolling(projectId, 'risk', res.run_id, () => loadRisks(projectId));
     } catch (err) {
       alert(`识别失败: ${err}`);
       setRiskRun(null);
@@ -1019,24 +1147,34 @@ export default function TenderWorkspace() {
 
   const generateDirectory = async () => {
     if (!currentProject) return;
-    const projectId = currentProject.id; // ✅ 捕获当前项目ID
+    const projectId = currentProject.id;
+    
     // 清空旧的目录
     setDirectory([]);
     setBodyByNodeId({});
+    
     try {
       console.log('[generateDirectory] 开始生成目录，项目ID:', projectId);
       const res = await api.post(`/api/apps/tender/projects/${projectId}/directory/generate`, { model_id: null });
       console.log('[generateDirectory] 生成目录任务已提交，run_id:', res.run_id);
+      
       // 设置新的run状态
-      setDirRun({ id: res.run_id, status: 'running', progress: 0, message: '开始生成...', kind: 'generate_directory' } as TenderRun);
-      // ✅ 传入projectId，确保回调使用正确的项目
-      pollRun(res.run_id, projectId, async () => {
+      const newRun: TenderRun = { 
+        id: res.run_id, 
+        status: 'running', 
+        progress: 0, 
+        message: '开始生成...', 
+        kind: 'generate_directory' 
+      } as TenderRun;
+      setDirRun(newRun);
+      
+      // 启动轮询
+      startPolling(projectId, 'directory', res.run_id, async () => {
         const nodes = await loadDirectory(projectId);
         console.log('[generateDirectory] 后端返回目录(前5条title):', (nodes || []).slice(0, 5).map(n => n?.title));
         if (nodes.length > 0) {
           await loadBodiesForAllNodes(nodes);
         }
-        // 目录生成后同步刷新范本列表（有些项目先抽取后生成目录，也可能反过来）
         await loadSampleFragments();
       });
     } catch (err) {
@@ -1165,7 +1303,8 @@ export default function TenderWorkspace() {
 
   const runReview = async () => {
     if (!currentProject) return;
-    const projectId = currentProject.id; // ✅ 捕获当前项目ID
+    const projectId = currentProject.id;
+    
     if (!selectedBidder && assetsByKind.bid.length > 0) {
       alert('请选择投标人');
       return;
@@ -1178,21 +1317,35 @@ export default function TenderWorkspace() {
         bidder_name: selectedBidder || undefined,
         bid_asset_ids: [],
       });
+      
       // 设置新的run状态
-      setReviewRun({ id: res.run_id, status: 'running', progress: 0, message: '开始审核...', kind: 'review' } as TenderRun);
-      // ✅ 传入projectId
-      pollRun(res.run_id, projectId, () => loadReview(projectId));
+      const newRun: TenderRun = { 
+        id: res.run_id, 
+        status: 'running', 
+        progress: 0, 
+        message: '开始审核...', 
+        kind: 'review' 
+      } as TenderRun;
+      setReviewRun(newRun);
+      
+      // 启动轮询
+      startPolling(projectId, 'review', res.run_id, () => loadReview(projectId));
     } catch (err) {
       alert(`审核失败: ${err}`);
       setReviewRun(null);
     }
   };
 
-  const showEvidence = async (chunkIds: string[]) => {
+  const showEvidence = async (chunkIds: string[], highlightText?: string) => {
     if (chunkIds.length === 0) return;
     try {
       const data = await api.post('/api/apps/tender/chunks/lookup', { chunk_ids: chunkIds });
-      setEvidenceChunks(data);
+      // 为每个 chunk 添加高亮信息
+      const chunksWithHighlight = data.map((chunk: any) => ({
+        ...chunk,
+        highlightText: highlightText || ''
+      }));
+      setEvidenceChunks(chunksWithHighlight);
       setEvidencePanelOpen(true);
     } catch (err) {
       alert(`加载证据失败: ${err}`);
@@ -1222,71 +1375,6 @@ export default function TenderWorkspace() {
     )) as string[];
   }, [assetsByKind.bid]);
 
-  // -------------------- 风险过滤和排序 --------------------
-
-  const filteredRisks = useMemo(() => {
-    let result = [...risks];
-
-    // 按类型过滤
-    if (riskFilters.typeTab === 'mustReject') {
-      result = result.filter(r => r.risk_type === 'mustReject');
-    } else if (riskFilters.typeTab === 'other') {
-      result = result.filter(r => r.risk_type === 'other');
-    }
-
-    // 按严重度过滤
-    if (riskFilters.severity !== 'all') {
-      result = result.filter(r => r.severity === riskFilters.severity);
-    }
-
-    // 按关键字搜索
-    if (riskFilters.keyword.trim()) {
-      const kw = riskFilters.keyword.toLowerCase();
-      result = result.filter(r => {
-        return (
-          r.title.toLowerCase().includes(kw) ||
-          (r.description && r.description.toLowerCase().includes(kw)) ||
-          r.tags.some(tag => tag.toLowerCase().includes(kw))
-        );
-      });
-    }
-
-    // 排序
-    if (riskFilters.sort === 'severity') {
-      const severityOrder: Record<TenderRisk["severity"], number> = { high: 0, medium: 1, low: 2 };
-      result.sort((a, b) => {
-        const aOrder = severityOrder[a.severity] ?? 999;
-        const bOrder = severityOrder[b.severity] ?? 999;
-        return aOrder - bOrder;
-      });
-    }
-
-    return result;
-  }, [risks, riskFilters]);
-
-  const riskSummary = useMemo(() => {
-    return {
-      total: risks.length,
-      mustReject: risks.filter(r => r.risk_type === 'mustReject').length,
-      other: risks.filter(r => r.risk_type === 'other').length,
-    };
-  }, [risks]);
-
-  const selectedRisk = useMemo(() => {
-    return filteredRisks.find(r => r.id === selectedRiskId) || null;
-  }, [filteredRisks, selectedRiskId]);
-
-  // 当过滤后的列表变化时，自动选中第一条（如果当前选中不在列表中）
-  useEffect(() => {
-    if (filteredRisks.length > 0) {
-      if (!selectedRiskId || !filteredRisks.find(r => r.id === selectedRiskId)) {
-        setSelectedRiskId(filteredRisks[0].id);
-      }
-    } else {
-      setSelectedRiskId(null);
-    }
-  }, [filteredRisks, selectedRiskId]);
-
   // -------------------- 副作用 --------------------
 
   // 监控 viewMode 变化
@@ -1302,20 +1390,78 @@ export default function TenderWorkspace() {
     loadFormatTemplates();
   }, [loadFormatTemplates]);
 
+  // 项目切换时：加载后端数据 + 恢复轮询
   useEffect(() => {
-    if (currentProject?.id) {
-      const projectId = currentProject.id;
-      console.log('[useEffect] 项目切换，加载新项目数据:', projectId);
-      
-      // ✅ 使用 forceProjectId 参数，避免闭包问题
-      loadAssets(projectId);
-      loadProjectInfo(projectId);
-      loadRisks(projectId);
-      loadDirectory(projectId);
-      loadReview(projectId);
-      loadSampleFragments(projectId);
-    }
-  }, [currentProject?.id]); // ✅ 只监听项目ID变化，避免无限循环
+    if (!currentProject?.id) return;
+    
+    const projectId = currentProject.id;
+    console.log('[useEffect] 项目切换，加载新项目数据和run状态:', projectId);
+    
+    // 加载项目数据
+    loadAssets(projectId);
+    loadProjectInfo(projectId);
+    loadRisks(projectId);
+    loadDirectory(projectId);
+    loadReview(projectId);
+    loadSampleFragments(projectId);
+    
+    // 从后端加载run状态，并恢复轮询
+    const loadAndRestoreRuns = async () => {
+      try {
+        const data = await api.get(`/api/apps/tender/projects/${projectId}/runs/latest`);
+        console.log('[loadAndRestoreRuns] 收到run状态:', data);
+        
+        // 验证项目是否切换
+        if (currentProject?.id !== projectId) {
+          console.log('[loadAndRestoreRuns] 加载完成时项目已切换，丢弃数据');
+          return;
+        }
+        
+        const infoRunData = data.extract_project_info || null;
+        const riskRunData = data.extract_risks || null;
+        const dirRunData = data.generate_directory || null;
+        const reviewRunData = data.review || null;
+        
+        // 更新状态到ProjectState
+        updateProjectState(projectId, {
+          runs: {
+            info: infoRunData,
+            risk: riskRunData,
+            directory: dirRunData,
+            review: reviewRunData,
+          }
+        });
+        
+        // 恢复running任务的轮询
+        if (infoRunData?.status === 'running') {
+          console.log('[loadAndRestoreRuns] 恢复项目信息抽取轮询:', infoRunData.id);
+          startPolling(projectId, 'info', infoRunData.id, () => loadProjectInfo(projectId));
+        }
+        if (riskRunData?.status === 'running') {
+          console.log('[loadAndRestoreRuns] 恢复风险识别轮询:', riskRunData.id);
+          startPolling(projectId, 'risk', riskRunData.id, () => loadRisks(projectId));
+        }
+        if (dirRunData?.status === 'running') {
+          console.log('[loadAndRestoreRuns] 恢复目录生成轮询:', dirRunData.id);
+          startPolling(projectId, 'directory', dirRunData.id, async () => {
+            const nodes = await loadDirectory(projectId);
+            if (nodes.length > 0) {
+              await loadBodiesForAllNodes(nodes);
+            }
+            await loadSampleFragments(projectId);
+          });
+        }
+        if (reviewRunData?.status === 'running') {
+          console.log('[loadAndRestoreRuns] 恢复审核轮询:', reviewRunData.id);
+          startPolling(projectId, 'review', reviewRunData.id, () => loadReview(projectId));
+        }
+      } catch (err) {
+        console.error('[loadAndRestoreRuns] 加载项目run状态失败:', err);
+      }
+    };
+    
+    loadAndRestoreRuns();
+  }, [currentProject?.id]); // 只监听项目ID变化
 
   // 切换项目时，恢复上次选择的格式模板（用于“自动套用格式”按钮）
   useEffect(() => {
@@ -1572,8 +1718,13 @@ export default function TenderWorkspace() {
                     style={{ flex: 1, minWidth: '200px' }}
                   />
 
-                  <button onClick={handleUpload} className="kb-create-form" style={{ width: 'auto', marginBottom: 0 }}>
-                    上传并绑定
+                  <button 
+                    onClick={handleUpload} 
+                    className="kb-create-form" 
+                    style={{ width: 'auto', marginBottom: 0 }}
+                    disabled={uploading || files.length === 0}
+                  >
+                    {uploading ? '上传中...' : '上传并绑定'}
                   </button>
                 </div>
                 
@@ -1754,31 +1905,11 @@ export default function TenderWorkspace() {
                     </div>
                   )}
                   
-                  {risks.length > 0 ? (
-                    <div className="risk-split" style={{ marginTop: '16px', height: 'calc(100vh - 400px)' }}>
-                      {/* 左侧：工具栏 + 列表 */}
-                      <div className="risk-left source-card" style={{ padding: '14px' }}>
-                        <RiskToolbar
-                          filters={riskFilters}
-                          onChange={(patch) => setRiskFilters(prev => ({ ...prev, ...patch }))}
-                          summary={riskSummary}
-                        />
-                        <RiskList
-                          items={filteredRisks}
-                          selectedId={selectedRiskId}
-                          onSelect={setSelectedRiskId}
-                          onOpenEvidence={showEvidence}
-                        />
-                      </div>
-
-                      {/* 右侧：详情 */}
-                      <div className="risk-detail source-card">
-                        <RiskDetail
-                          item={selectedRisk}
-                          onOpenEvidence={showEvidence}
-                        />
-                      </div>
-                    </div>
+                  {riskAnalysisData ? (
+                    <RiskAnalysisTables
+                      data={riskAnalysisData}
+                      onOpenEvidence={showEvidence}
+                    />
                   ) : (
                     <div className="kb-empty" style={{ marginTop: '16px' }}>
                       暂无风险记录，点击"开始识别"
@@ -2116,16 +2247,54 @@ export default function TenderWorkspace() {
               </div>
             )}
             
-            {evidenceChunks.map(chunk => (
-              <div key={chunk.chunk_id} className="source-card">
-                <div className="source-card-title">
-                  {chunk.title} #{chunk.position}
+            {evidenceChunks.map(chunk => {
+              // 高亮函数：将匹配的文本用红色标记
+              const highlightContent = (content: string, highlight: string) => {
+                if (!highlight || !highlight.trim()) {
+                  return content;
+                }
+                
+                // 转义特殊字符并创建正则表达式（不区分大小写）
+                const escapedHighlight = highlight.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const regex = new RegExp(`(${escapedHighlight})`, 'gi');
+                
+                // 分割内容并用 mark 标签包裹匹配部分
+                const parts = content.split(regex);
+                return (
+                  <>
+                    {parts.map((part, index) => 
+                      regex.test(part) ? (
+                        <mark 
+                          key={index} 
+                          style={{ 
+                            backgroundColor: '#ff4444', 
+                            color: 'white', 
+                            padding: '2px 4px',
+                            borderRadius: '2px',
+                            fontWeight: 'bold'
+                          }}
+                        >
+                          {part}
+                        </mark>
+                      ) : (
+                        <span key={index}>{part}</span>
+                      )
+                    )}
+                  </>
+                );
+              };
+
+              return (
+                <div key={chunk.chunk_id} className="source-card">
+                  <div className="source-card-title">
+                    {chunk.title} #{chunk.position}
+                  </div>
+                  <div className="source-card-snippet" style={{ whiteSpace: 'pre-wrap' }}>
+                    {chunk.highlightText ? highlightContent(chunk.content, chunk.highlightText) : chunk.content}
+                  </div>
                 </div>
-                <div className="source-card-snippet" style={{ whiteSpace: 'pre-wrap' }}>
-                  {chunk.content}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

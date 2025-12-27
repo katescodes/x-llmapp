@@ -1,27 +1,44 @@
 """
 风险抽取规格 (v2)
 """
-from pathlib import Path
-
 from app.platform.extraction.types import ExtractionSpec
+from app.platform.extraction.exceptions import PromptNotFoundError
 
 
-def _load_prompt(filename: str) -> str:
-    """加载prompt文件"""
-    prompt_dir = Path(__file__).parent.parent / "prompts"
-    prompt_file = prompt_dir / filename
-    with open(prompt_file, "r", encoding="utf-8") as f:
-        return f.read().strip()
-
-
-def build_risks_spec() -> ExtractionSpec:
+async def build_risks_spec_async(pool=None) -> ExtractionSpec:
     """
-    构建风险抽取规格
+    构建风险抽取规格（异步版本，从数据库加载）
+    
+    Args:
+        pool: 数据库连接池（必需）
     
     Returns:
         ExtractionSpec: 包含 query、prompt、topk 等配置
+        
+    Raises:
+        PromptNotFoundError: 数据库中未找到活跃的prompt模板
     """
-    prompt = _load_prompt("risks_v2.md")
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    if not pool:
+        raise ValueError("pool参数是必需的，无法从数据库加载prompt")
+    
+    # 从数据库加载prompt
+    try:
+        from app.services.prompt_loader import PromptLoaderService
+        loader = PromptLoaderService(pool)
+        prompt = await loader.get_active_prompt("risks")
+        
+        if not prompt:
+            raise PromptNotFoundError("risks")
+        
+        logger.info(f"✅ [Prompt] Loaded from DATABASE for risks_v2, length={len(prompt)}")
+    except PromptNotFoundError:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [Prompt] Failed to load from database: {e}")
+        raise RuntimeError(f"加载prompt失败: {e}") from e
     
     return ExtractionSpec(
         task_type="extract_risks",

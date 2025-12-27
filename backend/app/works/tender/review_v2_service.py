@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from psycopg_pool import ConnectionPool
 
-from app.platform.extraction.exceptions import ExtractionParseError, ExtractionSchemaError
+from app.platform.extraction.exceptions import ExtractionParseError, ExtractionSchemaError, PromptNotFoundError
 from app.platform.extraction.types import ExtractionResult, RetrievalTrace
 from app.platform.retrieval.facade import RetrievalFacade
 from app.services.embedding_provider_store import get_embedding_store
@@ -24,27 +24,50 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)  # 确保INFO级别日志被输出
 
 
-def _load_prompt(filename: str) -> str:
-    """加载 prompt 模板文件"""
-    filepath = os.path.join(os.path.dirname(__file__), "prompts", filename)
-    with open(filepath, "r", encoding="utf-8") as f:
-        return f.read()
-
-
 class ReviewV2Service:
     """新审核服务 - 检索驱动 + 分维度生成"""
     
-    def __init__(self, pool: ConnectionPool, llm_orchestrator: Any = None):
+    def __init__(self, pool: ConnectionPool, llm_orchestrator: Any = None, review_prompt: Optional[str] = None):
+        """
+        初始化审核服务
+        
+        Args:
+            pool: 数据库连接池
+            llm_orchestrator: LLM编排器
+            review_prompt: 审核prompt模板（如果为None，则从数据库加载）
+        """
         self.pool = pool
         self.retriever = RetrievalFacade(pool)
         self.llm = llm_orchestrator
-        self.review_prompt_template = _load_prompt("review_v2.md")
+        self.review_prompt_template = review_prompt  # 可能为None，稍后加载
         self.dimensions = get_review_dimensions()
         self.max_dims = int(os.getenv("REVIEW_MAX_DIMS", "7"))
         self.top_k_per_dim = int(os.getenv("REVIEW_TOPK_PER_DIM", "20"))
         self.review_dimensions_enabled = os.getenv("REVIEW_DIMENSIONS_ENABLED", "").split(',')
         if self.review_dimensions_enabled == ['']: # Handle empty string case
             self.review_dimensions_enabled = [d.name for d in self.dimensions] # Enable all by default
+    
+    async def _ensure_prompt_loaded(self):
+        """确保prompt已加载"""
+        if self.review_prompt_template is not None:
+            return
+        
+        # 从数据库加载
+        try:
+            from app.services.prompt_loader import PromptLoaderService
+            loader = PromptLoaderService(self.pool)
+            prompt = await loader.get_active_prompt("review")
+            
+            if not prompt:
+                raise PromptNotFoundError("review")
+            
+            self.review_prompt_template = prompt
+            logger.info(f"✅ [Prompt] Loaded review from DATABASE, length={len(prompt)}")
+        except PromptNotFoundError:
+            raise
+        except Exception as e:
+            logger.error(f"❌ [Prompt] Failed to load review_v2 from database: {e}")
+            raise RuntimeError(f"加载审核prompt失败: {e}") from e
     
     def _map_severity_to_result(self, severity: str) -> str:
         """将LLM返回的severity映射为schema要求的result"""
@@ -70,6 +93,9 @@ class ReviewV2Service:
         Returns:
             Dict[str, Any] - 包含 items, retrieval_trace, raw_outputs 等
         """
+        # 确保prompt已加载
+        await self._ensure_prompt_loaded()
+        
         logger.info(f"ReviewV2: run_review_v2 start project_id={project_id} run_id={run_id}")
         logger.info(f"ReviewV2: Enabled dimensions: {[d.name for d in self.dimensions if d.name in self.review_dimensions_enabled]}")
         

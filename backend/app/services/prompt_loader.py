@@ -20,7 +20,7 @@ class PromptLoaderService:
         获取指定模块的激活Prompt
         
         Args:
-            module: 模块名称（project_info, risks, directory, review）
+            module: 模块名称（project_info_v3, requirements_v1, bid_response_v1, risks_v2, directory_v2, review_v2）
         
         Returns:
             Prompt内容（Markdown格式），如果不存在则返回None

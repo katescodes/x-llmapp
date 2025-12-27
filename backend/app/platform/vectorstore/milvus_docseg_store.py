@@ -45,20 +45,38 @@ class MilvusDocSegStore:
     """新文档分片向量存储"""
     
     def __init__(self) -> None:
-        logger.info("Initializing Milvus DocSeg client path=%s", settings.MILVUS_LITE_PATH)
-        self.client = MilvusClient(uri=settings.MILVUS_LITE_PATH)
+        # 延迟初始化 - 第一次使用时才创建连接
+        self._client = None
         self.collection_dim: Optional[int] = None
+        self.connection_error = None
+    
+    @property
+    def client(self) -> MilvusClient:
+        """获取 Milvus 客户端（延迟初始化）"""
+        if self._client is None:
+            try:
+                logger.info("Creating Milvus DocSeg client path=%s", settings.MILVUS_LITE_PATH)
+                self._client = MilvusClient(uri=settings.MILVUS_LITE_PATH)
+                self.connection_error = None
+            except Exception as e:
+                logger.error(f"Failed to create Milvus client: {e}")
+                self.connection_error = str(e)
+                raise RuntimeError(f"Milvus client not available: {e}")
+        return self._client
 
     def _ensure_collection(self, dense_dim: int) -> None:
         """确保集合存在且维度正确"""
+        # client 属性会自动处理初始化和错误
+        client = self.client  # 触发延迟初始化
+        
         if (
             self.collection_dim
             and self.collection_dim == dense_dim
-            and self.client.has_collection(COLLECTION_NAME)
+            and client.has_collection(COLLECTION_NAME)
         ):
             return
 
-        if self.client.has_collection(COLLECTION_NAME):
+        if client.has_collection(COLLECTION_NAME):
             needs_rebuild = False
             
             if self.collection_dim and self.collection_dim != dense_dim:
@@ -268,12 +286,24 @@ class MilvusDocSegStore:
 
 # 延迟初始化全局实例，避免多进程文件锁冲突
 _milvus_docseg_store_instance = None
+_milvus_init_lock = None
 
 def get_milvus_docseg_store() -> MilvusDocSegStore:
-    """获取 Milvus DocSeg Store 单例（延迟初始化）"""
-    global _milvus_docseg_store_instance
+    """获取 Milvus DocSeg Store 单例（延迟初始化，带锁保护）"""
+    global _milvus_docseg_store_instance, _milvus_init_lock
+    
     if _milvus_docseg_store_instance is None:
-        _milvus_docseg_store_instance = MilvusDocSegStore()
+        # 使用线程锁避免并发初始化
+        import threading
+        if _milvus_init_lock is None:
+            _milvus_init_lock = threading.Lock()
+        
+        with _milvus_init_lock:
+            # 双重检查
+            if _milvus_docseg_store_instance is None:
+                # 总是创建实例，即使连接失败也返回（延迟初始化连接）
+                _milvus_docseg_store_instance = MilvusDocSegStore()
+    
     return _milvus_docseg_store_instance
 
 # 向后兼容的全局变量（通过property实现延迟初始化）

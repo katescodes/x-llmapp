@@ -847,7 +847,7 @@ class TenderService:
                 run_id=run_id
             ))
             
-            # ✅ v2_result 已经是完整的 V3 结构，包含 schema_version 和九大类
+            # ✅ v2_result 已经是完整的 V3 结构，包含 schema_version 和六大类
             # 提取证据和追踪信息
             eids = v2_result.get("evidence_chunk_ids") or []
             trace = v2_result.get("retrieval_trace") or {}
@@ -870,15 +870,25 @@ class TenderService:
             
             # 更新运行状态
             if run_id:
+                # 构建result_json，确保trace是dict格式
+                result_json_data = {
+                    **obj,
+                    "extract_v2_status": "ok",
+                    "extract_mode_used": "NEW_ONLY",
+                }
+                
+                # 处理trace：如果是list则包装成dict，如果是dict则展开
+                if isinstance(trace, dict):
+                    result_json_data.update(trace)
+                elif isinstance(trace, list):
+                    result_json_data["retrieval_trace"] = trace
+                else:
+                    result_json_data["retrieval_trace"] = trace
+                
                 self.dao.update_run(
                     run_id, "success", progress=1.0, 
                     message="ok", 
-                    result_json={
-                        **obj,
-                        "extract_v2_status": "ok",
-                        "extract_mode_used": "NEW_ONLY",
-                        **trace
-                    }
+                    result_json=result_json_data
                 )
             
             logger.info(f"NEW_ONLY extract_project_info: v2 succeeded for project={project_id}")
@@ -1165,8 +1175,12 @@ class TenderService:
         
         logger.info(f"[generate_directory] V2 extracted {len(nodes)} nodes")
         
+        # ✅ 4.1 通用目录规范化（新增：wrapper折叠 + 三分册一级 + 语义纠偏）
+        nodes = self._normalize_directory_nodes(nodes)
+        logger.info(f"[generate_directory] normalized nodes -> {len(nodes)}")
+        
         # 5. 后处理: 排序 + 构建树 + 生成 numbering
-        nodes_sorted = sorted(nodes, key=lambda n: (n.get("level", 99), n.get("order_no", 0)))
+        nodes_sorted = self._sort_directory_nodes_for_tree(nodes)
         nodes_with_tree = self._build_directory_tree(nodes_sorted)
         
         # 6. 保存（使用replace_directory）
@@ -1206,51 +1220,332 @@ class TenderService:
                 result_json=v2_result
             )
     
+    # ==================== 目录规范化方法（通用版） ====================
+    
+    def _bucket_by_title(self, title: str) -> str:
+        """根据标题内容判断所属分桶"""
+        import re
+        _BUCKET_PRICE = re.compile(r"(报价|价格|明细|汇总|总价|分项|报价表|报价单|投标报价|磋商报价|报价响应)", re.I)
+        _BUCKET_TECH  = re.compile(r"(技术|方案|规格|参数|偏离|样本|手册|实施|组织|架构|测试|配置|选型|技术规格)", re.I)
+        _BUCKET_BIZ   = re.compile(r"(营业执照|资质|证书|社保|信用|授权|委托|承诺|声明|基本情况|信誉|自评|证明|建议|不转包|分包)", re.I)
+        
+        t = (title or "").strip()
+        if not t:
+            return "unknown"
+        if _BUCKET_PRICE.search(t):
+            return "price"
+        if _BUCKET_TECH.search(t):
+            return "tech"
+        if _BUCKET_BIZ.search(t):
+            return "biz"
+        return "unknown"
+    
+    def _infer_parent_index_by_level(self, nodes: list) -> list:
+        """根据 level 推断父节点索引"""
+        parent = [-1] * len(nodes)
+        stack = []  # [(level, index)]
+        for i, n in enumerate(nodes):
+            lv = int(n.get("level") or 1)
+            while stack and stack[-1][0] >= lv:
+                stack.pop()
+            parent[i] = stack[-1][1] if stack else -1
+            stack.append((lv, i))
+        return parent
+    
+    def _find_section_titles(self, nodes: list) -> dict:
+        """查找三分册和 wrapper 标题"""
+        import re
+        _WRAPPER_RE = re.compile(r"(投标文件|响应文件|磋商响应文件|投标响应文件|响应文件目录|投标文件目录)", re.I)
+        _SECTION_BIZ_RE = re.compile(r"(资信|商务|资格)", re.I)
+        _SECTION_TECH_RE = re.compile(r"(技术)", re.I)
+        _SECTION_PRICE_RE = re.compile(r"(报价|价格|磋商报价|报价响应)", re.I)
+        
+        biz = tech = price = wrapper = None
+        for n in nodes:
+            title = (n.get("title") or "").strip()
+            if not title:
+                continue
+            if wrapper is None and _WRAPPER_RE.search(title):
+                wrapper = title
+            if biz is None and _SECTION_BIZ_RE.search(title):
+                biz = title
+            if tech is None and _SECTION_TECH_RE.search(title):
+                tech = title
+            if price is None and _SECTION_PRICE_RE.search(title):
+                price = title
+        return {"biz": biz, "tech": tech, "price": price, "wrapper": wrapper}
+    
+    def _collapse_wrapper(self, nodes: list) -> list:
+        """折叠 wrapper 节点（投标文件/响应文件等总标题）"""
+        from collections import deque
+        
+        if not nodes:
+            return nodes
+        sec = self._find_section_titles(nodes)
+        wrapper = sec["wrapper"]
+        if not wrapper:
+            return nodes
+        if not (sec["biz"] and sec["tech"] and sec["price"]):
+            return nodes
+
+        title_to_first_idx = {}
+        for i, n in enumerate(nodes):
+            t = (n.get("title") or "").strip()
+            if t and t not in title_to_first_idx:
+                title_to_first_idx[t] = i
+
+        w_idx = title_to_first_idx.get(wrapper)
+        if w_idx is None:
+            return nodes
+
+        parent = self._infer_parent_index_by_level(nodes)
+        children = [[] for _ in nodes]
+        for i, p in enumerate(parent):
+            if p >= 0:
+                children[p].append(i)
+
+        sub = set()
+        q = deque([w_idx])
+        while q:
+            x = q.popleft()
+            sub.add(x)
+            for c in children[x]:
+                q.append(c)
+
+        # 三分册必须都在 wrapper 子树里才折叠（避免误伤）
+        b = title_to_first_idx.get(sec["biz"])
+        t = title_to_first_idx.get(sec["tech"])
+        p = title_to_first_idx.get(sec["price"])
+        if not (b in sub and t in sub and p in sub):
+            return nodes
+
+        new_nodes = []
+        for i, n in enumerate(nodes):
+            if i == w_idx:
+                continue  # remove wrapper
+            nn = dict(n)
+            if i in sub:
+                lv = int(nn.get("level") or 1)
+                nn["level"] = max(1, lv - 1)
+                title = (nn.get("title") or "").strip()
+                if title in (sec["biz"], sec["tech"], sec["price"]):
+                    nn["parent_ref"] = ""
+            new_nodes.append(nn)
+
+        return new_nodes
+    
+    def _ensure_sections_are_level1(self, nodes: list) -> list:
+        """确保三分册为一级标题"""
+        if not nodes:
+            return nodes
+        sec = self._find_section_titles(nodes)
+        if not (sec["biz"] and sec["tech"] and sec["price"]):
+            return nodes
+
+        title_to_first_idx = {}
+        for i, n in enumerate(nodes):
+            t = (n.get("title") or "").strip()
+            if t and t not in title_to_first_idx:
+                title_to_first_idx[t] = i
+
+        idxs = [title_to_first_idx.get(sec["biz"]), title_to_first_idx.get(sec["tech"]), title_to_first_idx.get(sec["price"])]
+        if any(i is None for i in idxs):
+            return nodes
+
+        new_nodes = [dict(n) for n in nodes]
+        for i in idxs:
+            new_nodes[i]["level"] = 1
+            new_nodes[i]["parent_ref"] = ""
+
+        # 顶层分册 order_no 按出现顺序重排
+        top_seq = 1
+        for i in sorted(idxs):
+            new_nodes[i]["order_no"] = top_seq
+            top_seq += 1
+
+        return new_nodes
+    
+    def _rebucket_to_sections(self, nodes: list) -> list:
+        """语义分桶纠偏：把条目挂到正确分册"""
+        from collections import defaultdict
+        
+        if not nodes:
+            return nodes
+        sec = self._find_section_titles(nodes)
+        if not (sec["biz"] and sec["tech"] and sec["price"]):
+            return nodes
+
+        biz_title, tech_title, price_title = sec["biz"], sec["tech"], sec["price"]
+        section_titles = {biz_title, tech_title, price_title}
+
+        new_nodes = [dict(n) for n in nodes]
+
+        # 判断是否"全挂报价"的典型错挂，触发 aggressive
+        cnt = defaultdict(int)
+        for n in new_nodes:
+            pr = (n.get("parent_ref") or "").strip()
+            if pr in section_titles:
+                cnt[pr] += 1
+        aggressive = (cnt.get(biz_title, 0) == 0 and cnt.get(tech_title, 0) == 0 and cnt.get(price_title, 0) >= 6)
+
+        for n in new_nodes:
+            title = (n.get("title") or "").strip()
+            if not title:
+                continue
+            if title in section_titles:
+                continue
+            import re
+            _WRAPPER_RE = re.compile(r"(投标文件|响应文件|磋商响应文件|投标响应文件|响应文件目录|投标文件目录)", re.I)
+            if _WRAPPER_RE.search(title):
+                continue  # 兜底：wrapper残留不处理
+
+            bucket = self._bucket_by_title(title)
+            if bucket == "unknown":
+                continue
+
+            target_parent = {"biz": biz_title, "tech": tech_title, "price": price_title}[bucket]
+            cur_pr = (n.get("parent_ref") or "").strip()
+
+            # aggressive 或者明显错挂/无挂载 -> 纠偏
+            if aggressive or cur_pr in ("", price_title) or cur_pr not in section_titles:
+                n["parent_ref"] = target_parent
+                n["level"] = 2  # 压缩到分册下二级，保证稳定可用
+
+        # 分册下二级节点 order_no 稳定重排（按原出现顺序）
+        bucket_items = defaultdict(list)
+        for idx, n in enumerate(new_nodes):
+            if int(n.get("level") or 1) == 2:
+                pr = (n.get("parent_ref") or "").strip()
+                if pr in section_titles:
+                    bucket_items[pr].append((idx, n))
+
+        for pr, items in bucket_items.items():
+            items.sort(key=lambda x: x[0])
+            seq = 1
+            for _, n in items:
+                n["order_no"] = seq
+                seq += 1
+
+        # 兜底：仍为空的二级节点，默认归入资信及商务（比全挂报价更合理）
+        for n in new_nodes:
+            if int(n.get("level") or 1) > 1 and not (n.get("parent_ref") or "").strip():
+                n["parent_ref"] = biz_title
+                n["level"] = 2
+
+        return new_nodes
+    
+    def _normalize_directory_nodes(self, nodes: list) -> list:
+        """通用目录规范化：wrapper折叠 + 三分册一级 + 语义纠偏"""
+        nodes = nodes or []
+        nodes = self._collapse_wrapper(nodes)
+        nodes = self._ensure_sections_are_level1(nodes)
+        nodes = self._rebucket_to_sections(nodes)
+        return nodes
+    
+    def _sort_directory_nodes_for_tree(self, nodes: list) -> list:
+        """
+        关键：不能按 (level, order_no) 全局排序，否则所有 level=2 会堆到最后，
+        _build_directory_tree 用栈推 parent 时会全部挂到最后一个 level=1（通常是报价文件）。
+        这里按 "所属分册(root)" 分组后再排序，保证每个分册的子节点紧跟其后。
+        """
+        nodes = nodes or []
+        # 找一级分册（按出现顺序）
+        top = [n for n in nodes if int(n.get("level") or 1) == 1]
+        top = sorted(top, key=lambda n: n.get("order_no", 999))
+
+        section_titles = [ (n.get("title") or "").strip() for n in top if (n.get("title") or "").strip() ]
+        section_order = {t: i for i, t in enumerate(section_titles)}
+
+        def root_key(n: dict) -> int:
+            title = (n.get("title") or "").strip()
+            lv = int(n.get("level") or 1)
+            if lv == 1 and title in section_order:
+                return section_order[title]
+            pr = (n.get("parent_ref") or "").strip()
+            if pr in section_order:
+                return section_order[pr]
+            # fallback：未知的先放最后
+            return 999
+
+        return sorted(
+            nodes,
+            key=lambda n: (
+                root_key(n),
+                int(n.get("level") or 99),
+                int(n.get("order_no") or 999),
+            )
+        )
+    
     def _build_directory_tree(self, nodes: List[Dict]) -> List[Dict]:
-        """构建目录树: 生成 parent_id 和 numbering"""
-        # 栈: 记录每个 level 的最后一个节点
-        stack = {}
-        result = []
-        counters = {}  # level -> counter
+        """构建目录树: 两遍法 - 先生成id和title映射，再统一分配parent_id"""
+        import uuid
         
-        for i, node in enumerate(nodes):
-            level = node.get("level", 1)
-            
-            # 生成 parent_id
-            if level > 1:
-                parent_level = level - 1
-                parent_node = stack.get(parent_level)
-                node["parent_id"] = parent_node.get("id") if parent_node else None
+        # 0) 预处理：确保每个节点有 id
+        out = []
+        for n in nodes:
+            nn = dict(n)
+            nn.setdefault("id", f"node_{uuid.uuid4().hex[:16]}")
+            nn["title"] = (nn.get("title") or "").strip()
+            nn["parent_ref"] = (nn.get("parent_ref") or "").strip()
+            nn["level"] = int(nn.get("level") or 1)
+            nn["order_no"] = int(nn.get("order_no") or 0)
+            out.append(nn)
+
+        # 1) title -> first id（用于 parent_ref 解析）
+        title_to_first_id = {}
+        for n in out:
+            if n["title"] and n["title"] not in title_to_first_id:
+                title_to_first_id[n["title"]] = n["id"]
+
+        # 2) 分配 parent_id：优先 parent_ref，其次 fallback level 栈
+        stack = []  # (level, id)
+        for n in out:
+            if n["parent_ref"] and n["parent_ref"] in title_to_first_id:
+                n["parent_id"] = title_to_first_id[n["parent_ref"]]
             else:
-                node["parent_id"] = None
-            
-            # 生成 numbering
-            if level not in counters:
-                counters[level] = 0
-            counters[level] += 1
-            
-            if level == 1:
-                node["numbering"] = str(counters[level])
+                # fallback：栈推断（只对确实缺 parent_ref 的情况）
+                while stack and stack[-1][0] >= n["level"]:
+                    stack.pop()
+                n["parent_id"] = stack[-1][1] if stack else None
+
+            stack.append((n["level"], n["id"]))
+
+        # 3) 构 children 映射
+        children = {}
+        by_id = {n["id"]: n for n in out}
+        for n in out:
+            children.setdefault(n["id"], [])
+        roots = []
+        for n in out:
+            pid = n.get("parent_id")
+            if not pid:
+                roots.append(n)
             else:
-                parent_numbering = stack.get(level-1, {}).get("numbering", "")
-                node["numbering"] = f"{parent_numbering}.{counters[level]}" if parent_numbering else str(counters[level])
-            
-            # 生成 id (使用 UUID 避免主键冲突)
-            import uuid
-            node["id"] = f"node_{uuid.uuid4().hex[:16]}"
-            
-            # 更新栈
-            stack[level] = node
-            # 清空更深层级
-            for l in list(stack.keys()):
-                if l > level:
-                    del stack[l]
-                    if l in counters:
-                        del counters[l]
-            
-            result.append(node)
-        
-        return result
+                children.setdefault(pid, []).append(n)
+
+        # 4) 每个父节点下按 order_no 排序，递归生成 numbering + 扁平化输出
+        def sort_k(x: dict):
+            return (int(x.get("order_no") or 0), x.get("title") or "")
+
+        for pid in list(children.keys()):
+            children[pid].sort(key=sort_k)
+
+        flat = []
+        def walk(node: dict, prefix: str):
+            # 根节点 numbering 为 1/2/3...
+            flat.append(node)
+            kids = children.get(node["id"], [])
+            for idx, c in enumerate(kids, start=1):
+                c["numbering"] = f"{prefix}.{idx}" if prefix else str(idx)
+                walk(c, c["numbering"])
+
+        # roots 必须稳定排序
+        roots.sort(key=sort_k)
+        for idx, r in enumerate(roots, start=1):
+            r["numbering"] = str(idx)
+            walk(r, r["numbering"])
+
+        return flat
     
     def _pick_latest_asset(self, assets: List[Dict[str, Any]], require_storage_path: bool = False) -> Optional[Dict[str, Any]]:
         """

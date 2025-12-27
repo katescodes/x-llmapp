@@ -65,10 +65,28 @@ def _parse_pdf(data: bytes) -> Tuple[str, dict]:
 
 
 def _parse_docx(data: bytes) -> Tuple[str, dict]:
-    doc = DocxDocument(io.BytesIO(data))
-    paragraphs = [para.text for para in doc.paragraphs if para.text]
-    text = "\n".join(paragraphs)
-    return text, {"paragraphs": len(paragraphs), "chars": len(text)}
+    """
+    解析 DOCX 文件
+    
+    Args:
+        data: DOCX 文件二进制数据
+        
+    Returns:
+        (text, metadata) 元组
+    """
+    try:
+        doc = DocxDocument(io.BytesIO(data))
+        paragraphs = [para.text for para in doc.paragraphs if para.text]
+        text = "\n".join(paragraphs)
+        return text, {"paragraphs": len(paragraphs), "chars": len(text)}
+    except Exception as e:
+        # DOCX 解析失败（可能是文件损坏），返回错误信息
+        error_msg = str(e)
+        return "", {
+            "error": f"DOCX parse failed: {error_msg}",
+            "chars": 0,
+            "paragraphs": 0
+        }
 
 
 def _parse_excel(data: bytes) -> Tuple[str, dict]:

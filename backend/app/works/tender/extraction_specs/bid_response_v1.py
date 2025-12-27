@@ -2,41 +2,46 @@
 投标响应要素抽取规格 (v1)
 """
 import os
-from pathlib import Path
 from typing import Dict, Optional
 
 from app.platform.extraction.types import ExtractionSpec
-
-
-def _load_prompt(filename: str) -> str:
-    """加载prompt文件（fallback机制）"""
-    prompt_dir = Path(__file__).parent.parent / "prompts"
-    prompt_file = prompt_dir / filename
-    with open(prompt_file, "r", encoding="utf-8") as f:
-        return f.read().strip()
+from app.platform.extraction.exceptions import PromptNotFoundError
 
 
 async def build_bid_response_spec_async(pool=None) -> ExtractionSpec:
     """
-    构建投标响应要素抽取规格（异步版本，支持数据库加载）
+    构建投标响应要素抽取规格（异步版本，从数据库加载）
+    
+    Args:
+        pool: 数据库连接池（必需）
+        
+    Returns:
+        ExtractionSpec: 包含 queries、prompt、topk 等配置
+        
+    Raises:
+        PromptNotFoundError: 数据库中未找到活跃的prompt模板
     """
     import logging
     logger = logging.getLogger(__name__)
 
-    prompt = None
-    if pool:
-        try:
-            from app.services.prompt_loader import PromptLoaderService
-            loader = PromptLoaderService(pool)
-            prompt = await loader.get_active_prompt("bid_response_v1")
-            if prompt:
-                logger.info(f"✅ [Prompt] Loaded from DATABASE for bid_response_v1, length={len(prompt)}")
-        except Exception as e:
-            logger.warning(f"⚠️ [Prompt] Failed to load from database: {e}")
+    if not pool:
+        raise ValueError("pool参数是必需的，无法从数据库加载prompt")
 
-    if not prompt:
-        prompt = _load_prompt("bid_response_v1.md")
-        logger.info(f"📁 [Prompt] Using FALLBACK (file) for bid_response_v1, length={len(prompt)}")
+    # 从数据库加载prompt
+    try:
+        from app.services.prompt_loader import PromptLoaderService
+        loader = PromptLoaderService(pool)
+        prompt = await loader.get_active_prompt("bid_response")
+        
+        if not prompt:
+            raise PromptNotFoundError("bid_response")
+        
+        logger.info(f"✅ [Prompt] Loaded from DATABASE for bid_response, length={len(prompt)}")
+    except PromptNotFoundError:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [Prompt] Failed to load from database: {e}")
+        raise RuntimeError(f"加载prompt失败: {e}") from e
 
     queries: Dict[str, str] = {
         "qualification": "投标人资格 营业执照 资质证书 业绩证明 财务报表 注册资本 信用记录 社会信用代码 法定代表人",

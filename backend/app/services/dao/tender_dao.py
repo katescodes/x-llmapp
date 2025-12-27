@@ -360,18 +360,27 @@ class TenderDAO:
         return chunk_ids
 
     def lookup_chunks(self, chunk_ids: List[str]) -> List[Dict[str, Any]]:
-        """根据 chunk_ids 查询 chunks"""
+        """根据 chunk_ids 查询 chunks（从新的 doc_segments 表）"""
         if not chunk_ids:
             return []
         placeholders = ",".join(["%s"] * len(chunk_ids))
-        return self._fetchall(
+        rows = self._fetchall(
             f"""
-            SELECT chunk_id, doc_id, title, url, position, content
-            FROM kb_chunks
-            WHERE chunk_id IN ({placeholders})
+            SELECT 
+                ds.id as chunk_id,
+                dv.document_id as doc_id,
+                dv.filename as title,
+                dv.storage_path as url,
+                ds.segment_no as position,
+                ds.content_text as content
+            FROM doc_segments ds
+            JOIN document_versions dv ON ds.doc_version_id = dv.id
+            WHERE ds.id IN ({placeholders})
+            ORDER BY dv.document_id, ds.segment_no
             """,
             tuple(chunk_ids),
         )
+        return rows
 
     def load_chunks_by_doc_ids(self, doc_ids: List[str], limit: int) -> List[Dict[str, Any]]:
         """根据 doc_ids 加载 chunks"""
@@ -456,24 +465,6 @@ class TenderDAO:
                             ),
                         )
             # with transaction() 自动提交或回滚，无需手动 commit
-
-    def list_risks(self, project_id: str) -> List[Dict[str, Any]]:
-        """列出项目的所有风险"""
-        rows = self._fetchall(
-            "SELECT id, project_id, risk_type, title, description, suggestion, severity, tags_json as tags, evidence_chunk_ids_json as evidence_chunk_ids, created_at FROM tender_risks WHERE project_id=%s ORDER BY created_at ASC",
-            (project_id,),
-        )
-        # JSON 字段反序列化
-        for r in rows:
-            for k in ("tags", "evidence_chunk_ids"):
-                if isinstance(r.get(k), str):
-                    try:
-                        r[k] = json.loads(r[k])
-                    except Exception:
-                        r[k] = []
-                elif r.get(k) is None:
-                    r[k] = []
-        return rows
 
     # ==================== 目录管理 ====================
 

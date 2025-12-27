@@ -74,8 +74,11 @@ class NewRetriever:
         logger.info(f"[NewRetriever] START query={query[:100]} project_id={project_id} doc_types={doc_types} top_k={top_k}")
         overall_start = time.time()
         
-        # 1. 获取项目下的 doc_version_ids
-        doc_version_ids = self._get_project_doc_versions(project_id, doc_types)
+        # 1. 获取项目下的 doc_version_ids - 在线程池中执行
+        import asyncio
+        doc_version_ids = await asyncio.to_thread(
+            self._get_project_doc_versions, project_id, doc_types
+        )
         if not doc_version_ids:
             logger.warning(f"[NewRetriever] NO_DOC_VERSIONS project_id={project_id} doc_types={doc_types}")
             return []
@@ -96,9 +99,12 @@ class NewRetriever:
         else:
             logger.info(f"[NewRetriever] DENSE_DONE count={len(dense_hits)} ms={dense_ms}")
         
-        # 3. 全文检索 (PG tsvector)
+        # 3. 全文检索 (PG tsvector) - 在线程池中执行，避免阻塞事件循环
+        import asyncio
         lexical_start = time.time()
-        lexical_hits = self._search_lexical(query, doc_version_ids, lexical_limit)
+        lexical_hits = await asyncio.to_thread(
+            self._search_lexical, query, doc_version_ids, lexical_limit
+        )
         lexical_ms = int((time.time() - lexical_start) * 1000)
         logger.info(f"[NewRetriever] LEXICAL_DONE count={len(lexical_hits)} ms={lexical_ms}")
         
@@ -111,9 +117,9 @@ class NewRetriever:
             # 正常融合
             fused = rrf_fuse(dense_hits, lexical_hits, k=60, topn=top_k)
         
-        # 5. 加载完整文本
+        # 5. 加载完整文本 - 在线程池中执行，避免阻塞事件循环
         chunk_ids = [hit["chunk_id"] for hit in fused]
-        results = self._load_chunks(chunk_ids)
+        results = await asyncio.to_thread(self._load_chunks, chunk_ids)
         
         overall_ms = int((time.time() - overall_start) * 1000)
         logger.info(
@@ -127,7 +133,7 @@ class NewRetriever:
     ) -> List[str]:
         """从项目资产表获取 doc_version_ids，支持 tender 和 declare 项目"""
         with self.pool.connection() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(row_factory=None) as cur:
                 # 根据 project_id 前缀判断使用哪个表
                 if project_id.startswith("declare_proj_"):
                     # 申报书项目：使用 declare_assets 表
@@ -190,6 +196,12 @@ class NewRetriever:
             (hits, error_msg) - error_msg is None on success
         """
         try:
+            # 快速检查：如果 Milvus 客户端未初始化，直接跳过
+            from app.platform.vectorstore.milvus_docseg_store import get_milvus_docseg_store
+            milvus_store = get_milvus_docseg_store()
+            if not milvus_store.client:
+                return [], f"Milvus client not available: {milvus_store.connection_error}"
+            
             # 获取查询向量
             vectors = await embed_texts([query], provider=embedding_provider)
             if not vectors or not vectors[0].get("dense"):
@@ -198,8 +210,10 @@ class NewRetriever:
             
             query_dense = vectors[0]["dense"]
             
-            # Milvus 检索
-            hits = milvus_docseg_store.search_dense(
+            # Milvus 检索（在线程池中执行，避免阻塞事件循环）
+            import asyncio
+            hits = await asyncio.to_thread(
+                milvus_docseg_store.search_dense,
                 query_dense=query_dense,
                 limit=limit,
                 doc_version_ids=doc_version_ids,
@@ -235,7 +249,7 @@ class NewRetriever:
         """PG tsvector 全文检索"""
         try:
             with self.pool.connection() as conn:
-                with conn.cursor() as cur:
+                with conn.cursor(row_factory=None) as cur:
                     # 使用 tsvector 检索
                     sql = """
                         SELECT id, ts_rank(tsv, query) as rank
@@ -270,7 +284,7 @@ class NewRetriever:
         
         try:
             with self.pool.connection() as conn:
-                with conn.cursor() as cur:
+                with conn.cursor(row_factory=None) as cur:
                     sql = """
                         SELECT id, content_text, meta_json, doc_version_id
                         FROM doc_segments

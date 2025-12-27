@@ -77,6 +77,17 @@ class IngestV2Service:
         parsed_doc = await parse_document(filename, file_bytes)
         logger.info(f"IngestV2 parsed asset_id={asset_id} chars={len(parsed_doc.text)}")
         
+        # 检查解析是否出错
+        if parsed_doc.metadata.get("error"):
+            error_msg = parsed_doc.metadata["error"]
+            logger.error(f"IngestV2 parse failed asset_id={asset_id} error={error_msg}")
+            raise ValueError(f"文件解析失败: {error_msg}")
+        
+        # 检查是否解析出文本
+        if not parsed_doc.text or len(parsed_doc.text.strip()) == 0:
+            logger.warning(f"IngestV2 empty text asset_id={asset_id}")
+            raise ValueError(f"文件解析成功但未提取到文本内容，文件可能为空或格式不支持")
+        
         # 3. 分片
         chunks = chunk_document(
             url=asset_id,

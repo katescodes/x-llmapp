@@ -2,11 +2,7 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.5
 httpx==0.27.0
 python-dotenv==1.0.1
-pydantic==2.8.2
-pydantic[email]>=2.8.2
-pyjwt>=2.8.0
-passlib==1.7.4
-bcrypt==4.0.1
+pydantic[email]==2.8.2
 beautifulsoup4==4.12.3
 lxml==5.3.0
 numpy==1.26.4
@@ -17,25 +13,18 @@ trafilatura==1.6.3
 tiktoken==0.7.0
 pypdf==4.0.2
 python-docx==1.1.2
-python-pptx==0.6.23
-openpyxl==3.1.2
 python-multipart==0.0.9
 psycopg[binary]==3.1.18
 psycopg-pool==3.2.1
 pytest-asyncio==0.23.7
-sqlalchemy>=2.0.32
-tldextract>=5.0.0
-# 音频处理（用于远程ASR API）
-# 移除 faster-whisper - 使用远程API，不需要本地模型
-pydub>=0.25.1  # 用于格式转换 webm/mp4 -> wav（需要ffmpeg）
-python-magic>=0.4.27  # 自动检测音频格式
-librosa>=0.10.0
-noisereduce>=3.0.0
-soundfile>=0.12.0
-# 不需要 torch/pyannote.audio（使用远程API）
-pymupdf==1.24.10
-rapidfuzz==3.9.7
-# Step 10: 异步任务队列
-rq==1.16.2
-redis==5.0.8
-
+tldextract==5.1.1
+sqlalchemy==2.0.23
+openpyxl==3.1.2
+PyJWT==2.8.0
+passlib[bcrypt]==1.7.4
+redis==5.0.1
+rq==1.15.1
+PyYAML==6.0.1
+rapidfuzz==3.5.2
+librosa==0.10.1
+soundfile==0.12.1
