@@ -495,6 +495,11 @@ def get_requirements(project_id: str, request: Request):
                         allow_deviation,
                         value_schema_json,
                         evidence_chunk_ids,
+                        eval_method,
+                        must_reject,
+                        expected_evidence_json,
+                        rubric_json,
+                        weight,
                         created_at
                     FROM tender_requirements
                     WHERE project_id = %s
@@ -515,6 +520,11 @@ def get_requirements(project_id: str, request: Request):
                         "allow_deviation": row['allow_deviation'],
                         "value_schema_json": row['value_schema_json'],
                         "evidence_chunk_ids": row.get('evidence_chunk_ids') or [],
+                        "eval_method": row.get('eval_method'),
+                        "must_reject": row.get('must_reject', False),
+                        "expected_evidence_json": row.get('expected_evidence_json'),
+                        "rubric_json": row.get('rubric_json'),
+                        "weight": row.get('weight'),
                         "created_at": row['created_at'].isoformat() if row.get('created_at') else None
                     })
                 

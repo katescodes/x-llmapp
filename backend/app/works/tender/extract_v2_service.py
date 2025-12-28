@@ -477,12 +477,20 @@ class ExtractV2Service:
                                 except:
                                     value_schema = None  # 解析失败则设为None
                         
+                        # Step 2: 推断路由字段（eval_method、must_reject 等）
+                        eval_method, must_reject, expected_evidence, rubric, weight = self._infer_routing_fields(req)
+                        
+                        # 处理 JSONB 字段
+                        expected_evidence_json = Json(expected_evidence) if expected_evidence else None
+                        rubric_json = Json(rubric) if rubric else None
+                        
                         cur.execute("""
                             INSERT INTO tender_requirements (
                                 id, project_id, requirement_id, dimension, req_type,
                                 requirement_text, is_hard, allow_deviation, 
-                                value_schema_json, evidence_chunk_ids
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                value_schema_json, evidence_chunk_ids,
+                                eval_method, must_reject, expected_evidence_json, rubric_json, weight
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """, (
                             str(uuid.uuid4()),
                             project_id,
@@ -494,6 +502,11 @@ class ExtractV2Service:
                             req.get("allow_deviation", False),
                             value_schema,  # JSONB - 已包装或为None
                             req.get("evidence_chunk_ids", []),
+                            eval_method,
+                            must_reject,
+                            expected_evidence_json,
+                            rubric_json,
+                            weight,
                         ))
                     conn.commit()
             
@@ -504,6 +517,123 @@ class ExtractV2Service:
             "count": len(requirements),
             "requirements": requirements
         }
+    
+    def _infer_routing_fields(self, req: Dict[str, Any]) -> tuple:
+        """
+        推断路由字段（Step 2）
+        
+        根据 requirement 的特征推断 eval_method、must_reject 等字段
+        
+        Returns:
+            (eval_method, must_reject, expected_evidence_json, rubric_json, weight)
+        """
+        dimension = req.get("dimension", "")
+        req_type = req.get("req_type", "")
+        requirement_text = req.get("requirement_text", "")
+        is_hard = req.get("is_hard", False)
+        value_schema = req.get("value_schema_json", {})
+        
+        # 默认值
+        eval_method = "PRESENCE"  # 默认为存在性检查
+        must_reject = False
+        expected_evidence = None
+        rubric = None
+        weight = 1.0
+        
+        # 1. 根据 dimension 和 req_type 推断 eval_method
+        if dimension == "qualification":
+            # 资格类多为存在性/有效性检查
+            if "营业执照" in requirement_text or "资质证书" in requirement_text or "许可证" in requirement_text:
+                eval_method = "VALIDITY"
+                expected_evidence = {"doc_types": ["license", "certificate"], "fields": ["expire_date", "scope"]}
+            elif "业绩" in requirement_text or "项目经验" in requirement_text:
+                eval_method = "VALIDITY"
+                expected_evidence = {"doc_types": ["performance"], "fields": ["project_name", "contract_amount", "completion_date"]}
+            else:
+                eval_method = "PRESENCE"
+        
+        elif dimension == "price":
+            # 价格类多为数值比较
+            eval_method = "NUMERIC"
+            if value_schema and isinstance(value_schema, dict):
+                expected_evidence = {
+                    "type": "numeric",
+                    "constraints": value_schema
+                }
+        
+        elif dimension == "technical":
+            # 技术类：参数表为 TABLE_COMPARE，评分点为 SEMANTIC
+            if req_type == "scoring":
+                eval_method = "SEMANTIC"
+                # 提取评分细则作为 rubric
+                score = self._extract_score(requirement_text)
+                rubric = {
+                    "criteria": requirement_text,
+                    "scoring_method": "LLM",
+                    "max_points": score
+                }
+            elif "参数表" in requirement_text or "规格表" in requirement_text:
+                eval_method = "TABLE_COMPARE"
+            elif ("参数" in requirement_text or "规格" in requirement_text or "指标" in requirement_text or
+                  "不低于" in requirement_text or "不超过" in requirement_text or "≥" in requirement_text or "≤" in requirement_text):
+                # 包含数值比较关键词，使用 NUMERIC
+                eval_method = "NUMERIC"
+            elif "偏离" in requirement_text and "不允许" in requirement_text:
+                eval_method = "EXACT_MATCH"
+            else:
+                eval_method = "PRESENCE"
+        
+        elif dimension == "business":
+            # 商务类：工期/质保/付款等为数值检查，评分点为语义
+            if req_type == "scoring":
+                eval_method = "SEMANTIC"
+                score = self._extract_score(requirement_text)
+                rubric = {
+                    "criteria": requirement_text,
+                    "scoring_method": "LLM",
+                    "max_points": score
+                }
+            elif "工期" in requirement_text or "质保" in requirement_text or "付款" in requirement_text:
+                eval_method = "NUMERIC"
+            else:
+                eval_method = "PRESENCE"
+        
+        elif dimension == "doc_structure":
+            # 文档结构类多为存在性检查
+            eval_method = "PRESENCE"
+        
+        # 2. 根据 is_hard 和 req_type 推断 must_reject
+        if is_hard and req_type in ("threshold", "must_provide", "must_not_deviate"):
+            must_reject = True
+        
+        # 3. 权重：评分项权重较高
+        if req_type == "scoring":
+            score = self._extract_score(requirement_text)
+            weight = score if score else 5.0
+        elif must_reject:
+            weight = 10.0  # 必须项权重最高
+        
+        return eval_method, must_reject, expected_evidence, rubric, weight
+    
+    def _extract_score(self, text: str) -> Optional[float]:
+        """从文本中提取分值"""
+        import re
+        # 匹配"XX分"、"X-XX分"、"最多XX分"、"不超过XX分"等模式
+        patterns = [
+            r'最多\s*(\d+(?:\.\d+)?)\s*分',
+            r'不超过\s*(\d+(?:\.\d+)?)\s*分',
+            r'(?:得|为)\s*(\d+(?:\.\d+)?)\s*分',
+            r'(\d+(?:\.\d+)?)\s*分',
+            r'(\d+(?:\.\d+)?)\s*points?',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                try:
+                    return float(match.group(1))
+                except:
+                    pass
+        return None
     
     async def generate_directory_v2(
         self,
