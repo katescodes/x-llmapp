@@ -3,6 +3,7 @@
 Step 5: 实现 Mapping → Hard Gate → Quant Checks → Semantic Escalation → Consistency → Summary
 Step A: 修复落库可追溯性（requirement_id + matched_response_id + review_run_id）
 Step B: 修复 Mapping（topK 候选 + 轻量相似度）
+Step C: 语义审核降级为 PENDING（禁止假 PASS）
 """
 import logging
 import re
@@ -427,8 +428,12 @@ class ReviewPipelineV3:
         model_id: Optional[str]
     ) -> List[Dict[str, Any]]:
         """
-        Step 4: Semantic Escalation
+        Step 4: Semantic Escalation (Step C: 改进版)
         只处理 PENDING 或 eval_method=SEMANTIC 的条款
+        
+        改进点（Step C）：
+        1. 当 LLM 未配置时，所有语义审核项输出 PENDING
+        2. 禁止假 PASS
         """
         results = []
         
@@ -457,8 +462,39 @@ class ReviewPipelineV3:
         
         logger.info(f"ReviewPipeline: {len(semantic_candidates)} candidates for semantic escalation")
         
+        # Step C: 如果没有 LLM，所有语义审核项输出 PENDING
+        if not self.llm:
+            logger.warning("ReviewPipeline: LLM not configured, all semantic items will be PENDING")
+            for candidate in semantic_candidates[:20]:  # 限制数量
+                req = candidate["requirement"]
+                resp = candidate["response"]
+                
+                result = {
+                    "requirement_id": req.get("requirement_id"),
+                    "matched_response_id": str(resp.get("id")) if resp else None,
+                    "dimension": req.get("dimension"),
+                    "clause_title": req.get("requirement_text")[:50],
+                    "tender_requirement": req.get("requirement_text"),
+                    "bid_response": resp.get("response_text") if resp else "[缺失]",
+                    "status": "PENDING",
+                    "result": "risk",
+                    "is_hard": req.get("is_hard", False),
+                    "remark": "语义审核未启用/LLM 未配置，需人工复核",
+                    "evaluator": "semantic_pending",
+                    "rule_trace_json": {
+                        "method": "SEMANTIC",
+                        "llm_available": False,
+                        "candidates": candidate.get("candidates_info", [])
+                    },
+                    "evidence_json": self._extract_evidence(resp) if resp else [],
+                }
+                
+                results.append(result)
+            
+            return results
+        
         # 如果有 LLM，批量调用
-        if semantic_candidates and self.llm:
+        if semantic_candidates:
             # 简化：每个候选都调用 LLM（实际应批量）
             for candidate in semantic_candidates[:10]:  # 限制数量避免超时
                 req = candidate["requirement"]
@@ -486,7 +522,11 @@ class ReviewPipelineV3:
                     "is_hard": req.get("is_hard", False),
                     "remark": remark,
                     "evaluator": "semantic_llm",
-                    "rule_trace_json": {"confidence": confidence, "method": "LLM"},
+                    "rule_trace_json": {
+                        "confidence": confidence,
+                        "method": "LLM",
+                        "candidates": candidate.get("candidates_info", [])
+                    },
                     "evidence_json": self._extract_evidence(resp) if resp else [],
                 }
                 
@@ -500,14 +540,20 @@ class ReviewPipelineV3:
         resp: Optional[Dict],
         model_id: Optional[str]
     ) -> Tuple[str, str, float]:
-        """调用 LLM 进行语义审核（简化版）"""
+        """
+        调用 LLM 进行语义审核（Step C: 改进版）
+        
+        改进点：
+        - 暂未实现真实 LLM 调用时，返回 PENDING 而不是假 PASS
+        """
         
         if not resp:
             return "FAIL", "未提供响应", 1.0
         
-        # 简化：直接返回 PASS（实际应调用 LLM）
+        # Step C: 暂未实现真实 LLM 调用，返回 PENDING
         # TODO: 实际实现需要调用 self.llm
-        return "PASS", "LLM 审核通过", 0.85
+        logger.warning(f"ReviewPipeline: _llm_semantic_review not implemented, returning PENDING for {req.get('requirement_id')}")
+        return "PENDING", "语义审核暂未实现，需人工复核", 0.0
     
     def _consistency_check(self, responses: List[Dict]) -> List[Dict[str, Any]]:
         """
