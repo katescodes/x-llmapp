@@ -6,6 +6,7 @@ Step B: 修复 Mapping（topK 候选 + 轻量相似度）
 Step C: 语义审核降级为 PENDING（禁止假 PASS）
 Step D: NUMERIC 真实比较（从 schema/文本解析阈值）
 Step E: Consistency 归一化+阈值
+Step F: 统一 evidence_json 结构（role=tender/bid + 批量预取）
 """
 import logging
 import re
@@ -271,23 +272,27 @@ class ReviewPipelineV3:
             logger.warning("ReviewPipeline: No requirements found")
             return {"review_items": [], "stats": {}}
         
+        # Step F1: 批量预取 doc_segments
+        all_segment_ids = self._collect_all_segment_ids(requirements, responses)
+        seg_map = self._prefetch_doc_segments(list(all_segment_ids))
+        
         # 2. Step 1: Mapping - 为每个 requirement 找候选 response
         candidates = self._build_candidates(requirements, responses)
         logger.info(f"ReviewPipeline: Built {len(candidates)} requirement-response candidate pairs")
         
         # 3. Step 2: Hard Gate - 确定性审核
-        hard_gate_results = self._hard_gate(candidates)
+        hard_gate_results = self._hard_gate(candidates, seg_map)
         logger.info(f"ReviewPipeline: Hard gate produced {len(hard_gate_results)} results")
         
         # 4. Step 3: Quant Checks - 计算验证
-        quant_results = self._quant_checks(candidates, hard_gate_results)
+        quant_results = self._quant_checks(candidates, hard_gate_results, seg_map)
         logger.info(f"ReviewPipeline: Quant checks produced {len(quant_results)} results")
         
         # 5. Step 4: Semantic Escalation - 语义审核（仅 PENDING 或 SEMANTIC）
         semantic_results = []
         if use_llm_semantic:
             semantic_results = await self._semantic_escalate(
-                candidates, hard_gate_results, quant_results, model_id
+                candidates, hard_gate_results, quant_results, model_id, seg_map
             )
             logger.info(f"ReviewPipeline: Semantic escalation produced {len(semantic_results)} results")
         
@@ -341,6 +346,239 @@ class ReviewPipelineV3:
                 
                 rows = cur.fetchall()
                 return [dict(row) for row in rows]
+    
+    # ==================== Step F1: 批量预取 doc_segments ====================
+    
+    def _collect_all_segment_ids(
+        self,
+        requirements: List[Dict],
+        responses: List[Dict]
+    ) -> set:
+        """
+        Step F1: 收集所有需要查询的 segment_id
+        
+        从 requirements 和 responses 中收集所有 evidence_chunk_ids
+        """
+        segment_ids = set()
+        
+        # 从 requirements 收集
+        for req in requirements:
+            chunk_ids = req.get("evidence_chunk_ids") or []
+            if chunk_ids:
+                segment_ids.update(str(cid) for cid in chunk_ids if cid)
+        
+        # 从 responses 收集
+        for resp in responses:
+            # 1. evidence_chunk_ids
+            chunk_ids = resp.get("evidence_chunk_ids") or []
+            if chunk_ids:
+                segment_ids.update(str(cid) for cid in chunk_ids if cid)
+            
+            # 2. evidence_json 中的 segment_id
+            evidence_json = resp.get("evidence_json") or []
+            if isinstance(evidence_json, list):
+                for ev in evidence_json:
+                    if isinstance(ev, dict) and ev.get("segment_id"):
+                        segment_ids.add(str(ev["segment_id"]))
+        
+        # 过滤空字符串
+        segment_ids.discard("")
+        segment_ids.discard(None)
+        
+        return segment_ids
+    
+    def _prefetch_doc_segments(self, segment_ids: List[str]) -> Dict[str, Dict]:
+        """
+        Step F1: 批量预取 doc_segments
+        
+        Args:
+            segment_ids: segment ID 列表
+        
+        Returns:
+            Dict[segment_id, row_dict] 映射
+        """
+        if not segment_ids:
+            return {}
+        
+        seg_map = {}
+        
+        with self.pool.connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                # 使用 ANY 避免 IN 拼接
+                cur.execute("""
+                    SELECT 
+                        id as segment_id,
+                        doc_version_id,
+                        content_text,
+                        page_start,
+                        page_end,
+                        heading_path,
+                        segment_type,
+                        segment_no,
+                        meta_json
+                    FROM doc_segments
+                    WHERE id = ANY(%s)
+                """, (segment_ids,))
+                
+                rows = cur.fetchall()
+                for row in rows:
+                    seg_map[row["segment_id"]] = dict(row)
+        
+        logger.info(f"ReviewPipeline: Prefetched {len(seg_map)}/{len(segment_ids)} doc_segments")
+        return seg_map
+    
+    # ==================== Step F2: Evidence 组装工具 ====================
+    
+    def _make_quote(self, text: str, limit: int = 220) -> str:
+        """截取并清理空白"""
+        if not text:
+            return ""
+        
+        # 压缩连续空白为单空格
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        # 超长加省略号
+        if len(text) > limit:
+            return text[:limit] + "..."
+        
+        return text
+    
+    def _build_evidence_entries(
+        self,
+        role: str,
+        segment_ids: List[str],
+        seg_map: Dict[str, Dict],
+        source: str = "doc_segments"
+    ) -> List[Dict]:
+        """
+        Step F2: 从 segment_ids 构建统一 evidence 结构
+        
+        Args:
+            role: "tender" or "bid"
+            segment_ids: segment ID 列表
+            seg_map: 预取的 segments 映射
+            source: "doc_segments" or "fallback_chunk"
+        
+        Returns:
+            List of evidence dicts with role, segment_id, page_start, quote, etc.
+        """
+        evidence_entries = []
+        
+        # 最多取前 5 个
+        for seg_id in segment_ids[:5]:
+            seg = seg_map.get(seg_id)
+            
+            if seg:
+                # 从 seg_map 找到，组装完整信息
+                evidence_entries.append({
+                    "role": role,
+                    "segment_id": seg_id,
+                    "asset_id": seg.get("doc_version_id"),  # 用 doc_version_id 作为 asset_id
+                    "page_start": seg.get("page_start"),
+                    "page_end": seg.get("page_end"),
+                    "heading_path": seg.get("heading_path"),
+                    "quote": self._make_quote(seg.get("content_text", "")),
+                    "source": source,
+                })
+            else:
+                # 找不到，输出 fallback
+                evidence_entries.append({
+                    "role": role,
+                    "segment_id": seg_id,
+                    "asset_id": None,
+                    "page_start": None,
+                    "page_end": None,
+                    "heading_path": None,
+                    "quote": None,
+                    "source": "fallback_chunk",
+                })
+        
+        return evidence_entries
+    
+    def _normalize_existing_evidence(
+        self,
+        role: str,
+        evidence_json: List[Dict],
+        seg_map: Dict[str, Dict]
+    ) -> List[Dict]:
+        """
+        Step F2: 规范化已存在的 evidence_json
+        
+        对 response.evidence_json 中的条目：
+        - 补上 role
+        - 如果缺 quote/page_start 但有 segment_id，用 seg_map 补齐
+        """
+        normalized = []
+        
+        for ev in evidence_json[:5]:  # 最多取前 5
+            if not isinstance(ev, dict):
+                continue
+            
+            # 补上 role
+            if "role" not in ev:
+                ev["role"] = role
+            
+            # 如果有 segment_id 但缺信息，用 seg_map 补齐
+            seg_id = ev.get("segment_id")
+            if seg_id and seg_id in seg_map:
+                seg = seg_map[seg_id]
+                
+                if not ev.get("quote"):
+                    ev["quote"] = self._make_quote(seg.get("content_text", ""))
+                
+                if not ev.get("page_start"):
+                    ev["page_start"] = seg.get("page_start")
+                    ev["page_end"] = seg.get("page_end")
+                
+                if not ev.get("heading_path"):
+                    ev["heading_path"] = seg.get("heading_path")
+                
+                if not ev.get("asset_id"):
+                    ev["asset_id"] = seg.get("doc_version_id")
+                
+                if not ev.get("source"):
+                    ev["source"] = "doc_segments"
+            
+            normalized.append(ev)
+        
+        return normalized
+    
+    def _merge_tender_bid_evidence(
+        self,
+        req: Dict,
+        resp: Optional[Dict],
+        seg_map: Dict[str, Dict]
+    ) -> Tuple[List[Dict], List[str], List[str]]:
+        """
+        Step F2: 合并 tender 和 bid 的 evidence
+        
+        Returns:
+            (evidence_json, tender_ids, bid_ids)
+        """
+        # 1. Tender evidence (from requirement)
+        tender_ids = req.get("evidence_chunk_ids") or []
+        tender_evs = self._build_evidence_entries("tender", tender_ids, seg_map)
+        
+        # 2. Bid evidence (from response)
+        bid_evs = []
+        bid_ids = []
+        
+        if resp:
+            # 优先：如果 resp.evidence_json 非空，规范化它
+            existing_evidence = resp.get("evidence_json") or []
+            if isinstance(existing_evidence, list) and existing_evidence:
+                bid_evs = self._normalize_existing_evidence("bid", existing_evidence, seg_map)
+                # 从 evidence_json 提取 segment_ids
+                bid_ids = [ev.get("segment_id") for ev in existing_evidence if ev.get("segment_id")]
+            else:
+                # 兜底：使用 evidence_chunk_ids
+                bid_ids = resp.get("evidence_chunk_ids") or []
+                bid_evs = self._build_evidence_entries("bid", bid_ids, seg_map)
+        
+        # 3. 合并
+        evidence_json = tender_evs + bid_evs
+        
+        return evidence_json, tender_ids, bid_ids
     
     def _build_candidates(
         self,
@@ -411,14 +649,15 @@ class ReviewPipelineV3:
         
         return candidates
     
-    def _hard_gate(self, candidates: List[Dict]) -> List[Dict[str, Any]]:
+    def _hard_gate(self, candidates: List[Dict], seg_map: Dict[str, Dict]) -> List[Dict[str, Any]]:
         """
-        Step 2: Hard Gate (Step B: 改进版)
+        Step 2: Hard Gate (Step B: 改进版, Step F: 统一 evidence)
         处理 must_reject=true 或硬性要求，使用确定性规则
         
         改进点：
         1. 添加兜底逻辑：is_hard=true 的条款即使没有 eval_method 也会处理
         2. 记录候选信息到 rule_trace_json
+        3. Step F: 使用统一 evidence_json 结构（role=tender/bid）
         """
         results = []
         
@@ -450,6 +689,9 @@ class ReviewPipelineV3:
             # Step B: 添加候选信息到 trace
             rule_trace["candidates"] = candidate.get("candidates_info", [])
             
+            # Step F: 统一 evidence_json 结构
+            evidence_json, tender_ids, bid_ids = self._merge_tender_bid_evidence(req, resp, seg_map)
+            
             result = {
                 "requirement_id": req.get("requirement_id"),
                 "matched_response_id": str(resp.get("id")) if resp else None,
@@ -463,7 +705,9 @@ class ReviewPipelineV3:
                 "remark": remark,
                 "evaluator": "hard_gate",
                 "rule_trace_json": rule_trace,
-                "evidence_json": self._extract_evidence(resp) if resp else [],
+                "evidence_json": evidence_json,
+                "tender_evidence_chunk_ids": tender_ids,
+                "bid_evidence_chunk_ids": bid_ids,
             }
             
             results.append(result)
@@ -518,13 +762,16 @@ class ReviewPipelineV3:
     def _quant_checks(
         self,
         candidates: List[Dict],
-        existing_results: List[Dict]
+        existing_results: List[Dict],
+        seg_map: Dict[str, Dict]
     ) -> List[Dict[str, Any]]:
         """
-        Step 3: Quant Checks (Step B: 改进版)
+        Step 3: Quant Checks (Step B: 改进版, Step F: 统一 evidence)
         处理 NUMERIC/TABLE_COMPARE 的数值/表格对照
         
-        改进点：记录候选信息到 computed_trace_json
+        改进点：
+        - 记录候选信息到 computed_trace_json
+        - Step F: 使用统一 evidence_json 结构
         """
         results = []
         
@@ -553,6 +800,9 @@ class ReviewPipelineV3:
             # Step B: 添加候选信息到 trace
             computed_trace["candidates"] = candidate.get("candidates_info", [])
             
+            # Step F: 统一 evidence_json 结构
+            evidence_json, tender_ids, bid_ids = self._merge_tender_bid_evidence(req, resp, seg_map)
+            
             result = {
                 "requirement_id": req_id,
                 "matched_response_id": str(resp.get("id")) if resp else None,
@@ -566,7 +816,9 @@ class ReviewPipelineV3:
                 "remark": remark,
                 "evaluator": "quant_check",
                 "computed_trace_json": computed_trace,
-                "evidence_json": self._extract_evidence(resp) if resp else [],
+                "evidence_json": evidence_json,
+                "tender_evidence_chunk_ids": tender_ids,
+                "bid_evidence_chunk_ids": bid_ids,
             }
             
             results.append(result)
@@ -689,15 +941,18 @@ class ReviewPipelineV3:
         candidates: List[Dict],
         hard_gate_results: List[Dict],
         quant_results: List[Dict],
-        model_id: Optional[str]
+        model_id: Optional[str],
+        seg_map: Dict[str, Dict]
     ) -> List[Dict[str, Any]]:
         """
-        Step 4: Semantic Escalation (Step C: 改进版)
+        Step 4: Semantic Escalation (Step C: 改进版, Step F: 统一 evidence)
         只处理 PENDING 或 eval_method=SEMANTIC 的条款
         
         改进点（Step C）：
         1. 当 LLM 未配置时，所有语义审核项输出 PENDING
         2. 禁止假 PASS
+        
+        Step F: 使用统一 evidence_json 结构
         """
         results = []
         
@@ -733,6 +988,9 @@ class ReviewPipelineV3:
                 req = candidate["requirement"]
                 resp = candidate["response"]
                 
+                # Step F: 统一 evidence_json 结构
+                evidence_json, tender_ids, bid_ids = self._merge_tender_bid_evidence(req, resp, seg_map)
+                
                 result = {
                     "requirement_id": req.get("requirement_id"),
                     "matched_response_id": str(resp.get("id")) if resp else None,
@@ -750,7 +1008,9 @@ class ReviewPipelineV3:
                         "llm_available": False,
                         "candidates": candidate.get("candidates_info", [])
                     },
-                    "evidence_json": self._extract_evidence(resp) if resp else [],
+                    "evidence_json": evidence_json,
+                    "tender_evidence_chunk_ids": tender_ids,
+                    "bid_evidence_chunk_ids": bid_ids,
                 }
                 
                 results.append(result)
@@ -774,6 +1034,9 @@ class ReviewPipelineV3:
                     status = "PENDING"
                     remark = f"{remark} (置信度:{confidence:.2f}, 需人工复核)"
                 
+                # Step F: 统一 evidence_json 结构
+                evidence_json, tender_ids, bid_ids = self._merge_tender_bid_evidence(req, resp, seg_map)
+                
                 result = {
                     "requirement_id": req.get("requirement_id"),
                     "matched_response_id": str(resp.get("id")) if resp else None,
@@ -791,7 +1054,9 @@ class ReviewPipelineV3:
                         "method": "LLM",
                         "candidates": candidate.get("candidates_info", [])
                     },
-                    "evidence_json": self._extract_evidence(resp) if resp else [],
+                    "evidence_json": evidence_json,
+                    "tender_evidence_chunk_ids": tender_ids,
+                    "bid_evidence_chunk_ids": bid_ids,
                 }
                 
                 results.append(result)
@@ -853,6 +1118,17 @@ class ReviewPipelineV3:
             if len(unique_normalized) > 1:
                 # 发现不一致
                 names_str = ", ".join(set(c["original"] for c in company_names))
+                
+                # Step F3: 统一 evidence 结构（derived_consistency）
+                evidence_json = [{
+                    "role": "bid",
+                    "source": "derived_consistency",
+                    "quote": f"发现多个公司名称: {names_str}",
+                    "page_start": None,
+                    "segment_id": None,
+                    "meta": {"type": "inconsistency", "values": company_names}
+                }]
+                
                 results.append({
                     "requirement_id": "consistency_company_name",
                     "matched_response_id": None,
@@ -865,7 +1141,9 @@ class ReviewPipelineV3:
                     "is_hard": False,
                     "remark": "投标文件中公司名称不一致，请核实",
                     "evaluator": "consistency_check",
-                    "evidence_json": [{"type": "inconsistency", "values": company_names}],
+                    "evidence_json": evidence_json,
+                    "tender_evidence_chunk_ids": [],
+                    "bid_evidence_chunk_ids": [],
                 })
         
         # 2. 检查报价一致性（Step E: 改进版）
@@ -906,6 +1184,21 @@ class ReviewPipelineV3:
                     remark = f"投标报价略有差异（差异: {diff_ratio*100:.2f}%），可能是四舍五入"
                 
                 prices_str = ", ".join(f"{p['original']}" for p in prices)
+                
+                # Step F3: 统一 evidence 结构
+                evidence_json = [{
+                    "role": "bid",
+                    "source": "derived_consistency",
+                    "quote": f"发现多个报价: {prices_str}，差异 {diff_ratio*100:.2f}%",
+                    "page_start": None,
+                    "segment_id": None,
+                    "meta": {
+                        "type": "inconsistency",
+                        "values": prices,
+                        "diff_ratio": diff_ratio
+                    }
+                }]
+                
                 results.append({
                     "requirement_id": "consistency_price",
                     "matched_response_id": None,
@@ -918,11 +1211,9 @@ class ReviewPipelineV3:
                     "is_hard": False,  # Step E: 不设为硬性要求
                     "remark": remark,
                     "evaluator": "consistency_check",
-                    "evidence_json": [{
-                        "type": "inconsistency",
-                        "values": prices,
-                        "diff_ratio": diff_ratio
-                    }],
+                    "evidence_json": evidence_json,
+                    "tender_evidence_chunk_ids": [],
+                    "bid_evidence_chunk_ids": [],
                 })
         elif len(prices) == 0:
             # Step E: 无法解析报价 → PENDING
@@ -963,6 +1254,17 @@ class ReviewPipelineV3:
             unique_durations = set(d["normalized"] for d in durations)
             if len(unique_durations) > 1:
                 durations_str = ", ".join(f"{d['original']}" for d in durations)
+                
+                # Step F3: 统一 evidence 结构
+                evidence_json = [{
+                    "role": "bid",
+                    "source": "derived_consistency",
+                    "quote": f"发现多个工期表述: {durations_str}",
+                    "page_start": None,
+                    "segment_id": None,
+                    "meta": {"type": "inconsistency", "values": durations}
+                }]
+                
                 results.append({
                     "requirement_id": "consistency_duration",
                     "matched_response_id": None,
@@ -975,7 +1277,9 @@ class ReviewPipelineV3:
                     "is_hard": False,
                     "remark": "工期表述不一致，请核实",
                     "evaluator": "consistency_check",
-                    "evidence_json": [{"type": "inconsistency", "values": durations}],
+                    "evidence_json": evidence_json,
+                    "tender_evidence_chunk_ids": [],
+                    "bid_evidence_chunk_ids": [],
                 })
         
         return results
@@ -1059,8 +1363,8 @@ class ReviewPipelineV3:
                         Json(rule_trace) if rule_trace else None,
                         Json(computed_trace) if computed_trace else None,
                         Json(evidence) if evidence else None,
-                        [],
-                        [],
+                        result.get("tender_evidence_chunk_ids", []),
+                        result.get("bid_evidence_chunk_ids", []),
                         requirement_id,
                         matched_response_id,
                         review_run_id,
