@@ -1041,7 +1041,6 @@ async def extract_bid_responses(
                 "schema_version": result.get("schema_version", "v2")
             }
         }
-        }
     except Exception as e:
         import logging
         logging.getLogger(__name__).exception(f"Extract bid responses failed: {e}")
