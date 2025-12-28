@@ -40,10 +40,15 @@ class BidResponseService:
             with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
                 cur.execute("""
                     SELECT 
-                        segment_id, asset_id, content, 
-                        page_start, page_end, heading_path, segment_type
+                        id as segment_id, 
+                        doc_version_id as asset_id, 
+                        content_text as content, 
+                        page_start, 
+                        page_end, 
+                        heading_path, 
+                        segment_type
                     FROM doc_segments
-                    WHERE segment_id = ANY(%s)
+                    WHERE id = ANY(%s)
                 """, (list(set(segment_ids)),))
                 rows = cur.fetchall()
         
