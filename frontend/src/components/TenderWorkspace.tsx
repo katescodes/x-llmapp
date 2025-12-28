@@ -2426,11 +2426,11 @@ export default function TenderWorkspace() {
                       style={{ width: 'auto', marginBottom: 0 }}
                       disabled={bidResponseRun?.status === 'running' || !selectedBidder}
                     >
-                      {bidResponseRun?.status === 'running' ? '抽取中...' : '开始抽取'}
+                      {bidResponseRun?.status === 'running' ? '抽取中...' : (bidResponses.length > 0 ? '重新抽取' : '开始抽取')}
                     </button>
                   </div>
                   
-                  {bidResponseRun && (
+                  {bidResponseRun && bidResponseRun.status && (
                     <div className="kb-import-results">
                       <div className="kb-import-item">
                         状态: {bidResponseRun.status}
