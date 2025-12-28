@@ -616,7 +616,8 @@ class TenderService:
                         """, (ingest_v2_result.doc_version_id,))
                         row = cur.fetchone()
                         if row:
-                            kb_doc_id = row[0]
+                            # pool 使用 dict_row factory，所以 row 是 dict
+                            kb_doc_id = row['document_id']
                             logger.info(f"IngestV2: Got document_id={kb_doc_id} from doc_version_id={ingest_v2_result.doc_version_id}")
                         else:
                             logger.warning(f"IngestV2: Failed to get document_id from doc_version_id={ingest_v2_result.doc_version_id}")
