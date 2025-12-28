@@ -8,6 +8,7 @@ services:
     depends_on:
       - postgres
       - redis
+      - milvus-standalone
     ports:
       - "9001:8000"
     volumes:
@@ -21,7 +22,9 @@ services:
       - LLM_STORE_PATH=/app/data/llm_models.json
       - APP_SETTINGS_PATH=/app/data/app_settings.json
       - SEARCH_USAGE_STORAGE=/app/data/search_usage.json
-      - MILVUS_LITE_PATH=/app/data/milvus.db
+      # ✅ 改用远程 Milvus（不再使用 Milvus Lite）
+      - MILVUS_URI=http://milvus-standalone:19530
+      - MILVUS_USE_STANDALONE=true
       # 性能优化: 减少检索量以提升速度 (2025-12-25)
       - V2_RETRIEVAL_TOPK_PER_QUERY=10
       - V2_RETRIEVAL_TOPK_TOTAL=40
@@ -124,6 +127,76 @@ services:
     networks:
       - localgpt-net
 
+  # ✅ 新增：Milvus Standalone 服务
+  milvus-etcd:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/quay.io/coreos/etcd:v3.5.5
+    container_name: localgpt-milvus-etcd
+    restart: unless-stopped
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - ./data/milvus/etcd:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - localgpt-net
+
+  milvus-minio:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/minio/minio:RELEASE.2023-03-20T20-16-18Z
+    container_name: localgpt-milvus-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - ./data/milvus/minio:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - localgpt-net
+
+  milvus-standalone:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/milvusdb/milvus:v2.3.3
+    container_name: localgpt-milvus-standalone
+    restart: unless-stopped
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: milvus-etcd:2379
+      MINIO_ADDRESS: milvus-minio:9000
+      # Milvus 配置
+      MILVUS_AUTO_FLUSH_INTERVAL: 1
+      MILVUS_AUTO_COMPACTION_ENABLED: "true"
+      MILVUS_LOG_LEVEL: info
+    volumes:
+      - ./data/milvus/standalone:/var/lib/milvus
+    ports:
+      - "19530:19530"
+      - "9091:9091"  # Metrics port
+    command: milvus run standalone
+    depends_on:
+      - milvus-etcd
+      - milvus-minio
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    networks:
+      - localgpt-net
+
   worker:
     image: x-llm-backend:local
     build: ./backend
@@ -132,6 +205,7 @@ services:
     depends_on:
       - postgres
       - redis
+      - milvus-standalone
     command: sh -c "sleep 10 && python worker.py"
     volumes:
       - ./data:/app/data
@@ -142,8 +216,9 @@ services:
       - BUILDKIT_PROVENANCE=0
       - LLM_STORE_PATH=/app/data/llm_models.json
       - APP_SETTINGS_PATH=/app/data/app_settings.json
-      # Worker uses separate Milvus DB to avoid file lock conflicts
-      - MILVUS_LITE_PATH=/app/data/milvus_worker.db
+      # ✅ Worker 也使用远程 Milvus
+      - MILVUS_URI=http://milvus-standalone:19530
+      - MILVUS_USE_STANDALONE=true
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=localgpt

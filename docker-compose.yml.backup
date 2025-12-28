@@ -1,0 +1,181 @@
+services:
+  backend:
+    image: x-llm-backend:local
+    build: ./backend
+    container_name: localgpt-backend
+    restart: unless-stopped
+    init: true
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "9001:8000"
+    volumes:
+      - ./data:/app/data
+      - ./storage:/app/storage
+      - ./:/repo  # 挂载整个 repo 用于测试（包含 backend/tests/）
+    env_file:
+      - .env  # 从 .env 文件加载环境变量
+    environment:
+      - BUILDKIT_PROVENANCE=0
+      - LLM_STORE_PATH=/app/data/llm_models.json
+      - APP_SETTINGS_PATH=/app/data/app_settings.json
+      - SEARCH_USAGE_STORAGE=/app/data/search_usage.json
+      - MILVUS_LITE_PATH=/app/data/milvus.db
+      # 性能优化: 减少检索量以提升速度 (2025-12-25)
+      - V2_RETRIEVAL_TOPK_PER_QUERY=10
+      - V2_RETRIEVAL_TOPK_TOTAL=40
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=localgpt
+      - POSTGRES_USER=localgpt
+      - POSTGRES_PASSWORD=localgpt
+      - PLATFORM_JOBS_ENABLED=false
+      - EVIDENCE_SPANS_ENABLED=false
+      - DOCSTORE_DUALWRITE=false
+      - REVIEWCASE_DUALWRITE=true
+      - RULESET_PARSE_ENABLED=true
+      - RULES_EVALUATOR_ENABLED=true
+      # Smoke Test: 启用 Mock LLM 模式（外部 LLM 服务不可用时使用）
+      # 生产环境请移除此行或设置为 false
+      # SAFETY: MOCK_LLM 只在 DEBUG=true 时生效
+      # 注意：如需验证 Step 8，可临时设置为 true
+      - MOCK_LLM=false
+      # Debug mode (enable /api/_debug endpoints)
+      - DEBUG=true
+      # Format Templates Storage
+      - TENDER_FORMAT_TEMPLATES_DIR=/app/storage/tender/format_templates
+      - TENDER_RENDERS_DIR=/app/storage/tender/renders
+      - ENV=dev
+      # Cutover control (all default to OLD, no impact on existing logic)
+      - CUTOVER_SCOPE=project
+      - CUTOVER_PROJECT_IDS=
+      - RETRIEVAL_MODE=NEW_ONLY
+      - INGEST_MODE=NEW_ONLY
+      # Legacy APIs have been removed
+      # - LEGACY_TENDER_APIS_ENABLED=false  # (removed)
+      - EXTRACT_MODE=NEW_ONLY
+      - REVIEW_MODE=NEW_ONLY
+      - RULES_MODE=NEW_ONLY
+      # DocStore & Ingest (Step 2 & Step 4)
+      - DOCSTORE_DUALWRITE=false
+      - MILVUS_COLLECTION_DOCSEG=doc_segments_v1
+      # Extract V2 配置
+      - V2_RETRIEVAL_TOPK_PER_QUERY=30
+      - V2_RETRIEVAL_TOPK_TOTAL=120
+      - EXTRACT_TRACE_ENABLED=true
+      # 并行抽取配置
+      - EXTRACT_PROJECT_INFO_PARALLEL=true
+      - EXTRACT_MAX_CONCURRENT=6
+      # === Step 10: 异步任务队列 ===
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - ASYNC_INGEST_ENABLED=false
+      - ASYNC_EXTRACT_ENABLED=false
+      - ASYNC_REVIEW_ENABLED=false
+    networks:
+      - localgpt-net
+
+  frontend:
+    image: x-llm-frontend:local
+    build: ./frontend
+    container_name: localgpt-frontend
+    restart: unless-stopped
+    ports:
+      - "6173:5173"
+    environment:
+      - BUILDKIT_PROVENANCE=0
+      - VITE_BACKEND_HOST=backend
+      - VITE_BACKEND_PORT=8000
+      - VITE_BACKEND_PROTOCOL=http
+    depends_on:
+      backend:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5173/", "||", "exit", "1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - localgpt-net
+
+  postgres:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/postgres:15-alpine
+    container_name: localgpt-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=localgpt
+      - POSTGRES_PASSWORD=localgpt
+      - POSTGRES_DB=localgpt
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - localgpt-net
+
+  redis:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/redis:7-alpine
+    container_name: localgpt-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - localgpt-net
+
+  worker:
+    image: x-llm-backend:local
+    build: ./backend
+    container_name: localgpt-worker
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    command: sh -c "sleep 10 && python worker.py"
+    volumes:
+      - ./data:/app/data
+      - ./storage:/app/storage
+    env_file:
+      - .env  # 从 .env 文件加载环境变量
+    environment:
+      - BUILDKIT_PROVENANCE=0
+      - LLM_STORE_PATH=/app/data/llm_models.json
+      - APP_SETTINGS_PATH=/app/data/app_settings.json
+      # Worker uses separate Milvus DB to avoid file lock conflicts
+      - MILVUS_LITE_PATH=/app/data/milvus_worker.db
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=localgpt
+      - POSTGRES_USER=localgpt
+      - POSTGRES_PASSWORD=localgpt
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_SOCKET_CONNECT_TIMEOUT=30
+      - REDIS_SOCKET_TIMEOUT=300
+      - PLATFORM_JOBS_ENABLED=false
+      - DOCSTORE_DUALWRITE=false
+      - REVIEWCASE_DUALWRITE=true
+      - RULESET_PARSE_ENABLED=true
+      - RULES_EVALUATOR_ENABLED=true
+      - CUTOVER_SCOPE=project
+      - CUTOVER_PROJECT_IDS=
+      - RETRIEVAL_MODE=NEW_ONLY
+      - INGEST_MODE=NEW_ONLY
+      - EXTRACT_MODE=NEW_ONLY
+      - REVIEW_MODE=NEW_ONLY
+      - RULES_MODE=NEW_ONLY
+      - MILVUS_COLLECTION_DOCSEG=doc_segments_v1
+      # 并行抽取配置
+      - EXTRACT_PROJECT_INFO_PARALLEL=true
+      - EXTRACT_MAX_CONCURRENT=6
+      - EXTRACT_TRACE_ENABLED=true
+    networks:
+      - localgpt-net
+
+networks:
+  localgpt-net:
+    name: localgpt-net
+    external: true

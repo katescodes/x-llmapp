@@ -90,7 +90,10 @@ class Settings(BaseModel):
     CRAWLER_DOMAIN_COOLDOWN: float = float(os.getenv("CRAWLER_DOMAIN_COOLDOWN", "2.5"))
     CRAWLER_PROXIES: List[str] = Field(default_factory=_crawler_proxies_default)
     APP_SETTINGS_PATH: str = os.getenv("APP_SETTINGS_PATH", str(Path(_DATA_DIR) / "app_settings.json"))
+    # Milvus 配置（支持 Lite 和 Standalone 两种模式）
     MILVUS_LITE_PATH: str = os.getenv("MILVUS_LITE_PATH", str(Path(_DATA_DIR) / "milvus.db"))
+    MILVUS_URI: Optional[str] = os.getenv("MILVUS_URI", None)  # 远程 Milvus 地址 (host:port)
+    MILVUS_USE_STANDALONE: bool = os.getenv("MILVUS_USE_STANDALONE", "false").lower() == "true"
     EMBEDDING_PROVIDERS_PATH: str = os.getenv(
         "EMBEDDING_PROVIDERS_PATH", str(Path(_DATA_DIR) / "embedding_providers.json")
     )

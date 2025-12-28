@@ -55,8 +55,13 @@ class MilvusDocSegStore:
         """获取 Milvus 客户端（延迟初始化）"""
         if self._client is None:
             try:
-                logger.info("Creating Milvus DocSeg client path=%s", settings.MILVUS_LITE_PATH)
-                self._client = MilvusClient(uri=settings.MILVUS_LITE_PATH)
+                # 判断使用 Standalone 还是 Lite
+                if settings.MILVUS_USE_STANDALONE and settings.MILVUS_URI:
+                    logger.info(f"Creating Milvus Standalone client uri={settings.MILVUS_URI}")
+                    self._client = MilvusClient(uri=settings.MILVUS_URI)
+                else:
+                    logger.info(f"Creating Milvus Lite client path={settings.MILVUS_LITE_PATH}")
+                    self._client = MilvusClient(uri=settings.MILVUS_LITE_PATH)
                 self.connection_error = None
             except Exception as e:
                 logger.error(f"Failed to create Milvus client: {e}")
