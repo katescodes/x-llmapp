@@ -107,8 +107,10 @@ class IngestV2Service:
             logger.warning(f"IngestV2 no chunks asset_id={asset_id}")
             return IngestV2Result(doc_version_id=doc_version_id, segment_count=0)
         
-        # 4. 写 doc_segments
-        segment_ids = await self._write_segments(doc_version_id, chunks, parsed_doc.metadata)
+        # 4. 写 doc_segments（传递 pages 信息用于计算页码）
+        segment_ids = await self._write_segments(
+            doc_version_id, chunks, parsed_doc.metadata, parsed_doc.pages
+        )
         logger.info(f"IngestV2 segments written asset_id={asset_id} count={len(segment_ids)}")
         
         # 5. 获取 embedding provider
@@ -161,24 +163,81 @@ class IngestV2Service:
         doc_version_id: str,
         chunks: List,
         metadata: Dict,
+        pages: Optional[List] = None,
     ) -> List[str]:
-        """写入 doc_segments（带 PG FTS）"""
+        """
+        写入 doc_segments（带 PG FTS + 位置信息）
+        
+        Args:
+            doc_version_id: 文档版本 ID
+            chunks: 分片列表
+            metadata: 文档元数据
+            pages: 页面/段落信息（用于计算页码）
+        """
         segments = []
+        
         for idx, chunk in enumerate(chunks):
             meta_json = {
                 "chunk_position": chunk.position,
                 "chunk_hash": chunk.chunk_id,
                 **metadata,
             }
+            
+            # 尝试推断页码和段落类型
+            page_start, page_end, segment_type = self._infer_location(chunk, pages, metadata)
+            
             segments.append({
                 "segment_no": idx,
                 "content_text": chunk.text,
                 "meta_json": meta_json,
+                "page_start": page_start,
+                "page_end": page_end,
+                "segment_type": segment_type,
+                # heading_path 暂时留空，后续可通过 LLM 或规则推断
+                "heading_path": None,
             })
         
         # 批量插入（幂等：先删除再插入）
         segment_ids = self.docstore.create_segments(doc_version_id, segments)
         return segment_ids
+    
+    def _infer_location(self, chunk, pages: Optional[List], metadata: Dict) -> tuple:
+        """
+        推断 chunk 的位置信息
+        
+        Returns:
+            (page_start, page_end, segment_type) 元组
+        """
+        # 默认值
+        page_start = None
+        page_end = None
+        segment_type = "paragraph"  # 默认为段落
+        
+        # 如果没有 pages 信息，返回默认值
+        if not pages:
+            return page_start, page_end, segment_type
+        
+        # 对于 PDF：pages 是页面列表，每个包含 page_no 和 text
+        if "pages" in metadata and isinstance(pages, list) and len(pages) > 0:
+            # 简单策略：根据 chunk.position 估算页码
+            # 假设 chunks 按顺序分布在各页中
+            total_pages = len(pages)
+            total_chunks_estimate = metadata.get("chars", 0) / 1200  # 估算总 chunk 数
+            
+            if total_chunks_estimate > 0:
+                # 估算此 chunk 所在的页码
+                estimated_page_ratio = chunk.position / max(total_chunks_estimate, 1)
+                estimated_page = int(estimated_page_ratio * total_pages) + 1
+                page_start = max(1, min(estimated_page, total_pages))
+                page_end = page_start  # 简化：假设不跨页
+        
+        # 检测是否为表格（简单启发式）
+        if "|" in chunk.text and chunk.text.count("|") >= 3:
+            segment_type = "table"
+        elif chunk.text.strip().startswith(("1.", "2.", "一、", "二、", "·", "-", "*")):
+            segment_type = "list"
+        
+        return page_start, page_end, segment_type
     
     def _get_embedding_provider(self) -> Optional[EmbeddingProviderStored]:
         """获取 embedding provider"""

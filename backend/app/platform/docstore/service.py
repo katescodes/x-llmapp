@@ -122,6 +122,10 @@ class DocStoreService:
                 - segment_no: 片段序号
                 - content_text: 文本内容
                 - meta_json: 元数据（可选）
+                - page_start: 起始页码（可选）
+                - page_end: 结束页码（可选）
+                - heading_path: 章节路径（可选）
+                - segment_type: 片段类型（可选）
                 
         Returns:
             segment_ids: 片段ID列表
@@ -130,8 +134,9 @@ class DocStoreService:
         
         sql = """
             INSERT INTO doc_segments (
-                id, doc_version_id, segment_no, content_text, meta_json, created_at
-            ) VALUES (%s, %s, %s, %s, %s::jsonb, now())
+                id, doc_version_id, segment_no, content_text, meta_json,
+                page_start, page_end, heading_path, segment_type, created_at
+            ) VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, now())
         """
         
         with self.pool.connection() as conn:
@@ -149,7 +154,11 @@ class DocStoreService:
                         doc_version_id,
                         seg.get("segment_no", 0),
                         seg.get("content_text", ""),
-                        meta_json_str
+                        meta_json_str,
+                        seg.get("page_start"),
+                        seg.get("page_end"),
+                        seg.get("heading_path"),
+                        seg.get("segment_type")
                     ))
         
         return segment_ids
@@ -191,7 +200,8 @@ class DocStoreService:
             片段列表
         """
         sql = """
-            SELECT id, doc_version_id, segment_no, content_text, meta_json, created_at
+            SELECT id, doc_version_id, segment_no, content_text, meta_json,
+                   page_start, page_end, heading_path, segment_type, created_at
             FROM doc_segments
             WHERE doc_version_id = %s
             ORDER BY segment_no

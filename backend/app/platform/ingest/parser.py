@@ -19,6 +19,7 @@ class ParsedDocument:
     title: str
     text: str
     metadata: dict
+    pages: Optional[list] = None  # 新增：每页的文本内容（用于 PDF）
 
 
 TEXT_EXTS = {".txt", ".md", ".markdown", ".csv", ".json"}
@@ -52,19 +53,34 @@ def _parse_html(data: bytes) -> Tuple[str, dict, str]:
     return text, {"chars": len(text)}, title
 
 
-def _parse_pdf(data: bytes) -> Tuple[str, dict]:
+def _parse_pdf(data: bytes) -> Tuple[str, dict, list]:
+    """解析 PDF，返回 (全文, metadata, 页面列表)"""
     pdf = PdfReader(io.BytesIO(data))
     pages = []
-    for page in pdf.pages:
+    page_contents = []  # 每页的内容
+    
+    for page_idx, page in enumerate(pdf.pages):
         try:
-            pages.append(page.extract_text() or "")
+            page_text = page.extract_text() or ""
+            pages.append(page_text)
+            page_contents.append({
+                "page_no": page_idx + 1,  # 页码从 1 开始
+                "text": page_text,
+                "char_count": len(page_text)
+            })
         except Exception:
             pages.append("")
+            page_contents.append({
+                "page_no": page_idx + 1,
+                "text": "",
+                "char_count": 0
+            })
+    
     text = "\n".join(pages)
-    return text, {"pages": len(pdf.pages), "chars": len(text)}
+    return text, {"pages": len(pdf.pages), "chars": len(text)}, page_contents
 
 
-def _parse_docx(data: bytes) -> Tuple[str, dict]:
+def _parse_docx(data: bytes) -> Tuple[str, dict, list]:
     """
     解析 DOCX 文件
     
@@ -72,16 +88,34 @@ def _parse_docx(data: bytes) -> Tuple[str, dict]:
         data: DOCX 文件二进制数据
         
     Returns:
-        (text, metadata) 元组
+        (text, metadata, paragraphs) 元组，paragraphs 包含段落级信息
     """
     import zipfile
     
     # 先尝试标准方式解析
     try:
         doc = DocxDocument(io.BytesIO(data))
-        paragraphs = [para.text for para in doc.paragraphs if para.text]
+        paragraphs = []
+        paragraph_infos = []
+        
+        for idx, para in enumerate(doc.paragraphs):
+            if para.text:
+                paragraphs.append(para.text)
+                # 尝试获取段落样式信息
+                style_name = para.style.name if para.style else None
+                is_heading = style_name and "heading" in style_name.lower()
+                
+                paragraph_infos.append({
+                    "index": idx,
+                    "text": para.text,
+                    "style": style_name,
+                    "is_heading": is_heading,
+                    "char_count": len(para.text)
+                })
+        
         text = "\n".join(paragraphs)
-        return text, {"paragraphs": len(paragraphs), "chars": len(text)}
+        return text, {"paragraphs": len(paragraphs), "chars": len(text)}, paragraph_infos
+        
     except zipfile.BadZipFile as e:
         # ZIP 文件损坏，尝试使用容错模式
         error_msg = str(e)
@@ -109,21 +143,21 @@ def _parse_docx(data: bytes) -> Tuple[str, dict]:
                             "paragraphs": len(paragraphs),
                             "chars": len(text),
                             "warning": f"文件部分损坏（{error_msg}），但文本内容已成功提取"
-                        }
+                        }, []
             except Exception as fallback_error:
                 # 容错模式也失败，返回错误
                 return "", {
                     "error": f"DOCX parse failed: {error_msg}. Fallback also failed: {str(fallback_error)}",
                     "chars": 0,
                     "paragraphs": 0
-                }
+                }, []
         
         # 其他类型的 ZIP 错误，直接返回错误
         return "", {
             "error": f"DOCX parse failed: {error_msg}",
             "chars": 0,
             "paragraphs": 0
-        }
+        }, []
     except Exception as e:
         # 其他异常，返回错误信息
         error_msg = str(e)
@@ -131,7 +165,7 @@ def _parse_docx(data: bytes) -> Tuple[str, dict]:
             "error": f"DOCX parse failed: {error_msg}",
             "chars": 0,
             "paragraphs": 0
-        }
+        }, []
 
 
 def _parse_excel(data: bytes) -> Tuple[str, dict]:
@@ -217,14 +251,15 @@ async def parse_document(
         return ParsedDocument(title=html_title or title, text=text, metadata=metadata)
 
     if ext in PDF_EXTS:
-        text, meta = _parse_pdf(data)
+        text, meta, page_contents = _parse_pdf(data)
         metadata.update(meta)
-        return ParsedDocument(title=title, text=text, metadata=metadata)
+        return ParsedDocument(title=title, text=text, metadata=metadata, pages=page_contents)
 
     if ext in DOCX_EXTS:
-        text, meta = _parse_docx(data)
+        text, meta, paragraph_infos = _parse_docx(data)
         metadata.update(meta)
-        return ParsedDocument(title=title, text=text, metadata=metadata)
+        # 对于 DOCX，将段落信息存储在 pages 中（复用此字段）
+        return ParsedDocument(title=title, text=text, metadata=metadata, pages=paragraph_infos)
 
     if ext in EXCEL_EXTS:
         text, meta = _parse_excel(data)
