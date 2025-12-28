@@ -2,13 +2,38 @@
 审核流水线 V3.1 - 固定分层裁决
 Step 5: 实现 Mapping → Hard Gate → Quant Checks → Semantic Escalation → Consistency → Summary
 Step A: 修复落库可追溯性（requirement_id + matched_response_id + review_run_id）
+Step B: 修复 Mapping（topK 候选 + 轻量相似度）
 """
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
 from psycopg.rows import dict_row
 
 logger = logging.getLogger(__name__)
+
+
+def _tokenize(text: str) -> set:
+    """简单分词（去除标点，按空格分割，转小写）"""
+    if not text:
+        return set()
+    # 去除标点，保留中英文和数字
+    text = re.sub(r'[^\w\s]', ' ', text.lower())
+    return set(text.split())
+
+
+def _jaccard_similarity(text1: str, text2: str) -> float:
+    """计算 Jaccard 相似度（Token overlap）"""
+    tokens1 = _tokenize(text1)
+    tokens2 = _tokenize(text2)
+    
+    if not tokens1 or not tokens2:
+        return 0.0
+    
+    intersection = tokens1 & tokens2
+    union = tokens1 | tokens2
+    
+    return len(intersection) / len(union) if union else 0.0
 
 
 class ReviewPipelineV3:
@@ -127,16 +152,23 @@ class ReviewPipelineV3:
     def _build_candidates(
         self,
         requirements: List[Dict],
-        responses: List[Dict]
+        responses: List[Dict],
+        top_k: int = 5
     ) -> List[Dict[str, Any]]:
         """
-        Step 1: Mapping
-        为每个 requirement 找候选 response（基于 dimension 匹配）
+        Step 1: Mapping (Step B: 改进版)
+        为每个 requirement 找候选 response（基于 dimension + 相似度）
+        
+        改进点：
+        1. 不再只返回单个 response，而是 topK 候选列表
+        2. 计算轻量相似度分数（Jaccard）
+        3. 记录候选信息到 trace
         """
         candidates = []
         
         for req in requirements:
             req_dimension = req.get("dimension", "")
+            req_text = req.get("requirement_text", "")
             
             # 找同维度的 responses
             matched_responses = [
@@ -144,16 +176,42 @@ class ReviewPipelineV3:
                 if resp.get("dimension") == req_dimension
             ]
             
-            if matched_responses:
-                # 如果有多个响应，取第一个（或可以用相似度排序）
-                best_response = matched_responses[0]
-            else:
-                # 没有匹配的响应
-                best_response = None
+            # 计算相似度并排序
+            scored_responses = []
+            for resp in matched_responses:
+                resp_text = resp.get("response_text", "")
+                # 使用 Jaccard 相似度（Token overlap）
+                score = _jaccard_similarity(req_text, resp_text)
+                scored_responses.append({
+                    "response": resp,
+                    "score": score,
+                    "method": "jaccard"
+                })
+            
+            # 按分数降序排序
+            scored_responses.sort(key=lambda x: x["score"], reverse=True)
+            
+            # 取 topK
+            top_candidates = scored_responses[:top_k]
+            
+            # best_response 是 top1（如果有）
+            best_response = top_candidates[0]["response"] if top_candidates else None
+            
+            # 构建候选信息（用于 trace）
+            candidates_info = [
+                {
+                    "response_id": str(c["response"].get("id")),
+                    "score": round(c["score"], 3),
+                    "method": c["method"]
+                }
+                for c in top_candidates[:3]  # 只保留前3个到 trace
+            ]
             
             candidates.append({
                 "requirement": req,
-                "response": best_response,
+                "response": best_response,  # 最佳匹配（top1）
+                "candidates": top_candidates,  # 全部候选
+                "candidates_info": candidates_info,  # 用于 trace
                 "requirement_id": req.get("requirement_id"),
                 "dimension": req_dimension,
             })
@@ -162,8 +220,12 @@ class ReviewPipelineV3:
     
     def _hard_gate(self, candidates: List[Dict]) -> List[Dict[str, Any]]:
         """
-        Step 2: Hard Gate
+        Step 2: Hard Gate (Step B: 改进版)
         处理 must_reject=true 或硬性要求，使用确定性规则
+        
+        改进点：
+        1. 添加兜底逻辑：is_hard=true 的条款即使没有 eval_method 也会处理
+        2. 记录候选信息到 rule_trace_json
         """
         results = []
         
@@ -175,10 +237,15 @@ class ReviewPipelineV3:
             must_reject = req.get("must_reject", False)
             is_hard = req.get("is_hard", False)
             
-            # 只处理硬性条款或确定性评估方法
+            # Step B: 兜底逻辑 - is_hard=true 的条款必须处理
             if not (must_reject or is_hard):
                 continue
             
+            # Step B: 如果没有 eval_method，默认使用 PRESENCE
+            if not eval_method:
+                eval_method = "PRESENCE"
+            
+            # 只处理确定性评估方法
             if eval_method not in ("PRESENCE", "VALIDITY", "EXACT_MATCH"):
                 continue
             
@@ -186,6 +253,9 @@ class ReviewPipelineV3:
             status, remark, rule_trace = self._evaluate_deterministic(
                 req, resp, eval_method
             )
+            
+            # Step B: 添加候选信息到 trace
+            rule_trace["candidates"] = candidate.get("candidates_info", [])
             
             result = {
                 "requirement_id": req.get("requirement_id"),
@@ -258,8 +328,10 @@ class ReviewPipelineV3:
         existing_results: List[Dict]
     ) -> List[Dict[str, Any]]:
         """
-        Step 3: Quant Checks
+        Step 3: Quant Checks (Step B: 改进版)
         处理 NUMERIC/TABLE_COMPARE 的数值/表格对照
+        
+        改进点：记录候选信息到 computed_trace_json
         """
         results = []
         
@@ -284,6 +356,9 @@ class ReviewPipelineV3:
             status, remark, computed_trace = self._evaluate_quantitative(
                 req, resp, eval_method
             )
+            
+            # Step B: 添加候选信息到 trace
+            computed_trace["candidates"] = candidate.get("candidates_info", [])
             
             result = {
                 "requirement_id": req_id,
