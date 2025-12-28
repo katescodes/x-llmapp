@@ -266,6 +266,14 @@ class BidResponseService:
                 logger.warning(f"BidResponseService: Expected v2 schema but got {schema_version}")
             
             responses_list = result.data.get("responses", [])
+            logger.info(f"BidResponseService: v2 parsed responses_list length={len(responses_list)}")
+            
+            # 诊断：打印前3个response的简要信息
+            for idx, resp in enumerate(responses_list[:3]):
+                logger.info(f"BidResponseService: v2 response[{idx}]: dimension={resp.get('dimension')}, " +
+                           f"type={resp.get('response_type')}, " +
+                           f"has_normalized={bool(resp.get('normalized_fields_json'))}, " +
+                           f"has_segment_ids={bool(resp.get('evidence_segment_ids'))}")
         else:
             logger.warning(f"BidResponseService: unexpected data format, type={type(result.data)}")
         
