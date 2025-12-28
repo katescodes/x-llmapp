@@ -21,6 +21,7 @@ import CustomRulesPage from './CustomRulesPage';
 import UserDocumentsPage from './UserDocumentsPage';
 import type { SampleFragment, SampleFragmentPreview } from '../types/tender';
 import type { RiskAnalysisData } from '../types/riskAnalysis';
+import { countByStatus } from '../types/reviewUtils';
 
 // ==================== 类型定义 ====================
 
@@ -2581,6 +2582,40 @@ export default function TenderWorkspace() {
                       </div>
                     </div>
                   )}
+                  
+                  {/* Step F-Frontend-3: 统计卡片 */}
+                  {reviewItems.length > 0 && (() => {
+                    const stats = countByStatus(reviewItems);
+                    return (
+                      <div style={{ 
+                        display: 'flex', 
+                        gap: '12px', 
+                        marginBottom: '16px',
+                        flexWrap: 'wrap'
+                      }}>
+                        <div className="stat-card" style={{ flex: '1 1 120px' }}>
+                          <div className="stat-value" style={{ color: '#22c55e' }}>{stats.pass}</div>
+                          <div className="stat-label">通过</div>
+                        </div>
+                        <div className="stat-card" style={{ flex: '1 1 120px' }}>
+                          <div className="stat-value" style={{ color: '#fbbf24' }}>{stats.warn}</div>
+                          <div className="stat-label">风险</div>
+                        </div>
+                        <div className="stat-card" style={{ flex: '1 1 120px' }}>
+                          <div className="stat-value" style={{ color: '#ef4444' }}>{stats.fail}</div>
+                          <div className="stat-label">失败</div>
+                        </div>
+                        <div className="stat-card" style={{ flex: '1 1 120px' }}>
+                          <div className="stat-value" style={{ color: '#94a3b8' }}>{stats.pending}</div>
+                          <div className="stat-label">待复核</div>
+                        </div>
+                        <div className="stat-card" style={{ flex: '1 1 120px', borderColor: 'rgba(148, 163, 184, 0.3)' }}>
+                          <div className="stat-value" style={{ color: '#e5e7eb' }}>{stats.total}</div>
+                          <div className="stat-label">总计</div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                   
                   {reviewItems.length > 0 ? (
                     <ReviewTable items={reviewItems} onOpenEvidence={showEvidence} />

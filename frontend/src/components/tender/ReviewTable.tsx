@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import type { TenderReviewItem } from "../../types/tender";
 import { getStatus, getStatusText, getStatusColor } from "../../types/reviewUtils";
+import EvidenceDrawer from "./EvidenceDrawer";
 
 // 兼容旧版本的 ReviewItem（用于内部类型，实际数据用 TenderReviewItem）
 export type ReviewItem = TenderReviewItem & {
@@ -21,6 +22,9 @@ export default function ReviewTable({
   const [resultFilter, setResultFilter] = useState<"all" | "pass" | "risk" | "fail" | "pending">("all");
   const [sourceFilter, setSourceFilter] = useState<"all" | "compare" | "rule" | "v3">("all");
   const [kw, setKw] = useState("");
+  
+  // Step F-Frontend-4: Drawer state
+  const [selectedItem, setSelectedItem] = useState<ReviewItem | null>(null);
 
   const filtered = useMemo(() => {
     const k = kw.trim().toLowerCase();
@@ -157,14 +161,24 @@ export default function ReviewTable({
                   <td className="tender-cell">{respText}</td>
                   <td>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {/* Step F-Frontend-4: 查看证据按钮 */}
+                      <button 
+                        className="link-button" 
+                        onClick={() => setSelectedItem(it)}
+                        style={{ fontWeight: 500 }}
+                      >
+                        🔍 查看证据
+                      </button>
+                      
+                      {/* 兼容旧版：chunk_ids 查看 */}
                       {it.tender_evidence_chunk_ids?.length > 0 && (
                         <button className="link-button" onClick={() => onOpenEvidence(it.tender_evidence_chunk_ids)}>
-                          招标证据({it.tender_evidence_chunk_ids.length})
+                          招标({it.tender_evidence_chunk_ids.length})
                         </button>
                       )}
                       {it.bid_evidence_chunk_ids?.length > 0 && (
                         <button className="link-button" onClick={() => onOpenEvidence(it.bid_evidence_chunk_ids)}>
-                          投标证据({it.bid_evidence_chunk_ids.length})
+                          投标({it.bid_evidence_chunk_ids.length})
                         </button>
                       )}
                     </div>
@@ -182,6 +196,13 @@ export default function ReviewTable({
           </tbody>
         </table>
       </div>
+      
+      {/* Step F-Frontend-4: Evidence Drawer */}
+      <EvidenceDrawer 
+        item={selectedItem}
+        isOpen={!!selectedItem}
+        onClose={() => setSelectedItem(null)}
+      />
     </div>
   );
 }
