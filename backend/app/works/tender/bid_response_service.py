@@ -30,6 +30,63 @@ class BidResponseService:
         self.llm = llm
         self.dao = TenderDAO(pool)
     
+    def _prefetch_doc_segments(self, segment_ids: List[str]) -> Dict[str, Dict]:
+        """批量预取 doc_segments（v2辅助函数）"""
+        if not segment_ids:
+            return {}
+        
+        import psycopg.rows
+        with self.pool.connection() as conn:
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                cur.execute("""
+                    SELECT 
+                        segment_id, asset_id, content, 
+                        page_start, page_end, heading_path, segment_type
+                    FROM doc_segments
+                    WHERE segment_id = ANY(%s)
+                """, (list(set(segment_ids)),))
+                rows = cur.fetchall()
+        
+        return {row["segment_id"]: row for row in rows}
+    
+    def _make_quote(self, text: str, limit: int = 220) -> str:
+        """截取 quote（v2辅助函数）"""
+        if not text:
+            return ""
+        text = " ".join(text.split())  # 压缩空白
+        if len(text) <= limit:
+            return text
+        return text[:limit] + "..."
+    
+    def _build_evidence_json_from_segments(
+        self, 
+        segment_ids: List[str], 
+        seg_map: Dict[str, Dict]
+    ) -> List[Dict]:
+        """从 segment_ids 组装 evidence_json（v2辅助函数）"""
+        evidence = []
+        for sid in segment_ids[:5]:  # 最多5条
+            seg = seg_map.get(sid)
+            if not seg:
+                # 降级：只保留 segment_id
+                evidence.append({
+                    "segment_id": sid,
+                    "source": "fallback_chunk"
+                })
+                continue
+            
+            evidence.append({
+                "segment_id": sid,
+                "asset_id": seg.get("asset_id"),
+                "page_start": seg.get("page_start"),
+                "page_end": seg.get("page_end"),
+                "heading_path": seg.get("heading_path"),
+                "quote": self._make_quote(seg.get("content", ""), 220),
+                "segment_type": seg.get("segment_type"),
+                "source": "doc_segments"
+            })
+        return evidence
+    
     async def extract_bid_response_v1(
         self,
         project_id: str,
@@ -138,6 +195,140 @@ class BidResponseService:
             "bidder_name": extracted_bidder_name,
             "responses": responses_list,
             "added_count": added_count
+        }
+    
+    async def extract_bid_response_v2(
+        self,
+        project_id: str,
+        bidder_name: str,
+        model_id: Optional[str],
+        run_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        抽取投标响应要素 (v2)
+        
+        v2 新特性:
+        - 输出 normalized_fields_json (标准化字段集)
+        - 输出 evidence_segment_ids (文档片段ID)
+        - 组装 evidence_json (页码+引用片段)
+        
+        Args:
+            project_id: 项目ID
+            bidder_name: 投标人名称
+            model_id: LLM模型ID
+            run_id: 运行ID（可选）
+        
+        Returns:
+            {
+                "bidder_name": "投标人名称",
+                "responses": [...],
+                "added_count": 15,
+                "schema_version": "bid_response_v2"
+            }
+        """
+        logger.info(f"BidResponseService: extract_bid_response_v2 start project_id={project_id}, bidder={bidder_name}")
+        
+        # 1. 获取 embedding provider
+        embedding_provider = get_embedding_store().get_default()
+        if not embedding_provider:
+            raise ValueError("No embedding provider configured")
+        
+        # 2. 构建 v2 spec
+        from app.works.tender.extraction_specs.bid_response_v2 import build_bid_response_spec_v2_async
+        spec = await build_bid_response_spec_v2_async(self.pool)
+        
+        # 3. 调用引擎
+        result = await self.engine.run(
+            spec=spec,
+            retriever=self.retriever,
+            llm=self.llm,
+            project_id=project_id,
+            model_id=model_id,
+            run_id=run_id,
+            embedding_provider=embedding_provider,
+        )
+        
+        # 4. 解析 v2 结果
+        responses_list = []
+        extracted_bidder_name = bidder_name
+        
+        if isinstance(result.data, dict):
+            # 检查 schema_version
+            schema_version = result.data.get("schema_version", "unknown")
+            logger.info(f"BidResponseService: v2 schema_version={schema_version}")
+            
+            if schema_version != "bid_response_v2":
+                logger.warning(f"BidResponseService: Expected v2 schema but got {schema_version}")
+            
+            responses_list = result.data.get("responses", [])
+        else:
+            logger.warning(f"BidResponseService: unexpected data format, type={type(result.data)}")
+        
+        if not isinstance(responses_list, list):
+            logger.error(f"BidResponseService: responses not list, type={type(responses_list)}")
+            responses_list = []
+        
+        # 5. 预取所有 segment_ids
+        all_segment_ids = []
+        for resp in responses_list:
+            all_segment_ids.extend(resp.get("evidence_segment_ids", []))
+        
+        logger.info(f"BidResponseService: prefetching {len(set(all_segment_ids))} unique segments")
+        seg_map = self._prefetch_doc_segments(all_segment_ids)
+        logger.info(f"BidResponseService: fetched {len(seg_map)} segments from database")
+        
+        # 6. 落库到 tender_bid_response_items (v2 字段)
+        added_count = 0
+        for resp in responses_list:
+            response_id = resp.get("response_id", str(uuid.uuid4()))
+            db_id = str(uuid.uuid4())
+            
+            # v1 字段
+            extracted_value_json = resp.get("extracted_value_json", {})
+            evidence_chunk_ids = resp.get("evidence_chunk_ids", [])
+            
+            # v2 新字段
+            normalized_fields_json = resp.get("normalized_fields_json", {})
+            evidence_segment_ids = resp.get("evidence_segment_ids", [])
+            
+            # 兼容性处理
+            if not evidence_chunk_ids and evidence_segment_ids:
+                evidence_chunk_ids = evidence_segment_ids
+            elif not evidence_segment_ids and evidence_chunk_ids:
+                evidence_segment_ids = evidence_chunk_ids
+            
+            # 组装 evidence_json
+            evidence_json = self._build_evidence_json_from_segments(evidence_segment_ids, seg_map)
+            
+            # 插入数据库
+            import json
+            self.dao._execute("""
+                INSERT INTO tender_bid_response_items (
+                    id, project_id, bidder_name, dimension, response_type,
+                    response_text, extracted_value_json, evidence_chunk_ids,
+                    normalized_fields_json, evidence_json
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::text[], %s::jsonb, %s::jsonb)
+            """, (
+                db_id,
+                project_id,
+                extracted_bidder_name,
+                resp.get("dimension", "other"),
+                resp.get("response_type", "text"),
+                resp.get("response_text", ""),
+                json.dumps(extracted_value_json) if extracted_value_json else '{}',
+                evidence_chunk_ids,
+                json.dumps(normalized_fields_json) if normalized_fields_json else '{}',
+                json.dumps(evidence_json) if evidence_json else None,
+            ))
+            added_count += 1
+        
+        logger.info(f"BidResponseService: extract_bid_response_v2 done responses={len(responses_list)}, added={added_count}")
+        
+        return {
+            "bidder_name": extracted_bidder_name,
+            "responses": responses_list,
+            "added_count": added_count,
+            "schema_version": "bid_response_v2"
         }
     
     async def extract_all_bidders_responses(

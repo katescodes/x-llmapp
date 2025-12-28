@@ -1003,7 +1003,7 @@ async def extract_bid_responses(
     user=Depends(get_current_user_sync),
 ):
     """
-    抽取投标响应要素 (for V3 review)
+    抽取投标响应要素 (使用 V2: normalized_fields + evidence_segments)
     
     Args:
         bidder_name: 投标人名称
@@ -1025,7 +1025,8 @@ async def extract_bid_responses(
     )
     
     try:
-        result = await service.extract_bid_response_v1(
+        # 使用 v2 方法
+        result = await service.extract_bid_response_v2(
             project_id=project_id,
             bidder_name=bidder_name,
             model_id=None,
@@ -1033,8 +1034,13 @@ async def extract_bid_responses(
         )
         return {
             "success": True,
-            "message": f"成功抽取{result.get('total_responses', 0)}条响应数据",
-            "data": result
+            "message": f"成功抽取{result.get('added_count', 0)}条响应数据 (v2)",
+            "data": {
+                "bidder_name": result["bidder_name"],
+                "total_responses": result.get("added_count", 0),
+                "schema_version": result.get("schema_version", "v2")
+            }
+        }
         }
     except Exception as e:
         import logging

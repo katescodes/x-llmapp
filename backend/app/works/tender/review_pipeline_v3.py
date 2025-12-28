@@ -1152,7 +1152,12 @@ class ReviewPipelineV3:
             if resp.get("dimension") == "price":
                 normalized_fields = resp.get("normalized_fields_json", {})
                 if isinstance(normalized_fields, dict):
-                    price_field = normalized_fields.get("total_price") or normalized_fields.get("price")
+                    # v2标准: 优先使用 total_price_cny，降级到 total_price/price
+                    price_field = (
+                        normalized_fields.get("total_price_cny") or 
+                        normalized_fields.get("total_price") or 
+                        normalized_fields.get("price")
+                    )
                     if price_field:
                         # Step E: 归一化为"分"
                         normalized_price = normalize_money(price_field)
@@ -1238,7 +1243,12 @@ class ReviewPipelineV3:
             if resp.get("dimension") in ("business", "technical"):
                 normalized_fields = resp.get("normalized_fields_json", {})
                 if isinstance(normalized_fields, dict):
-                    duration_field = normalized_fields.get("duration") or normalized_fields.get("construction_period")
+                    # v2标准: 优先使用 duration_days，降级到 duration/construction_period
+                    duration_field = (
+                        normalized_fields.get("duration_days") or 
+                        normalized_fields.get("duration") or 
+                        normalized_fields.get("construction_period")
+                    )
                     if duration_field:
                         # Step E: 归一化为"天"
                         normalized_duration = normalize_duration(duration_field)
