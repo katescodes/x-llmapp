@@ -85,7 +85,7 @@ export default defineConfig(({ mode }) => {
       };
 
   return {
-    base: "/ylAI/",
+    base: "/", // 修改为根路径，适用于本地开发和 Docker 部署
     plugins: [react()],
     server: {
       port: devPort,
