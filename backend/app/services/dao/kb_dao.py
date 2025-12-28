@@ -14,16 +14,16 @@ def _iso(value):
     return value
 
 
-def create_kb(name: str, description: str = "", category_id: str | None = None) -> str:
+def create_kb(name: str, description: str = "", category_id: str | None = None, owner_id: str | None = None) -> str:
     kb_id = uuid.uuid4().hex
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO knowledge_bases(id, name, description, category_id)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO knowledge_bases(id, name, description, category_id, owner_id)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
-                (kb_id, name[:200], description[:2000], category_id),
+                (kb_id, name[:200], description[:2000], category_id, owner_id),
             )
         conn.commit()
     return kb_id
@@ -35,7 +35,8 @@ def list_kbs() -> List[Dict]:
             cur.execute(
                 """
                 SELECT 
-                    kb.id, kb.name, kb.description, kb.created_at, kb.updated_at, kb.category_id,
+                    kb.id, kb.name, kb.description, kb.created_at, kb.updated_at, 
+                    kb.category_id, kb.owner_id,
                     cat.name as category_name,
                     cat.display_name as category_display_name,
                     cat.color as category_color,
@@ -61,7 +62,8 @@ def get_kb(kb_id: str) -> Optional[Dict]:
             cur.execute(
                 """
                 SELECT 
-                    kb.id, kb.name, kb.description, kb.created_at, kb.updated_at, kb.category_id,
+                    kb.id, kb.name, kb.description, kb.created_at, kb.updated_at, 
+                    kb.category_id, kb.owner_id,
                     cat.name as category_name,
                     cat.display_name as category_display_name,
                     cat.color as category_color,

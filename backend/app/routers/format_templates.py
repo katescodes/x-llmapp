@@ -15,7 +15,8 @@ from psycopg_pool import ConnectionPool
 from pydantic import BaseModel
 
 from app.services.dao.tender_dao import TenderDAO
-from app.utils.auth import get_current_user_sync
+from app.utils.permission import require_permission
+from app.models.user import TokenData
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ def _get_format_templates_work(request: Request) -> Any:
 @router.get("/format-templates")
 def list_format_templates(
     request: Request,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """列出格式模板（返回当前用户的模板和所有公开模板）"""
     work = _get_format_templates_work(request)
@@ -80,7 +81,7 @@ async def create_format_template(
     file: UploadFile = File(...),
     model_id: Optional[str] = Form(None),
     request: Request = None,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """创建格式模板（支持可选的LLM分析）"""
     if not file.filename.endswith((".docx", ".doc")):
@@ -118,7 +119,7 @@ async def create_format_template(
 def get_format_template(
     template_id: str,
     request: Request,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """获取格式模板详情"""
     work = _get_format_templates_work(request)
@@ -139,7 +140,7 @@ def update_format_template(
     template_id: str,
     req: FormatTemplateUpdateReq,
     request: Request,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """更新格式模板元数据"""
     work = _get_format_templates_work(request)
@@ -168,7 +169,7 @@ def update_format_template(
 def delete_format_template(
     template_id: str,
     request: Request,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """删除格式模板"""
     work = _get_format_templates_work(request)
@@ -193,7 +194,7 @@ def delete_format_template(
 def get_format_template_file(
     template_id: str,
     request: Request,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """下载格式模板原始文件"""
     work = _get_format_templates_work(request)
@@ -221,7 +222,7 @@ def get_format_template_file(
 def get_format_template_spec(
     template_id: str,
     request: Request,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """获取格式模板的样式规格"""
     work = _get_format_templates_work(request)
@@ -253,7 +254,7 @@ async def analyze_format_template(
     file: UploadFile = File(None),
     model_id: Optional[str] = Form(None),
     request: Request = None,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """分析或重新分析格式模板"""
     work = _get_format_templates_work(request)
@@ -289,7 +290,7 @@ async def analyze_format_template(
 def get_format_template_analysis_summary(
     template_id: str,
     request: Request,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """获取格式模板分析摘要"""
     work = _get_format_templates_work(request)
@@ -306,7 +307,7 @@ async def parse_format_template(
     template_id: str,
     force: bool = Query(True),
     request: Request = None,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """确定性解析格式模板"""
     work = _get_format_templates_work(request)
@@ -329,7 +330,7 @@ async def parse_format_template(
 def get_format_template_parse_summary(
     template_id: str,
     request: Request,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """获取格式模板解析摘要"""
     work = _get_format_templates_work(request)
@@ -348,7 +349,7 @@ def get_format_template_preview(
     template_id: str,
     format: str = Query("pdf", pattern="^(pdf|docx)$"),
     request: Request = None,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """生成并返回格式模板预览"""
     work = _get_format_templates_work(request)
@@ -390,7 +391,7 @@ async def apply_format_template_to_directory(
     req: ApplyFormatTemplateReq,
     return_type: str = Query("json", description="返回类型: json 或 file"),
     request: Request = None,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """套用格式模板到项目目录"""
     work = _get_format_templates_work(request)
@@ -443,7 +444,7 @@ async def apply_format_template_to_directory(
 def get_template_analysis(
     template_id: str,
     request: Request,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """获取模板分析结果（给 FormatTemplatesPage 使用）"""
     work = _get_format_templates_work(request)
@@ -499,7 +500,7 @@ async def reanalyze_template(
     template_id: str,
     model_id: Optional[str] = Query(None, description="LLM模型ID"),
     request: Request = None,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """重新分析模板（给 FormatTemplatesPage 使用）"""
     work = _get_format_templates_work(request)
@@ -565,7 +566,7 @@ async def get_format_preview(
     format: str = Query("pdf", description="预览格式: pdf 或 docx"),
     format_template_id: Optional[str] = Query(None, description="格式模板ID"),
     request: Request = None,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """
     获取套用格式后的预览文件
@@ -642,7 +643,7 @@ def download_exported_docx(
     project_id: str,
     filename: str,
     request: Request,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """
     下载项目导出的 DOCX 文件

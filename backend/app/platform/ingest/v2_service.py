@@ -83,6 +83,11 @@ class IngestV2Service:
             logger.error(f"IngestV2 parse failed asset_id={asset_id} error={error_msg}")
             raise ValueError(f"文件解析失败: {error_msg}")
         
+        # 记录警告信息（如果有）
+        if parsed_doc.metadata.get("warning"):
+            warning_msg = parsed_doc.metadata["warning"]
+            logger.warning(f"IngestV2 parse warning asset_id={asset_id} warning={warning_msg}")
+        
         # 检查是否解析出文本
         if not parsed_doc.text or len(parsed_doc.text.strip()) == 0:
             logger.warning(f"IngestV2 empty text asset_id={asset_id}")

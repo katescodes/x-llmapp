@@ -58,7 +58,9 @@ class DeclareService:
         if not kb_id:
             raise ValueError(f"Project has no KB: {project_id}")
         
-        # doc_type 映射
+        # doc_type 映射到知识库分类
+        from app.utils.doc_type_mapper import map_doc_type_to_kb_category
+        
         doc_type_map = {
             "notice": "declare_notice",
             "company": "declare_company",
@@ -66,6 +68,7 @@ class DeclareService:
             "other": "declare_other",
         }
         doc_type = doc_type_map.get(kind, "declare_other")
+        kb_category = map_doc_type_to_kb_category(doc_type)  # 映射到知识库分类
         
         assets = []
         for file in files:
@@ -83,13 +86,13 @@ class DeclareService:
             # 生成临时 asset_id
             temp_asset_id = f"temp_{uuid.uuid4().hex}"
             
-            # 调用 IngestV2 入库 - 使用正确的方法名 ingest_asset_v2
+            # 调用 IngestV2 入库 - 使用映射后的知识库分类
             ingest_result = run_async(ingest_service.ingest_asset_v2(
                 project_id=project_id,
                 asset_id=temp_asset_id,
                 file_bytes=file_bytes,
                 filename=file.filename,
-                doc_type=doc_type,
+                doc_type=kb_category,  # 使用映射后的知识库分类
                 owner_id=user_id,
                 storage_path=file_path,
             ))

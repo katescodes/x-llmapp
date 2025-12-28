@@ -1,6 +1,6 @@
 from typing import List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
 from ..schemas.kb_category import (
     KbCategoryCreate,
@@ -8,19 +8,34 @@ from ..schemas.kb_category import (
     KbCategoryUpdate,
 )
 from ..services.dao import kb_category_dao
+from app.utils.permission import require_permission
+from app.models.user import TokenData
 
 router = APIRouter(prefix="/api/kb-categories", tags=["kb-categories"])
 
 
 @router.get("", response_model=List[KbCategoryOut])
-def list_categories():
-    """获取所有知识库分类"""
+def list_categories(
+    current_user: TokenData = Depends(require_permission("kb.view"))
+):
+    """
+    获取所有知识库分类
+    
+    权限要求：kb.view
+    """
     return kb_category_dao.list_categories()
 
 
 @router.post("", response_model=KbCategoryOut)
-def create_category(payload: KbCategoryCreate):
-    """创建新的知识库分类"""
+def create_category(
+    payload: KbCategoryCreate,
+    current_user: TokenData = Depends(require_permission("system.category"))
+):
+    """
+    创建新的知识库分类
+    
+    权限要求：system.category（系统管理员）
+    """
     # 检查名称是否已存在
     if kb_category_dao.category_exists(payload.name):
         raise HTTPException(status_code=400, detail=f"分类名称 '{payload.name}' 已存在")
@@ -39,8 +54,16 @@ def create_category(payload: KbCategoryCreate):
 
 
 @router.put("/{category_id}", response_model=KbCategoryOut)
-def update_category(category_id: str, payload: KbCategoryUpdate):
-    """更新知识库分类"""
+def update_category(
+    category_id: str, 
+    payload: KbCategoryUpdate,
+    current_user: TokenData = Depends(require_permission("system.category"))
+):
+    """
+    更新知识库分类
+    
+    权限要求：system.category（系统管理员）
+    """
     category = kb_category_dao.get_category(category_id)
     if not category:
         raise HTTPException(status_code=404, detail="分类不存在")
@@ -63,8 +86,15 @@ def update_category(category_id: str, payload: KbCategoryUpdate):
 
 
 @router.delete("/{category_id}")
-def delete_category(category_id: str):
-    """删除知识库分类"""
+def delete_category(
+    category_id: str,
+    current_user: TokenData = Depends(require_permission("system.category"))
+):
+    """
+    删除知识库分类
+    
+    权限要求：system.category（系统管理员）
+    """
     category = kb_category_dao.get_category(category_id)
     if not category:
         raise HTTPException(status_code=404, detail="分类不存在")
@@ -75,4 +105,3 @@ def delete_category(category_id: str):
         raise HTTPException(status_code=500, detail=f"删除失败: {exc}") from exc
     
     return {"status": "ok", "message": "分类已删除"}
-

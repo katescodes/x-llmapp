@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { useAuthFetch } from "../hooks/usePermission";
 import { KbCategory } from "../types";
 import { API_BASE_URL } from "../config/api";
 
@@ -8,6 +9,7 @@ interface CategoryManagerProps {
 }
 
 const CategoryManager: React.FC<CategoryManagerProps> = ({ onClose, onCategoryChanged }) => {
+  const authFetch = useAuthFetch();
   const apiBaseUrl = API_BASE_URL;
   const [categories, setCategories] = useState<KbCategory[]>([]);
   const [loading, setLoading] = useState(false);
@@ -23,7 +25,7 @@ const CategoryManager: React.FC<CategoryManagerProps> = ({ onClose, onCategoryCh
   const fetchCategories = useCallback(async () => {
     setLoading(true);
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/kb-categories`);
+      const resp = await authFetch(`${apiBaseUrl}/api/kb-categories`);
       if (!resp.ok) throw new Error("获取分类列表失败");
       const data: KbCategory[] = await resp.json();
       setCategories(data);
@@ -46,7 +48,7 @@ const CategoryManager: React.FC<CategoryManagerProps> = ({ onClose, onCategoryCh
     }
 
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/kb-categories`, {
+      const resp = await authFetch(`${apiBaseUrl}/api/kb-categories`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(newCategory)
@@ -72,7 +74,7 @@ const CategoryManager: React.FC<CategoryManagerProps> = ({ onClose, onCategoryCh
 
   const handleUpdate = async (categoryId: string, updates: Partial<KbCategory>) => {
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/kb-categories/${categoryId}`, {
+      const resp = await authFetch(`${apiBaseUrl}/api/kb-categories/${categoryId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updates)
@@ -91,7 +93,7 @@ const CategoryManager: React.FC<CategoryManagerProps> = ({ onClose, onCategoryCh
     if (!window.confirm("确认删除该分类？使用该分类的知识库将变为无分类。")) return;
 
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/kb-categories/${categoryId}`, {
+      const resp = await authFetch(`${apiBaseUrl}/api/kb-categories/${categoryId}`, {
         method: "DELETE"
       });
       if (!resp.ok) throw new Error("删除失败");

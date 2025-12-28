@@ -3,12 +3,14 @@ Prompt模板管理API路由
 支持CRUD操作，实现Prompt在线编辑和版本管理
 """
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 import uuid
 from datetime import datetime
 
 from app.services.db.postgres import _get_pool
+from app.models.user import TokenData
+from app.utils.permission import require_permission
 
 router = APIRouter(prefix="/api/apps/tender/prompts", tags=["prompts"])
 
@@ -47,8 +49,12 @@ class PromptTemplateResponse(BaseModel):
 
 
 @router.get("/modules")
-def list_modules():
-    """获取所有模块列表"""
+def list_modules(current_user: TokenData = Depends(require_permission("system.prompt"))):
+    """
+    获取所有模块列表
+    
+    权限要求：system.prompt
+    """
     return {
         "ok": True,
         "modules": [
@@ -101,9 +107,14 @@ def list_modules():
 @router.get("/")
 def list_prompts(
     module: Optional[str] = None,
-    active_only: bool = True
+    active_only: bool = True,
+    current_user: TokenData = Depends(require_permission("system.prompt"))
 ):
-    """获取Prompt列表"""
+    """
+    获取Prompt列表
+    
+    权限要求：system.prompt
+    """
     pool = _get_pool()
     
     sql = """
@@ -162,8 +173,15 @@ def list_prompts(
 
 
 @router.get("/{prompt_id}")
-def get_prompt(prompt_id: str):
-    """获取单个Prompt详情"""
+def get_prompt(
+    prompt_id: str,
+    current_user: TokenData = Depends(require_permission("system.prompt"))
+):
+    """
+    获取单个Prompt详情
+    
+    权限要求：system.prompt
+    """
     pool = _get_pool()
     
     with pool.connection() as conn:
@@ -214,8 +232,15 @@ def get_prompt(prompt_id: str):
 
 
 @router.post("/")
-def create_prompt(data: PromptTemplateCreate):
-    """创建新Prompt模板"""
+def create_prompt(
+    data: PromptTemplateCreate,
+    current_user: TokenData = Depends(require_permission("system.prompt"))
+):
+    """
+    创建新Prompt模板
+    
+    权限要求：system.prompt
+    """
     pool = _get_pool()
     prompt_id = f"prompt_{uuid.uuid4().hex[:16]}"
     
@@ -234,8 +259,16 @@ def create_prompt(data: PromptTemplateCreate):
 
 
 @router.put("/{prompt_id}")
-def update_prompt(prompt_id: str, data: PromptTemplateUpdate):
-    """更新Prompt模板（自动创建历史版本）"""
+def update_prompt(
+    prompt_id: str, 
+    data: PromptTemplateUpdate,
+    current_user: TokenData = Depends(require_permission("system.prompt"))
+):
+    """
+    更新Prompt模板（自动创建历史版本）
+    
+    权限要求：system.prompt
+    """
     pool = _get_pool()
     
     with pool.connection() as conn:
@@ -306,8 +339,15 @@ def update_prompt(prompt_id: str, data: PromptTemplateUpdate):
 
 
 @router.get("/{prompt_id}/history")
-def get_prompt_history(prompt_id: str):
-    """获取Prompt变更历史"""
+def get_prompt_history(
+    prompt_id: str,
+    current_user: TokenData = Depends(require_permission("system.prompt"))
+):
+    """
+    获取Prompt变更历史
+    
+    权限要求：system.prompt
+    """
     pool = _get_pool()
     
     with pool.connection() as conn:
@@ -346,8 +386,16 @@ def get_prompt_history(prompt_id: str):
 
 
 @router.get("/{prompt_id}/history/{version}")
-def get_prompt_version(prompt_id: str, version: int):
-    """获取指定版本的Prompt内容"""
+def get_prompt_version(
+    prompt_id: str, 
+    version: int,
+    current_user: TokenData = Depends(require_permission("system.prompt"))
+):
+    """
+    获取指定版本的Prompt内容
+    
+    权限要求：system.prompt
+    """
     pool = _get_pool()
     
     with pool.connection() as conn:
@@ -387,8 +435,15 @@ def get_prompt_version(prompt_id: str, version: int):
 
 
 @router.delete("/{prompt_id}")
-def delete_prompt(prompt_id: str):
-    """删除Prompt模板（软删除，设置为inactive）"""
+def delete_prompt(
+    prompt_id: str,
+    current_user: TokenData = Depends(require_permission("system.prompt"))
+):
+    """
+    删除Prompt模板（软删除，设置为inactive）
+    
+    权限要求：system.prompt
+    """
     pool = _get_pool()
     
     with pool.connection() as conn:

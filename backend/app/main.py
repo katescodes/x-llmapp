@@ -21,6 +21,9 @@ from .routers import (
     tender_snippets,
     debug,
     declare,
+    permissions,
+    custom_rules,
+    user_documents,
 )
 from .services.db.postgres import init_db
 from .services.llm_client import get_default_llm_model
@@ -270,6 +273,15 @@ app.include_router(template_analysis.router)
 # Prompt管理
 from app.routers import prompts
 app.include_router(prompts.router)
+
+# 权限管理
+app.include_router(permissions.router)
+
+# 自定义规则管理
+app.include_router(custom_rules.router)
+
+# 用户文档管理
+app.include_router(user_documents.router)
 
 # Legacy tender APIs 已删除
 # if os.getenv("LEGACY_TENDER_APIS_ENABLED", "false").lower() in ("true", "1", "yes"):

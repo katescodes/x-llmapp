@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useAuthFetch } from "../hooks/usePermission";
 
 const API_BASE = "/api/apps/tender/prompts";
 
@@ -29,6 +30,7 @@ interface HistoryItem {
 }
 
 export default function PromptManagementPage() {
+  const authFetch = useAuthFetch();
   const [modules, setModules] = useState<PromptModule[]>([]);
   const [selectedModule, setSelectedModule] = useState<string>("");
   const [prompts, setPrompts] = useState<PromptTemplate[]>([]);
@@ -54,7 +56,7 @@ export default function PromptManagementPage() {
 
   const loadModules = async () => {
     try {
-      const resp = await fetch(`${API_BASE}/modules`);
+      const resp = await authFetch(`${API_BASE}/modules`);
       const data = await resp.json();
       if (data.ok) {
         setModules(data.modules);
@@ -70,7 +72,7 @@ export default function PromptManagementPage() {
 
   const loadPrompts = async (module: string) => {
     try {
-      const resp = await fetch(`${API_BASE}/?module=${module}`);
+      const resp = await authFetch(`${API_BASE}/?module=${module}`);
       const data = await resp.json();
       if (data.ok) {
         setPrompts(data.prompts);
@@ -102,7 +104,7 @@ export default function PromptManagementPage() {
     setLoading(true);
     const currentPromptId = selectedPrompt.id; // 保存当前选中的Prompt ID
     try {
-      const resp = await fetch(`${API_BASE}/${selectedPrompt.id}`, {
+      const resp = await authFetch(`${API_BASE}/${selectedPrompt.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -119,7 +121,7 @@ export default function PromptManagementPage() {
         // 重新加载Prompt列表
         await loadPrompts(selectedModule);
         // 重新选择刚才编辑的Prompt（保持用户的上下文）
-        const updatedPromptResp = await fetch(`${API_BASE}/${currentPromptId}`);
+        const updatedPromptResp = await authFetch(`${API_BASE}/${currentPromptId}`);
         const updatedPromptData = await updatedPromptResp.json();
         if (updatedPromptData.ok) {
           selectPrompt(updatedPromptData.prompt);
@@ -135,7 +137,7 @@ export default function PromptManagementPage() {
 
   const loadHistory = async (promptId: string) => {
     try {
-      const resp = await fetch(`${API_BASE}/${promptId}/history`);
+      const resp = await authFetch(`${API_BASE}/${promptId}/history`);
       const data = await resp.json();
       if (data.ok) {
         setHistory(data.history);
@@ -149,7 +151,7 @@ export default function PromptManagementPage() {
 
   const viewVersion = async (promptId: string, version: number) => {
     try {
-      const resp = await fetch(`${API_BASE}/${promptId}/history/${version}`);
+      const resp = await authFetch(`${API_BASE}/${promptId}/history/${version}`);
       const data = await resp.json();
       if (data.ok) {
         const versionData = data.version_data;

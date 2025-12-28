@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from psycopg_pool import ConnectionPool
 
-from app.utils.auth import get_current_user_sync
+from app.utils.permission import require_permission
+from app.models.user import TokenData
 from app.works.tender.snippet.snippet_extract import (
     extract_format_snippets,
     save_snippets_to_db,
@@ -75,7 +76,7 @@ class ExtractSnippetsResponse(BaseModel):
 async def extract_snippets_from_file(
     project_id: str,
     request: ExtractSnippetsRequest,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """
     从招标文件提取格式范本
@@ -151,7 +152,7 @@ async def extract_snippets_from_file(
 @router.get("/projects/{project_id}/format-snippets", response_model=List[SnippetOut])
 async def list_project_snippets(
     project_id: str,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """
     获取项目的所有格式范本
@@ -195,7 +196,7 @@ async def list_project_snippets(
 @router.get("/format-snippets/{snippet_id}", response_model=SnippetDetailOut)
 async def get_snippet_detail(
     snippet_id: str,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """
     获取范本详情（包含完整 blocks_json）
@@ -244,7 +245,7 @@ async def get_snippet_detail(
 async def apply_snippet_to_node(
     node_id: str,
     request: ApplySnippetRequest,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """
     将格式范本应用到目录节点
@@ -335,7 +336,7 @@ async def apply_snippet_to_node(
 @router.delete("/format-snippets/{snippet_id}")
 async def delete_snippet(
     snippet_id: str,
-    user=Depends(get_current_user_sync)
+    user: TokenData = Depends(require_permission("tender.edit"))
 ):
     """
     删除格式范本

@@ -4,12 +4,15 @@ import hashlib
 import json
 import logging
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from psycopg_pool import ConnectionPool
 
 from app.config import get_settings
 from ..schemas.chat import ChatRequest, ChatResponse, ChatSection, Message, Source, UsedModel
@@ -49,7 +52,7 @@ from ..services.logging.request_logger import (
 )
 from ..services.google_search import filter_chinese_entries, google_search_multi
 from ..services.rag_service import retrieve_context
-from ..platform.retrieval.providers.legacy.retriever import retrieve
+from ..platform.retrieval.new_retriever import NewRetriever
 from ..services.search_usage import usage_manager
 from ..services.segmenter.chunker import chunk_document
 from ..services.settings_store import load_settings
@@ -78,6 +81,41 @@ MAX_CONTEXT_TOKENS = 128000  # 最大上下文token数（估算值，用于防�
 WEB_FETCH_MIN = 15
 WEB_FETCH_MAX = 30
 WEB_MAX_PER_DOMAIN = 3
+
+
+def _get_pool() -> "ConnectionPool":
+    """从 postgres 模块获取连接池"""
+    from app.services.db.postgres import _get_pool as get_sync_pool
+    return get_sync_pool()
+
+
+def _find_projects_by_kb_ids(pool, kb_ids: List[str]) -> List[str]:
+    """
+    根据 kb_ids 查找对应的 tender 项目 ID
+    
+    Args:
+        pool: 数据库连接池
+        kb_ids: 知识库 ID 列表
+        
+    Returns:
+        项目 ID 列表
+    """
+    if not kb_ids:
+        return []
+    
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            # 查询 tender_projects 表
+            placeholders = ",".join(["%s"] * len(kb_ids))
+            cur.execute(
+                f"""
+                SELECT id FROM tender_projects 
+                WHERE kb_id IN ({placeholders})
+                """,
+                kb_ids
+            )
+            rows = cur.fetchall()
+            return [row[0] for row in rows]
 
 
 def _prepare_sources(retrieved_chunks: list[dict], min_sources: int = 0) -> list[Source]:
@@ -795,49 +833,89 @@ async def _chat_endpoint_impl(
     embedding_usage: dict = {"need_web": enable_web, "used_dense": False}
     retrieved_chunks: list[dict] = []
     retrieval_stats = {"dense_candidates": 0, "lexical_candidates": 0, "fused": 0}
-    dense_vector = None
 
+    # 使用新的检索器
     if retrieval_targets and req.mode != "history_decision":
         if embedding_provider is None:
             raise HTTPException(status_code=503, detail="未配置默认 Embedding 服务，请先在设置中添加")
-        query_vectors = await embed_texts([req.message], provider=embedding_provider)
-        if not query_vectors:
-            raise HTTPException(status_code=503, detail="Embedding 服务未返回任何向量")
-        dense_vector = query_vectors[0].get("dense")
-        if not dense_vector:
-            raise HTTPException(status_code=503, detail="Embedding 服务返回空向量，请检查配置")
+        
         embedding_usage.update(
             {
                 "provider_id": embedding_provider.id,
                 "model": embedding_provider.model,
                 "expected_dense": embedding_provider.output_dense,
                 "used_dense": True,
-                "dense_dim": len(dense_vector),
             }
         )
+        
         try:
-            retrieved_chunks, retrieval_stats = await retrieve(
-                query=req.message,
-                kb_ids=retrieval_targets,
-                kb_categories=None,
-                anchors=intent_plan.anchors,
-                embedding_provider=embedding_provider,
-                dense_topk=dense_limit,
-                lexical_topk=lexical_limit,
-                final_topk=final_target,
-                query_vector=dense_vector,
-                request_id=request_id,
-            )
-        except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+            # 根据 kb_ids 查找对应的项目
+            pool = _get_pool()
+            project_ids = _find_projects_by_kb_ids(pool, effective_kb_ids)
+            
+            if project_ids:
+                req_logger.info(
+                    "Knowledge base retrieval: kb_ids=%s -> project_ids=%s",
+                    effective_kb_ids,
+                    project_ids,
+                )
+                
+                # 使用新检索器检索所有相关项目
+                new_retriever = NewRetriever(pool)
+                all_results = []
+                
+                for project_id in project_ids:
+                    try:
+                        chunks = await new_retriever.retrieve(
+                            query=req.message,
+                            project_id=project_id,
+                            doc_types=None,  # 不限制文档类型
+                            embedding_provider=embedding_provider,
+                            top_k=final_target,
+                            dense_limit=dense_limit,
+                            lexical_limit=lexical_limit,
+                        )
+                        all_results.extend(chunks)
+                    except Exception as e:
+                        req_logger.warning(f"Retrieval failed for project {project_id}: {e}")
+                
+                # 转换为旧格式以兼容后续代码
+                retrieved_chunks = []
+                for chunk in all_results[:final_target]:
+                    retrieved_chunks.append({
+                        "chunk_id": chunk.chunk_id,
+                        "kb_id": chunk.meta.get("kb_id"),
+                        "doc_id": chunk.meta.get("doc_id"),
+                        "title": chunk.meta.get("title", ""),
+                        "url": chunk.meta.get("url"),
+                        "text": chunk.text,
+                        "position": chunk.meta.get("position"),
+                        "score": chunk.score,
+                        "hit_dense": True,
+                        "hit_lexical": True,
+                        "kb_category": "tender_doc",
+                    })
+                
+                retrieval_stats = {
+                    "dense_candidates": len(all_results),
+                    "lexical_candidates": len(all_results),
+                    "fused": len(retrieved_chunks),
+                }
+                req_logger.info(f"New retrieval done: {len(retrieved_chunks)} chunks from {len(project_ids)} projects")
+            else:
+                req_logger.warning(f"No projects found for kb_ids={effective_kb_ids}")
+                
+        except Exception as exc:
+            req_logger.error(f"New retrieval failed: {exc}", exc_info=True)
+            raise HTTPException(status_code=502, detail=f"检索失败: {str(exc)}") from exc
+        
         embedding_usage["retrieval"] = retrieval_stats
+    
     used_search = enable_web
     req_logger.info(
-        "Retrieval summary kb_ids=%s dense=%s lexical=%s fused=%s used_search=%s chunks_sample=%s",
+        "Retrieval summary kb_ids=%s chunks=%s used_search=%s chunks_sample=%s",
         retrieval_targets,
-        retrieval_stats.get("dense_candidates"),
-        retrieval_stats.get("lexical_candidates"),
-        retrieval_stats.get("fused"),
+        len(retrieved_chunks),
         used_search,
         [{"kb_id": c.get("kb_id"), "doc_id": c.get("doc_id")[:16] if c.get("doc_id") else None, "score": round(c.get("score", 0), 3)} for c in retrieved_chunks[:5]],
     )

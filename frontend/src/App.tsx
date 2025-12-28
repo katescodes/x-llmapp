@@ -7,11 +7,12 @@ import LoginPage from "./components/LoginPage";
 import TenderWorkspace from "./components/TenderWorkspace";
 import DeclareWorkspace from "./components/DeclareWorkspace";
 import FormatTemplatesPage from "./components/FormatTemplatesPage";
+import PermissionManagementPage from "./components/PermissionManagementPage";
 import DebugPanel from "./components/DebugPanel";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { usePermission } from "./hooks/usePermission";
 
-type Page = "chat" | "settings" | "kb" | "recordings" | "tender" | "declare" | "format-templates";
+type Page = "chat" | "settings" | "kb" | "recordings" | "tender" | "declare" | "format-templates" | "permissions";
 
 const MainApp: React.FC = () => {
   const { user, logout, isLoading } = useAuth();
@@ -149,6 +150,22 @@ const MainApp: React.FC = () => {
         >
           ⚙️ 系统设置
         </button>
+        {/* 权限管理入口（仅管理员可见） */}
+        {user.role === 'admin' && (
+          <button
+            onClick={() => setCurrentPage("permissions")}
+            style={{
+              padding: "8px 16px",
+              border: "none",
+              background: currentPage === "permissions" ? "rgba(79, 70, 229, 0.2)" : "transparent",
+              color: "#e5e7eb",
+              borderRadius: "6px",
+              cursor: "pointer"
+            }}
+          >
+            🔐 权限管理
+          </button>
+        )}
         </div>
         
         {/* 用户信息和退出 */}
@@ -234,6 +251,12 @@ const MainApp: React.FC = () => {
           aria-hidden={currentPage !== "settings"}
         >
           <SystemSettings />
+        </div>
+        <div
+          style={pageContainerStyle(currentPage === "permissions")}
+          aria-hidden={currentPage !== "permissions"}
+        >
+          <PermissionManagementPage />
         </div>
       </div>
       

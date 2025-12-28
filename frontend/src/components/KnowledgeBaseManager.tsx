@@ -6,11 +6,10 @@ import {
   DocCategory,
   KbCategory
 } from "../types";
-import { API_BASE_URL } from "../config/api";
+import { api } from "../config/api";
 import CategoryManager from "./CategoryManager";
 
 const KnowledgeBaseManager: React.FC = () => {
-  const apiBaseUrl = API_BASE_URL;
   const [categories, setCategories] = useState<KbCategory[]>([]);
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const categoryLabels: Record<DocCategory, string> = {
@@ -18,7 +17,13 @@ const KnowledgeBaseManager: React.FC = () => {
     history_case: "📋 历史案例",
     reference_rule: "📘 规章制度",
     web_snapshot: "🌐 网页快照",
-    tender_app: "📋 招投标文档"
+    tender_app: "📋 招投标文档",
+    tender_notice: "📑 招标文件",
+    bid_document: "📝 投标文件",
+    format_template: "📋 格式模板",
+    standard_spec: "📚 标准规范",
+    technical_material: "🔧 技术资料",
+    qualification_doc: "🏆 资质资料"
   };
 
   const getCategoryColor = (category: DocCategory): string => {
@@ -27,7 +32,13 @@ const KnowledgeBaseManager: React.FC = () => {
       history_case: "#3b82f6",
       reference_rule: "#8b5cf6",
       web_snapshot: "#f59e0b",
-      tender_app: "#ef4444"
+      tender_app: "#ef4444",
+      tender_notice: "#f97316",
+      bid_document: "#06b6d4",
+      format_template: "#8b5cf6",
+      standard_spec: "#14b8a6",
+      technical_material: "#10b981",
+      qualification_doc: "#f59e0b"
     };
     return colors[category] || "#6b7280";
   };
@@ -45,21 +56,16 @@ const KnowledgeBaseManager: React.FC = () => {
 
   const fetchCategories = useCallback(async () => {
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/kb-categories`);
-      if (resp.ok) {
-        const data: KbCategory[] = await resp.json();
-        setCategories(data);
-      }
+      const data: KbCategory[] = await api.get('/api/kb-categories');
+      setCategories(data);
     } catch (error) {
       console.error("加载分类失败", error);
     }
-  }, [apiBaseUrl]);
+  }, []);
 
   const fetchKbs = useCallback(async () => {
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/kb`);
-      if (!resp.ok) throw new Error("获取知识库列表失败");
-      const data: KnowledgeBase[] = await resp.json();
+      const data: KnowledgeBase[] = await api.get('/api/kb');
       setKbs(data);
       setActiveKb((prev) => {
         if (!prev) return null;
@@ -74,7 +80,7 @@ const KnowledgeBaseManager: React.FC = () => {
       console.error(error);
       alert("加载知识库列表失败，请检查后端日志。");
     }
-  }, [apiBaseUrl]);
+  }, []);
 
   useEffect(() => {
     fetchCategories();
@@ -84,9 +90,7 @@ const KnowledgeBaseManager: React.FC = () => {
   const loadDocs = async (kbId: string) => {
     setLoadingDocs(true);
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/kb/${kbId}/docs`);
-      if (!resp.ok) throw new Error("获取文档列表失败");
-      const data: KnowledgeBaseDocument[] = await resp.json();
+      const data: KnowledgeBaseDocument[] = await api.get(`/api/kb/${kbId}/docs`);
       setDocs(data);
     } catch (error) {
       console.error(error);
@@ -110,17 +114,11 @@ const KnowledgeBaseManager: React.FC = () => {
     }
     setCreating(true);
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/kb`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: form.name.trim(),
-          description: form.description.trim(),
-          category_id: form.category_id || null
-        })
+      const data: KnowledgeBase = await api.post('/api/kb', {
+        name: form.name.trim(),
+        description: form.description.trim(),
+        category_id: form.category_id || null
       });
-      if (!resp.ok) throw new Error("创建知识库失败");
-      const data: KnowledgeBase = await resp.json();
       setForm({ name: "", description: "", category_id: "" });
       await fetchKbs();
       setActiveKb(data);
@@ -137,10 +135,7 @@ const KnowledgeBaseManager: React.FC = () => {
   const handleDeleteKb = async (kbId: string) => {
     if (!window.confirm("删除后将无法恢复，确定删除该知识库吗？")) return;
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/kb/${kbId}`, {
-        method: "DELETE"
-      });
-      if (!resp.ok) throw new Error("删除知识库失败");
+      await api.delete(`/api/kb/${kbId}`);
       if (activeKb?.id === kbId) {
         setActiveKb(null);
         setDocs([]);
@@ -164,11 +159,7 @@ const KnowledgeBaseManager: React.FC = () => {
 
 ⚠️ 此操作不可恢复！请确认是否继续？`)) return;
     try {
-      const resp = await fetch(
-        `${apiBaseUrl}/api/kb/${activeKb.id}/docs/${docId}`,
-        { method: "DELETE" }
-      );
-      if (!resp.ok) throw new Error("删除文档失败");
+      await api.delete(`/api/kb/${activeKb.id}/docs/${docId}`);
       loadDocs(activeKb.id);
     } catch (error) {
       console.error(error);
@@ -196,47 +187,13 @@ const KnowledgeBaseManager: React.FC = () => {
       });
       formData.append("kb_category", kbCategory);
       
-      // 使用 XMLHttpRequest 来跟踪上传进度
-      const xhr = new XMLHttpRequest();
+      // 使用统一的 api.upload 方法，支持上传进度
+      const data = await api.upload(
+        `/api/kb/${activeKb.id}/import`,
+        formData,
+        (progress) => setImportProgress(progress)
+      );
       
-      const uploadPromise = new Promise<any>((resolve, reject) => {
-        // 上传进度
-        xhr.upload.addEventListener("progress", (e) => {
-          if (e.lengthComputable) {
-            const percentComplete = Math.round((e.loaded / e.total) * 100);
-            setImportProgress(percentComplete);
-          }
-        });
-        
-        // 请求完成
-        xhr.addEventListener("load", () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            try {
-              const data = JSON.parse(xhr.responseText);
-              resolve(data);
-            } catch (err) {
-              reject(new Error("解析响应失败"));
-            }
-          } else {
-            reject(new Error(`导入失败 (HTTP ${xhr.status})`));
-          }
-        });
-        
-        // 请求失败
-        xhr.addEventListener("error", () => {
-          reject(new Error("网络错误"));
-        });
-        
-        // 请求中止
-        xhr.addEventListener("abort", () => {
-          reject(new Error("请求被中止"));
-        });
-        
-        xhr.open("POST", `${apiBaseUrl}/api/kb/${activeKb.id}/import`);
-        xhr.send(formData);
-      });
-      
-      const data = await uploadPromise;
       setImportResults(data.items || []);
       setSelectedFiles(null);
       loadDocs(activeKb.id);

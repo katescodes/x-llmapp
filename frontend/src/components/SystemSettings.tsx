@@ -13,7 +13,7 @@ import {
 } from "../types";
 import { API_BASE_URL } from "../config/api";
 import { useAuth } from "../contexts/AuthContext";
-import { useAuthFetch } from "../hooks/usePermission";
+import { useAuthFetch, usePermission } from "../hooks/usePermission";
 
 // ASR配置类型
 interface ASRConfig {
@@ -191,9 +191,27 @@ interface HistoryItem {
 const SystemSettings: React.FC<LLMSettingsProps> = () => {
   const { token } = useAuth();
   const authFetch = useAuthFetch();
+  const { hasPermission, isAdmin } = usePermission();
+  
+  // 检查用户拥有的系统设置权限
+  const canAccessLLM = hasPermission('system.model');
+  const canAccessEmbedding = hasPermission('system.embedding');
+  const canAccessApp = hasPermission('system.settings');
+  const canAccessASR = hasPermission('system.asr');
+  const canAccessPrompts = hasPermission('system.prompt');
+  
+  // 确定第一个可访问的tab
+  const getFirstAccessibleTab = (): 'llm' | 'embedding' | 'app' | 'asr' | 'prompts' => {
+    if (canAccessLLM) return 'llm';
+    if (canAccessEmbedding) return 'embedding';
+    if (canAccessApp) return 'app';
+    if (canAccessASR) return 'asr';
+    if (canAccessPrompts) return 'prompts';
+    return 'llm'; // 默认，实际上如果没有任何权限，整个组件不应该被渲染
+  };
   
   // Tab state
-  const [currentTab, setCurrentTab] = useState<'llm' | 'embedding' | 'app' | 'asr' | 'prompts'>('llm');
+  const [currentTab, setCurrentTab] = useState<'llm' | 'embedding' | 'app' | 'asr' | 'prompts'>(getFirstAccessibleTab());
   
   // LLM states
   const [models, setModels] = useState<LLMModel[]>([]);
@@ -460,7 +478,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
   
   const loadPromptModules = async () => {
     try {
-      const resp = await fetch(`/api/apps/tender/prompts/modules`);
+      const resp = await authFetch(`/api/apps/tender/prompts/modules`);
       const data = await resp.json();
       if (data.ok) {
         setPromptModules(data.modules);
@@ -475,7 +493,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
 
   const loadPrompts = async (module: string) => {
     try {
-      const resp = await fetch(`/api/apps/tender/prompts/?module=${module}`);
+      const resp = await authFetch(`/api/apps/tender/prompts/?module=${module}`);
       const data = await resp.json();
       if (data.ok) {
         setPrompts(data.prompts);
@@ -505,7 +523,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
 
     setPromptLoading(true);
     try {
-      const resp = await fetch(`/api/apps/tender/prompts/${selectedPrompt.id}`, {
+      const resp = await authFetch(`/api/apps/tender/prompts/${selectedPrompt.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -531,7 +549,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
 
   const loadPromptHistory = async (promptId: string) => {
     try {
-      const resp = await fetch(`/api/apps/tender/prompts/${promptId}/history`);
+      const resp = await authFetch(`/api/apps/tender/prompts/${promptId}/history`);
       const data = await resp.json();
       if (data.ok) {
         setPromptHistory(data.history);
@@ -544,7 +562,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
 
   const viewPromptVersion = async (promptId: string, version: number) => {
     try {
-      const resp = await fetch(`/api/apps/tender/prompts/${promptId}/history/${version}`);
+      const resp = await authFetch(`/api/apps/tender/prompts/${promptId}/history/${version}`);
       const data = await resp.json();
       if (data.ok) {
         const versionData = data.version_data;
@@ -563,10 +581,12 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
 
   const loadModels = async () => {
     try {
-      const response = await fetch(`${apiBaseUrl}/api/settings/llm-models`);
+      const response = await authFetch(`${apiBaseUrl}/api/settings/llm-models`);
       if (response.ok) {
         const data = await response.json();
         setModels(data);
+      } else {
+        console.error("加载模型列表失败:", response.status, response.statusText);
       }
     } catch (error) {
       console.error("加载模型列表失败:", error);
@@ -577,10 +597,12 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
 
   const loadEmbeddingProviders = async () => {
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/settings/embedding-providers`);
+      const resp = await authFetch(`${apiBaseUrl}/api/settings/embedding-providers`);
       if (resp.ok) {
         const data = await resp.json();
         setEmbeddingProviders(data);
+      } else {
+        console.error("加载 Embedding 服务失败:", resp.status, resp.statusText);
       }
     } catch (error) {
       console.error("加载 Embedding 服务失败:", error);
@@ -589,7 +611,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
 
   const loadAppSettings = async () => {
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/settings/app`);
+      const resp = await authFetch(`${apiBaseUrl}/api/settings/app`);
       if (resp.ok) {
         const data = await resp.json();
         setAppSettings(data);
@@ -638,7 +660,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
       if (googleKeyDraft.cx) {
         payload.google_cse_cx = googleKeyDraft.cx;
       }
-      const resp = await fetch(`${apiBaseUrl}/api/settings/search/test`, {
+      const resp = await authFetch(`${apiBaseUrl}/api/settings/search/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -742,7 +764,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
     if (!confirm("确定要删除这个模型吗？")) return;
 
     try {
-      const response = await fetch(`${apiBaseUrl}/api/settings/llm-models/${modelId}`, {
+      const response = await authFetch(`${apiBaseUrl}/api/settings/llm-models/${modelId}`, {
         method: "DELETE",
       });
 
@@ -842,7 +864,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
   // 设置默认模型
   const handleSetDefault = async (modelId: string) => {
     try {
-      const response = await fetch(`${apiBaseUrl}/api/settings/llm-models/${modelId}/set-default`, {
+      const response = await authFetch(`${apiBaseUrl}/api/settings/llm-models/${modelId}/set-default`, {
         method: "POST",
       });
 
@@ -1093,91 +1115,101 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
         borderBottom: "2px solid rgba(148, 163, 184, 0.2)",
         paddingBottom: "8px"
       }}>
-        <button
-          onClick={() => setCurrentTab('llm')}
-          style={{
-            padding: "10px 20px",
-            background: currentTab === 'llm' ? "rgba(79, 70, 229, 0.2)" : "transparent",
-            color: currentTab === 'llm' ? "#22c55e" : "#94a3b8",
-            border: "none",
-            borderBottom: currentTab === 'llm' ? "2px solid #22c55e" : "none",
-            borderRadius: "6px 6px 0 0",
-            cursor: "pointer",
-            fontSize: "14px",
-            fontWeight: currentTab === 'llm' ? "600" : "normal",
-            transition: "all 0.2s"
-          }}
-        >
-          🤖 LLM模型
-        </button>
-        <button
-          onClick={() => setCurrentTab('embedding')}
-          style={{
-            padding: "10px 20px",
-            background: currentTab === 'embedding' ? "rgba(79, 70, 229, 0.2)" : "transparent",
-            color: currentTab === 'embedding' ? "#22c55e" : "#94a3b8",
-            border: "none",
-            borderBottom: currentTab === 'embedding' ? "2px solid #22c55e" : "none",
-            borderRadius: "6px 6px 0 0",
-            cursor: "pointer",
-            fontSize: "14px",
-            fontWeight: currentTab === 'embedding' ? "600" : "normal",
-            transition: "all 0.2s"
-          }}
-        >
-          🔌 向量模型
-        </button>
-        <button
-          onClick={() => setCurrentTab('app')}
-          style={{
-            padding: "10px 20px",
-            background: currentTab === 'app' ? "rgba(79, 70, 229, 0.2)" : "transparent",
-            color: currentTab === 'app' ? "#22c55e" : "#94a3b8",
-            border: "none",
-            borderBottom: currentTab === 'app' ? "2px solid #22c55e" : "none",
-            borderRadius: "6px 6px 0 0",
-            cursor: "pointer",
-            fontSize: "14px",
-            fontWeight: currentTab === 'app' ? "600" : "normal",
-            transition: "all 0.2s"
-          }}
-        >
-          📱 应用设置
-        </button>
-        <button
-          onClick={() => setCurrentTab('asr')}
-          style={{
-            padding: "10px 20px",
-            background: currentTab === 'asr' ? "rgba(79, 70, 229, 0.2)" : "transparent",
-            color: currentTab === 'asr' ? "#22c55e" : "#94a3b8",
-            border: "none",
-            borderBottom: currentTab === 'asr' ? "2px solid #22c55e" : "none",
-            borderRadius: "6px 6px 0 0",
-            cursor: "pointer",
-            fontSize: "14px",
-            fontWeight: currentTab === 'asr' ? "600" : "normal",
-            transition: "all 0.2s"
-          }}
-        >
-          🎤 语音转文本
-        </button>
-        <button
-          onClick={() => setCurrentTab('prompts')}
-          style={{
-            padding: "10px 20px",
-            background: currentTab === 'prompts' ? "rgba(79, 70, 229, 0.2)" : "transparent",
-            color: currentTab === 'prompts' ? "#22c55e" : "#94a3b8",
-            border: "none",
-            borderBottom: currentTab === 'prompts' ? "2px solid #22c55e" : "none",
-            borderRadius: "6px 6px 0 0",
-            cursor: "pointer",
-            fontSize: "14px",
-            fontWeight: currentTab === 'prompts' ? "600" : "normal",
-            transition: "all 0.2s"
-          }}
-        >
-          📝 Prompt管理
-        </button>
+        {canAccessLLM && (
+          <button
+            onClick={() => setCurrentTab('llm')}
+            style={{
+              padding: "10px 20px",
+              background: currentTab === 'llm' ? "rgba(79, 70, 229, 0.2)" : "transparent",
+              color: currentTab === 'llm' ? "#22c55e" : "#94a3b8",
+              border: "none",
+              borderBottom: currentTab === 'llm' ? "2px solid #22c55e" : "none",
+              borderRadius: "6px 6px 0 0",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: currentTab === 'llm' ? "600" : "normal",
+              transition: "all 0.2s"
+            }}
+          >
+            🤖 LLM模型
+          </button>
+        )}
+        {canAccessEmbedding && (
+          <button
+            onClick={() => setCurrentTab('embedding')}
+            style={{
+              padding: "10px 20px",
+              background: currentTab === 'embedding' ? "rgba(79, 70, 229, 0.2)" : "transparent",
+              color: currentTab === 'embedding' ? "#22c55e" : "#94a3b8",
+              border: "none",
+              borderBottom: currentTab === 'embedding' ? "2px solid #22c55e" : "none",
+              borderRadius: "6px 6px 0 0",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: currentTab === 'embedding' ? "600" : "normal",
+              transition: "all 0.2s"
+            }}
+          >
+            🔌 向量模型
+          </button>
+        )}
+        {canAccessApp && (
+          <button
+            onClick={() => setCurrentTab('app')}
+            style={{
+              padding: "10px 20px",
+              background: currentTab === 'app' ? "rgba(79, 70, 229, 0.2)" : "transparent",
+              color: currentTab === 'app' ? "#22c55e" : "#94a3b8",
+              border: "none",
+              borderBottom: currentTab === 'app' ? "2px solid #22c55e" : "none",
+              borderRadius: "6px 6px 0 0",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: currentTab === 'app' ? "600" : "normal",
+              transition: "all 0.2s"
+            }}
+          >
+            📱 应用设置
+          </button>
+        )}
+        {canAccessASR && (
+          <button
+            onClick={() => setCurrentTab('asr')}
+            style={{
+              padding: "10px 20px",
+              background: currentTab === 'asr' ? "rgba(79, 70, 229, 0.2)" : "transparent",
+              color: currentTab === 'asr' ? "#22c55e" : "#94a3b8",
+              border: "none",
+              borderBottom: currentTab === 'asr' ? "2px solid #22c55e" : "none",
+              borderRadius: "6px 6px 0 0",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: currentTab === 'asr' ? "600" : "normal",
+              transition: "all 0.2s"
+            }}
+          >
+            🎤 语音转文本
+          </button>
+        )}
+        {canAccessPrompts && (
+          <button
+            onClick={() => setCurrentTab('prompts')}
+            style={{
+              padding: "10px 20px",
+              background: currentTab === 'prompts' ? "rgba(79, 70, 229, 0.2)" : "transparent",
+              color: currentTab === 'prompts' ? "#22c55e" : "#94a3b8",
+              border: "none",
+              borderBottom: currentTab === 'prompts' ? "2px solid #22c55e" : "none",
+              borderRadius: "6px 6px 0 0",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: currentTab === 'prompts' ? "600" : "normal",
+              transition: "all 0.2s"
+            }}
+          >
+            📝 Prompt管理
+          </button>
+        )}
       </div>
 
       {/* LLM模型配置标签页 */}
@@ -1390,7 +1422,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
               if (!retrievalForm) return;
               setSavingRetrieval(true);
               try {
-                const resp = await fetch(`${apiBaseUrl}/api/settings/app`, {
+                const resp = await authFetch(`${apiBaseUrl}/api/settings/app`, {
                   method: "PUT",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ retrieval: retrievalForm }),
@@ -1828,7 +1860,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
               setSavingSearch(true);
               try {
                 const { google_cse_api_key, google_cse_cx, ...rest } = searchForm;
-                const resp = await fetch(`${apiBaseUrl}/api/settings/app`, {
+                const resp = await authFetch(`${apiBaseUrl}/api/settings/app`, {
                   method: "PUT",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ search: rest }),
@@ -1838,7 +1870,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
                   throw new Error(err);
                 }
                 if (googleKeyDraft.apiKey || googleKeyDraft.cx) {
-                  const respKey = await fetch(`${apiBaseUrl}/api/settings/search/google-key`, {
+                  const respKey = await authFetch(`${apiBaseUrl}/api/settings/search/google-key`, {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({

@@ -75,11 +75,12 @@ def create_project(req: ProjectCreateReq, user=Depends(get_current_user_sync)):
     """创建申报项目"""
     from app.services.kb_service import create_kb
     
-    # 创建知识库
+    # 创建知识库，设置owner为当前用户
     kb_id = create_kb(
         name=f"申报-{req.name}",
         description=req.description or f"申报项目：{req.name}",
-        category_id="cat_knowledge"
+        category_id="cat_knowledge",
+        owner_id=user.user_id  # 关键：设置知识库所有者
     )
     
     # 创建项目

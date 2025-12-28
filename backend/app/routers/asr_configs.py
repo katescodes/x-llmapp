@@ -6,7 +6,8 @@ from fastapi import APIRouter, HTTPException, status, Depends
 from pydantic import BaseModel
 
 from app.services import asr_config_service
-from app.utils.auth import require_admin, TokenData
+from app.models.user import TokenData
+from app.utils.permission import require_permission
 
 router = APIRouter(prefix="/api/asr-configs", tags=["ASR Configurations"])
 
@@ -38,10 +39,12 @@ class ImportCurlRequest(BaseModel):
 
 @router.get("")
 async def list_configs(
-    current_user: TokenData = Depends(require_admin)
+    current_user: TokenData = Depends(require_permission("system.asr"))
 ):
     """
-    获取所有ASR配置列表（仅管理员）
+    获取所有ASR配置列表
+    
+    权限要求：system.asr
     """
     configs = asr_config_service.get_all_configs()
     return {"items": configs, "total": len(configs)}
@@ -49,10 +52,12 @@ async def list_configs(
 @router.get("/{config_id}")
 async def get_config(
     config_id: str,
-    current_user: TokenData = Depends(require_admin)
+    current_user: TokenData = Depends(require_permission("system.asr"))
 ):
     """
-    获取指定ASR配置详情（仅管理员）
+    获取指定ASR配置详情
+    
+    权限要求：system.asr
     """
     config = asr_config_service.get_config_by_id(config_id)
     
@@ -67,10 +72,12 @@ async def get_config(
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_config(
     config_data: ASRConfigCreate,
-    current_user: TokenData = Depends(require_admin)
+    current_user: TokenData = Depends(require_permission("system.asr"))
 ):
     """
-    创建新的ASR配置（仅管理员）
+    创建新的ASR配置
+    
+    权限要求：system.asr
     """
     config = asr_config_service.create_config(
         name=config_data.name,
@@ -89,10 +96,12 @@ async def create_config(
 async def update_config(
     config_id: str,
     update_data: ASRConfigUpdate,
-    current_user: TokenData = Depends(require_admin)
+    current_user: TokenData = Depends(require_permission("system.asr"))
 ):
     """
-    更新ASR配置（仅管理员）
+    更新ASR配置
+    
+    权限要求：system.asr
     """
     config = asr_config_service.update_config(
         config_id=config_id,
@@ -111,10 +120,12 @@ async def update_config(
 @router.delete("/{config_id}")
 async def delete_config(
     config_id: str,
-    current_user: TokenData = Depends(require_admin)
+    current_user: TokenData = Depends(require_permission("system.asr"))
 ):
     """
-    删除ASR配置（仅管理员）
+    删除ASR配置
+    
+    权限要求：system.asr
     """
     deleted = asr_config_service.delete_config(config_id)
     
@@ -129,10 +140,12 @@ async def delete_config(
 @router.post("/{config_id}/test")
 async def test_config(
     config_id: str,
-    current_user: TokenData = Depends(require_admin)
+    current_user: TokenData = Depends(require_permission("system.asr"))
 ):
     """
-    测试ASR配置是否可用（仅管理员）
+    测试ASR配置是否可用
+    
+    权限要求：system.asr
     """
     result = await asr_config_service.test_config(config_id)
     return result
@@ -140,10 +153,12 @@ async def test_config(
 @router.post("/import/curl", status_code=status.HTTP_201_CREATED)
 async def import_from_curl(
     request: ImportCurlRequest,
-    current_user: TokenData = Depends(require_admin)
+    current_user: TokenData = Depends(require_permission("system.asr"))
 ):
     """
-    从curl命令导入ASR配置（仅管理员）
+    从curl命令导入ASR配置
+    
+    权限要求：system.asr
     
     示例curl命令:
     ```

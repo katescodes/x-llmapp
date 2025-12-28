@@ -18,7 +18,9 @@ from pydantic import BaseModel
 from psycopg_pool import ConnectionPool
 
 from app.services.dao.tender_dao import TenderDAO
+from app.utils.permission import require_permission
 from app.utils.auth import get_current_user_sync
+from app.models.user import TokenData
 
 logger = logging.getLogger(__name__)
 

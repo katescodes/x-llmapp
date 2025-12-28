@@ -74,13 +74,58 @@ def _parse_docx(data: bytes) -> Tuple[str, dict]:
     Returns:
         (text, metadata) 元组
     """
+    import zipfile
+    
+    # 先尝试标准方式解析
     try:
         doc = DocxDocument(io.BytesIO(data))
         paragraphs = [para.text for para in doc.paragraphs if para.text]
         text = "\n".join(paragraphs)
         return text, {"paragraphs": len(paragraphs), "chars": len(text)}
+    except zipfile.BadZipFile as e:
+        # ZIP 文件损坏，尝试使用容错模式
+        error_msg = str(e)
+        
+        # 如果是图片或媒体文件损坏，尝试提取文本
+        if "media/" in error_msg or "image" in error_msg.lower():
+            try:
+                # 使用 zipfile 的容错模式直接提取 document.xml
+                import xml.etree.ElementTree as ET
+                
+                with zipfile.ZipFile(io.BytesIO(data), 'r') as zip_ref:
+                    # 读取 document.xml，这通常包含所有文本内容
+                    doc_xml = zip_ref.read('word/document.xml')
+                    root = ET.fromstring(doc_xml)
+                    
+                    # 提取所有文本节点
+                    # DOCX 的文本在 w:t 标签中
+                    namespaces = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+                    text_elements = root.findall('.//w:t', namespaces)
+                    paragraphs = [elem.text for elem in text_elements if elem.text]
+                    text = "\n".join(paragraphs)
+                    
+                    if text.strip():
+                        return text, {
+                            "paragraphs": len(paragraphs),
+                            "chars": len(text),
+                            "warning": f"文件部分损坏（{error_msg}），但文本内容已成功提取"
+                        }
+            except Exception as fallback_error:
+                # 容错模式也失败，返回错误
+                return "", {
+                    "error": f"DOCX parse failed: {error_msg}. Fallback also failed: {str(fallback_error)}",
+                    "chars": 0,
+                    "paragraphs": 0
+                }
+        
+        # 其他类型的 ZIP 错误，直接返回错误
+        return "", {
+            "error": f"DOCX parse failed: {error_msg}",
+            "chars": 0,
+            "paragraphs": 0
+        }
     except Exception as e:
-        # DOCX 解析失败（可能是文件损坏），返回错误信息
+        # 其他异常，返回错误信息
         error_msg = str(e)
         return "", {
             "error": f"DOCX parse failed: {error_msg}",

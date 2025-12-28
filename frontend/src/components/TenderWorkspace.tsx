@@ -16,6 +16,8 @@ import ReviewTable from './tender/ReviewTable';
 import RichTocPreview from './template/RichTocPreview';
 import { templateSpecToTemplateStyle, templateSpecToTocItems } from './template/templatePreviewUtils';
 import FormatTemplatesPage from './FormatTemplatesPage';
+import CustomRulesPage from './CustomRulesPage';
+import UserDocumentsPage from './UserDocumentsPage';
 import type { SampleFragment, SampleFragmentPreview } from '../types/tender';
 import type { RiskAnalysisData } from '../types/riskAnalysis';
 
@@ -139,8 +141,8 @@ export default function TenderWorkspace() {
   // 五步工作流
   const [activeTab, setActiveTab] = useState<number>(1);
 
-  // 视图模式：项目信息（含 Step1-5）/ 嵌入式模板管理
-  const [viewMode, setViewMode] = useState<"projectInfo" | "formatTemplates">("projectInfo");
+  // 视图模式：项目信息（含 Step1-5）/ 嵌入式模板管理 / 自定义规则 / 用户文档
+  const [viewMode, setViewMode] = useState<"projectInfo" | "formatTemplates" | "customRules" | "userDocuments">("projectInfo");
   
   // ========== 新架构：按项目ID存储所有状态 ==========
   
@@ -175,6 +177,7 @@ export default function TenderWorkspace() {
     formatPreviewBlobUrl: string;
     selectedBidder: string;
     selectedRuleAssetIds: string[];
+    selectedRulePackIds: string[];  // 新增：选中的自定义规则包ID列表
   }
   
   // 创建空状态
@@ -203,6 +206,7 @@ export default function TenderWorkspace() {
     formatPreviewBlobUrl: "",
     selectedBidder: "",
     selectedRuleAssetIds: [],
+    selectedRulePackIds: [],  // 新增
   }), []);
   
   // 所有项目的状态存储
@@ -379,6 +383,14 @@ export default function TenderWorkspace() {
     updateProjectState(currentProject.id, { selectedRuleAssetIds: newValue });
   }, [currentProject, state.selectedRuleAssetIds, updateProjectState]);
   
+  // 新增：选中的规则包ID
+  const selectedRulePackIds = state.selectedRulePackIds;
+  const setSelectedRulePackIds = useCallback((value: string[] | ((prev: string[]) => string[])) => {
+    if (!currentProject) return;
+    const newValue = typeof value === 'function' ? value(state.selectedRulePackIds) : value;
+    updateProjectState(currentProject.id, { selectedRulePackIds: newValue });
+  }, [currentProject, state.selectedRulePackIds, updateProjectState]);
+  
   const evidenceChunks = state.evidenceChunks;
   const setEvidenceChunks = useCallback((value: Chunk[]) => {
     if (!currentProject) return;
@@ -392,6 +404,9 @@ export default function TenderWorkspace() {
   const [applyingFormat, setApplyingFormat] = useState(false);
   const [autoFillingSamples, setAutoFillingSamples] = useState(false);
   const [formatPreviewLoading, setFormatPreviewLoading] = useState<boolean>(false);
+  
+  // 自定义规则包列表（按项目加载）
+  const [rulePacks, setRulePacks] = useState<any[]>([]);
 
   // 轻量 Toast（不引入第三方库）
   const [toast, setToast] = useState<{ kind: 'success' | 'error' | 'warning'; msg: string; detail?: string } | null>(null);
@@ -641,6 +656,27 @@ export default function TenderWorkspace() {
       setAssets(data);
     } catch (err) {
       console.error('Failed to load assets:', err);
+    }
+  }, [currentProject]);
+  
+  // 加载自定义规则包列表
+  const loadRulePacks = useCallback(async (forceProjectId?: string) => {
+    const projectId = forceProjectId || currentProject?.id;
+    if (!projectId) return;
+    
+    try {
+      const data = await api.get(`/api/custom-rules/rule-packs?project_id=${projectId}`);
+      
+      // ✅ 加载后验证项目ID
+      if (currentProject && currentProject.id !== projectId) {
+        console.log('[loadRulePacks] 加载完成时项目已切换，丢弃数据');
+        return;
+      }
+      
+      setRulePacks(data || []);
+    } catch (err) {
+      console.error('Failed to load rule packs:', err);
+      setRulePacks([]);
     }
   }, [currentProject]);
 
@@ -1314,6 +1350,7 @@ export default function TenderWorkspace() {
       const res = await api.post(`/api/apps/tender/projects/${projectId}/review/run`, {
         model_id: null,
         custom_rule_asset_ids: selectedRuleAssetIds,
+        custom_rule_pack_ids: selectedRulePackIds,  // 新增：传递规则包ID
         bidder_name: selectedBidder || undefined,
         bid_asset_ids: [],
       });
@@ -1547,8 +1584,8 @@ export default function TenderWorkspace() {
         <div className="sidebar-subtitle">项目管理 + 风险识别 + 文档生成</div>
         
         <div style={{ flex: 1, overflow: 'auto' }}>
-          {/* 模板管理入口 */}
-          <div style={{ padding: '0 16px', marginBottom: '16px' }}>
+          {/* 模板管理和自定义规则入口 */}
+          <div style={{ padding: '0 16px', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <button
               onClick={() => {
                 console.log('模板管理按钮被点击，切换到formatTemplates视图');
@@ -1584,7 +1621,83 @@ export default function TenderWorkspace() {
               }}
             >
               <span style={{ fontSize: '16px' }}>📋</span>
-              <span>模板管理</span>
+              <span>格式模板</span>
+            </button>
+
+            <button
+              onClick={() => {
+                console.log('自定义规则管理按钮被点击，切换到customRules视图');
+                setViewMode("customRules");
+              }}
+              className="sidebar-btn"
+              style={{ 
+                width: '100%',
+                padding: '10px 16px',
+                background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+                border: 'none',
+                borderRadius: '8px',
+                color: '#ffffff',
+                fontSize: '14px',
+                fontWeight: '500',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                boxShadow: '0 2px 8px rgba(240, 147, 251, 0.3)',
+                zIndex: 10,
+                position: 'relative',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-1px)';
+                e.currentTarget.style.boxShadow = '0 4px 12px rgba(240, 147, 251, 0.4)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = '0 2px 8px rgba(240, 147, 251, 0.3)';
+              }}
+            >
+              <span style={{ fontSize: '16px' }}>⚙️</span>
+              <span>自定义规则</span>
+            </button>
+
+            <button
+              onClick={() => {
+                console.log('用户文档管理按钮被点击，切换到userDocuments视图');
+                setViewMode("userDocuments");
+              }}
+              className="sidebar-btn"
+              style={{ 
+                width: '100%',
+                padding: '10px 16px',
+                background: 'linear-gradient(135deg, #fccb90 0%, #d57eeb 100%)',
+                border: 'none',
+                borderRadius: '8px',
+                color: '#ffffff',
+                fontSize: '14px',
+                fontWeight: '500',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                boxShadow: '0 2px 8px rgba(252, 203, 144, 0.3)',
+                zIndex: 10,
+                position: 'relative',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-1px)';
+                e.currentTarget.style.boxShadow = '0 4px 12px rgba(252, 203, 144, 0.4)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = '0 2px 8px rgba(252, 203, 144, 0.3)';
+              }}
+            >
+              <span style={{ fontSize: '16px' }}>📁</span>
+              <span>用户文档</span>
             </button>
           </div>
           
@@ -1666,6 +1779,24 @@ export default function TenderWorkspace() {
           /* 格式模板管理视图 - 独立于项目 */
           <div className="kb-detail">
             <FormatTemplatesPage embedded onBack={() => setViewMode("projectInfo")} />
+          </div>
+        ) : viewMode === "customRules" ? (
+          /* 自定义规则管理视图 - 可不选项目 */
+          <div className="kb-detail">
+            <CustomRulesPage 
+              projectId={currentProject?.id} 
+              embedded 
+              onBack={() => setViewMode("projectInfo")} 
+            />
+          </div>
+        ) : viewMode === "userDocuments" ? (
+          /* 用户文档管理视图 - 可不选项目 */
+          <div className="kb-detail">
+            <UserDocumentsPage
+              projectId={currentProject?.id}
+              embedded
+              onBack={() => setViewMode("projectInfo")}
+            />
           </div>
         ) : currentProject ? (
           <>
@@ -1822,7 +1953,13 @@ export default function TenderWorkspace() {
                 ].map(tab => (
                   <button
                     key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
+                    onClick={() => {
+                      setActiveTab(tab.id);
+                      // 切换到审核Tab时加载规则包列表
+                      if (tab.id === 5 && currentProject) {
+                        loadRulePacks(currentProject.id);
+                      }
+                    }}
                     className={activeTab === tab.id ? 'pill-button' : 'link-button'}
                     style={{ 
                       padding: activeTab === tab.id ? '8px 16px' : '8px 12px',
@@ -2161,7 +2298,34 @@ export default function TenderWorkspace() {
                       </>
                     )}
                     
-                    <label className="sidebar-label">可选：叠加自定义审核规则文件（可多选）:</label>
+                    <label className="sidebar-label">可选：选择自定义规则包（可多选）:</label>
+                    <div className="kb-doc-meta" style={{ marginBottom: '12px' }}>
+                      💡 选中的规则包将应用于审核，规则包在"自定义规则管理"页面创建
+                    </div>
+                    {rulePacks.length > 0 ? (
+                      rulePacks.map(pack => (
+                        <label key={pack.id} className="kb-item">
+                          <input
+                            type="checkbox"
+                            checked={selectedRulePackIds.includes(pack.id)}
+                            onChange={() => {
+                              setSelectedRulePackIds(prev =>
+                                prev.includes(pack.id)
+                                  ? prev.filter(id => id !== pack.id)
+                                  : [...prev, pack.id]
+                              );
+                            }}
+                          />
+                          <span>{pack.pack_name} ({pack.rule_count || 0} 条规则)</span>
+                        </label>
+                      ))
+                    ) : (
+                      <div className="kb-empty">
+                        暂无自定义规则包（可选，可在左侧"自定义规则"页面创建）
+                      </div>
+                    )}
+                    
+                    <label className="sidebar-label" style={{ marginTop: '16px' }}>可选：叠加自定义审核规则文件（可多选）:</label>
                     <div className="kb-doc-meta" style={{ marginBottom: '12px' }}>
                       💡 选中的规则文件将作为额外上下文，与招标要求一起用于审核
                     </div>

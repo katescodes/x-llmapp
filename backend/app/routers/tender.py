@@ -102,11 +102,12 @@ def _svc(req: Request) -> TenderService:
 @router.post("/projects", response_model=ProjectOut)
 def create_project(req: ProjectCreateReq, request: Request, user=Depends(get_current_user_sync)):
     """创建项目（自动创建KB）"""
-    # 1. 先创建知识库
+    # 1. 先创建知识库，设置owner为当前用户
     kb_id = kb_service.create_kb(
         name=f"招投标-{req.name}",
         description=req.description or f"招投标项目：{req.name}",
-        category_id="cat_knowledge"  # 使用正确的分类ID
+        category_id="cat_knowledge",  # 使用正确的分类ID
+        owner_id=user.user_id  # 关键：设置知识库所有者
     )
     
     # 2. 创建项目并关联KB
@@ -998,6 +999,7 @@ def run_review(
     
     Args:
         req.custom_rule_asset_ids: 自定义规则文件资产ID列表（直接叠加原文）
+        req.custom_rule_pack_ids: 自定义规则包ID列表（应用规则包中的规则）
         req.bidder_name: 投标人名称（选择投标人）
         req.bid_asset_ids: 投标资产ID列表（精确指定文件）
         sync: 同步执行模式，1=同步返回结果，0=后台任务（默认）

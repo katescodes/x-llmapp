@@ -102,6 +102,64 @@ export const api = {
   delete: (path: string, options?: RequestOptions) => 
     request(path, { ...options, method: 'DELETE' }),
 
+  // 文件上传方法（支持进度回调）
+  upload: (path: string, formData: FormData, onProgress?: (progress: number) => void): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      const token = getToken();
+      const xhr = new XMLHttpRequest();
+      
+      // 上传进度
+      if (onProgress) {
+        xhr.upload.addEventListener("progress", (e) => {
+          if (e.lengthComputable) {
+            const percentComplete = Math.round((e.loaded / e.total) * 100);
+            onProgress(percentComplete);
+          }
+        });
+      }
+      
+      // 请求完成
+      xhr.addEventListener("load", () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            resolve(data);
+          } catch (err) {
+            reject(new Error("解析响应失败"));
+          }
+        } else if (xhr.status === 401) {
+          localStorage.removeItem('auth_token');
+          reject(new Error('未授权，请重新登录'));
+        } else if (xhr.status === 403) {
+          reject(new Error('权限不足'));
+        } else {
+          reject(new Error(`上传失败 (HTTP ${xhr.status})`));
+        }
+      });
+      
+      // 请求失败
+      xhr.addEventListener("error", () => {
+        reject(new Error("网络错误"));
+      });
+      
+      // 请求中止
+      xhr.addEventListener("abort", () => {
+        reject(new Error("请求被中止"));
+      });
+      
+      // 确保路径以 / 开头
+      const url = path.startsWith('/') ? path : `/${path}`;
+      xhr.open("POST", `${API_BASE_URL}${url}`);
+      
+      // 添加 Authorization header
+      if (token) {
+        xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+      }
+      
+      xhr.send(formData);
+    });
+  },
+
   // 原始 request 方法（供特殊需求使用）
   request,
 };

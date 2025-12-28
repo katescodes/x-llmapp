@@ -1,6 +1,17 @@
 export type Role = "user" | "assistant" | "system";
 export type ChatMode = "normal" | "decision" | "history_decision";
-export type DocCategory = "history_case" | "reference_rule" | "general_doc" | "web_snapshot" | "tender_app";
+export type DocCategory = 
+  | "general_doc"
+  | "history_case" 
+  | "reference_rule" 
+  | "web_snapshot" 
+  | "tender_app"
+  | "tender_notice"        // 招标文件
+  | "bid_document"         // 投标文件
+  | "format_template"      // 格式模板
+  | "standard_spec"        // 标准规范
+  | "technical_material"   // 技术资料
+  | "qualification_doc";   // 资质资料
 
 export interface ChatSection {
   id: string;

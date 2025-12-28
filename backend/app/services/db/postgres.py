@@ -7,6 +7,7 @@ import time
 from typing import Optional
 
 from psycopg import Connection, connect
+from psycopg.rows import tuple_row
 from psycopg_pool import ConnectionPool
 
 from app.config import get_settings
@@ -37,6 +38,7 @@ def _get_pool() -> ConnectionPool:
             conninfo=_build_conninfo(),
             min_size=settings.POSTGRES_POOL_MIN,
             max_size=settings.POSTGRES_POOL_MAX,
+            kwargs={"row_factory": tuple_row},  # 使用tuple row factory以支持索引访问
         )
         _pool.wait()
     return _pool

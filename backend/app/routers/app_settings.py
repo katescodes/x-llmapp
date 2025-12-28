@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
 from app.config import get_settings
 from app.services.google_search import google_search_multi
@@ -15,18 +15,34 @@ from ..services.settings_store import (
     serialize_settings_response,
     update_google_key,
 )
+from app.models.user import TokenData
+from app.utils.auth import get_current_user
+from app.utils.permission import require_permission
 
 router = APIRouter(prefix="/api/settings", tags=["app-settings"])
 
 
 @router.get("/app", response_model=AppSettingsResponse)
-def get_app_settings():
+def get_app_settings(current_user: TokenData = Depends(require_permission("system.settings"))):
+    """
+    获取应用设置
+    
+    权限要求：system.settings
+    """
     settings = load_settings()
     return serialize_settings_response(settings)
 
 
 @router.put("/app", response_model=AppSettingsResponse)
-def update_app_settings(payload: AppSettingsUpdate):
+def update_app_settings(
+    payload: AppSettingsUpdate,
+    current_user: TokenData = Depends(require_permission("system.settings"))
+):
+    """
+    更新应用设置
+    
+    权限要求：system.settings
+    """
     current = load_settings()
     updated = apply_update(current, payload)
     save_settings(updated)
@@ -34,7 +50,15 @@ def update_app_settings(payload: AppSettingsUpdate):
 
 
 @router.put("/search/google-key", response_model=dict)
-def update_google_credentials(payload: GoogleKeyUpdate):
+def update_google_credentials(
+    payload: GoogleKeyUpdate,
+    current_user: TokenData = Depends(require_permission("system.settings"))
+):
+    """
+    更新Google搜索凭证
+    
+    权限要求：system.settings
+    """
     if not payload.google_cse_api_key and not payload.google_cse_cx:
         raise HTTPException(status_code=400, detail="需要提供 api_key 或 cx")
     current = load_settings()
@@ -44,7 +68,15 @@ def update_google_credentials(payload: GoogleKeyUpdate):
 
 
 @router.post("/search/test", response_model=dict)
-async def test_google_search(payload: GoogleSearchTestRequest):
+async def test_google_search(
+    payload: GoogleSearchTestRequest,
+    current_user: TokenData = Depends(require_permission("system.settings"))
+):
+    """
+    测试Google搜索配置
+    
+    权限要求：system.settings
+    """
     current = load_settings()
     settings = get_settings()
     api_key = (
@@ -70,4 +102,3 @@ async def test_google_search(payload: GoogleSearchTestRequest):
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Google 搜索失败: {exc}") from exc
     return {"ok": True}
-

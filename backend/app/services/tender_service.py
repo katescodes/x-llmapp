@@ -587,12 +587,16 @@ class TenderService:
                 
                 temp_asset_id = f"temp_{uuid.uuid4().hex}"
                 
+                # 映射文档类型到知识库分类
+                from app.utils.doc_type_mapper import map_doc_type_to_kb_category
+                kb_category = map_doc_type_to_kb_category(kind)
+                
                 ingest_v2_result = await ingest_v2.ingest_asset_v2(
                     project_id=project_id,
                     asset_id=temp_asset_id,
                     file_bytes=b,
                     filename=filename,
-                    doc_type=kind,
+                    doc_type=kb_category,  # 使用映射后的知识库分类
                     owner_id=proj.get("owner_id"),
                     storage_path=storage_path,
                 )

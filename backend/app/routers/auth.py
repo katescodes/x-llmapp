@@ -14,6 +14,7 @@ from app.utils.auth import (
     create_access_token, get_current_user, require_admin,
     TokenData, ACCESS_TOKEN_EXPIRE_HOURS
 )
+from app.utils.permission import require_permission
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
@@ -140,10 +141,12 @@ async def logout(current_user: TokenData = Depends(get_current_user)):
 @router.get("/users", response_model=List[UserResponse])
 async def list_users(
     role: UserRole = None,
-    current_user: TokenData = Depends(require_admin)
+    current_user: TokenData = Depends(require_permission("permission.user.view"))
 ):
     """
-    获取用户列表（仅管理员）
+    获取用户列表
+    
+    权限要求：permission.user.view
     
     可选参数:
     - role: 按角色筛选
@@ -153,10 +156,12 @@ async def list_users(
 @router.post("/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def create_user_admin(
     user_data: UserCreate,
-    current_user: TokenData = Depends(require_admin)
+    current_user: TokenData = Depends(require_permission("permission.user.create"))
 ):
     """
-    创建用户（仅管理员）
+    创建用户
+    
+    权限要求：permission.user.create
     
     管理员可以创建任意角色的用户
     """
@@ -165,10 +170,12 @@ async def create_user_admin(
 @router.get("/users/{user_id}", response_model=UserResponse)
 async def get_user(
     user_id: str,
-    current_user: TokenData = Depends(require_admin)
+    current_user: TokenData = Depends(require_permission("permission.user.view"))
 ):
     """
-    获取指定用户信息（仅管理员）
+    获取指定用户信息
+    
+    权限要求：permission.user.view
     """
     user = user_service.get_user_by_id(user_id)
     if not user:
@@ -182,20 +189,24 @@ async def get_user(
 async def update_user_admin(
     user_id: str,
     update_data: UserUpdate,
-    current_user: TokenData = Depends(require_admin)
+    current_user: TokenData = Depends(require_permission("permission.user.edit"))
 ):
     """
-    更新用户信息（仅管理员）
+    更新用户信息
+    
+    权限要求：permission.user.edit
     """
     return user_service.update_user(user_id, update_data)
 
 @router.delete("/users/{user_id}")
 async def delete_user(
     user_id: str,
-    current_user: TokenData = Depends(require_admin)
+    current_user: TokenData = Depends(require_permission("permission.user.delete"))
 ):
     """
-    删除用户（仅管理员）
+    删除用户
+    
+    权限要求：permission.user.delete
     """
     # 防止删除自己
     if user_id == current_user.user_id:

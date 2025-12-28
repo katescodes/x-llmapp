@@ -12,6 +12,7 @@ def create_session(
     default_kb_ids: List[str],
     search_mode: str,
     model_id: str | None,
+    owner_id: str | None = None,
 ) -> str:
     session_id = uuid.uuid4().hex
     with get_conn() as conn:
@@ -19,9 +20,9 @@ def create_session(
             cur.execute(
                 """
                 INSERT INTO chat_sessions(
-                    id, title, default_kb_ids_json, search_mode, model_id, meta_json, summary
+                    id, title, default_kb_ids_json, search_mode, model_id, meta_json, summary, owner_id
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     session_id,
@@ -31,6 +32,7 @@ def create_session(
                     model_id,
                     json.dumps({}),
                     None,
+                    owner_id,
                 ),
             )
         conn.commit()
@@ -61,19 +63,35 @@ def append_message(
     return message_id
 
 
-def list_sessions(page: int, page_size: int) -> List[dict]:
+def list_sessions(page: int, page_size: int, owner_id: str | None = None) -> List[dict]:
     offset = max(0, (page - 1) * page_size)
     with get_conn() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                """
-                SELECT id, title, created_at, updated_at, default_kb_ids_json, search_mode, model_id, meta_json, summary
-                FROM chat_sessions
-                ORDER BY updated_at DESC
-                LIMIT %s OFFSET %s
-                """,
-                (page_size, offset),
-            )
+            if owner_id:
+                # 按owner_id过滤
+                cur.execute(
+                    """
+                    SELECT id, title, created_at, updated_at, default_kb_ids_json, 
+                           search_mode, model_id, meta_json, summary, owner_id
+                    FROM chat_sessions
+                    WHERE owner_id = %s
+                    ORDER BY updated_at DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (owner_id, page_size, offset),
+                )
+            else:
+                # 查询所有（管理员）
+                cur.execute(
+                    """
+                    SELECT id, title, created_at, updated_at, default_kb_ids_json, 
+                           search_mode, model_id, meta_json, summary, owner_id
+                    FROM chat_sessions
+                    ORDER BY updated_at DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (page_size, offset),
+                )
             rows = cur.fetchall()
     sessions = []
     for row in rows:
@@ -92,7 +110,8 @@ def get_session(session_id: str) -> Optional[dict]:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
-                SELECT id, title, created_at, updated_at, default_kb_ids_json, search_mode, model_id, meta_json, summary
+                SELECT id, title, created_at, updated_at, default_kb_ids_json, 
+                       search_mode, model_id, meta_json, summary, owner_id
                 FROM chat_sessions
                 WHERE id=%s
                 """,

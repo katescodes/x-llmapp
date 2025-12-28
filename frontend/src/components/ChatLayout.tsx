@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useAuthFetch } from "../hooks/usePermission";
 import {
   ChatMessage,
   ChatMode,
@@ -61,6 +62,7 @@ const extractErrorMessage = async (
 };
 
 const ChatLayout: React.FC = () => {
+  const authFetch = useAuthFetch();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
   const [sourcesCollapsed, setSourcesCollapsed] = useState(false);
@@ -103,7 +105,7 @@ const ChatLayout: React.FC = () => {
 
   const fetchSessions = useCallback(async () => {
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/history/sessions?page=1&page_size=50`);
+      const resp = await authFetch(`${apiBaseUrl}/api/history/sessions?page=1&page_size=50`);
       if (resp.ok) {
         const data: ChatSessionSummary[] = await resp.json();
         setSessions(data);
@@ -116,7 +118,7 @@ const ChatLayout: React.FC = () => {
   const fetchKbs = useCallback(async () => {
     setKbLoading(true);
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/kb`);
+      const resp = await authFetch(`${apiBaseUrl}/api/kb`);
       if (!resp.ok) throw new Error("获取知识库失败");
       const data: KnowledgeBase[] = await resp.json();
       setKbList(data);
@@ -131,7 +133,7 @@ const ChatLayout: React.FC = () => {
   useEffect(() => {
     const fetchLLMs = async () => {
       try {
-        const resp = await fetch(`${apiBaseUrl}/api/llms`);
+        const resp = await authFetch(`${apiBaseUrl}/api/llms`);
         if (!resp.ok) {
           throw new Error("加载 LLM 列表失败");
         }
@@ -291,7 +293,7 @@ const ChatLayout: React.FC = () => {
     setSources([]);
 
     const runStandardRequest = async () => {
-      const resp = await fetch(`${apiBaseUrl}/api/chat`, {
+      const resp = await authFetch(`${apiBaseUrl}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -305,7 +307,7 @@ const ChatLayout: React.FC = () => {
     };
 
     const runStreamingRequest = async () => {
-      const resp = await fetch(`${apiBaseUrl}/api/chat/stream`, {
+      const resp = await authFetch(`${apiBaseUrl}/api/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -395,7 +397,7 @@ const ChatLayout: React.FC = () => {
   const handleLoadSession = async (id: string) => {
     setSessionLoading(true);
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/history/sessions/${id}`);
+      const resp = await authFetch(`${apiBaseUrl}/api/history/sessions/${id}`);
       if (!resp.ok) throw new Error("加载会话失败");
       const data: ChatSessionDetail = await resp.json();
       setSessionId(data.id);
@@ -448,7 +450,7 @@ const ChatLayout: React.FC = () => {
   const handleDeleteSession = async (id: string) => {
     if (!window.confirm("确认删除该会话？")) return;
     try {
-      const resp = await fetch(`${apiBaseUrl}/api/history/sessions/${id}`, {
+      const resp = await authFetch(`${apiBaseUrl}/api/history/sessions/${id}`, {
         method: "DELETE"
       });
       if (!resp.ok) throw new Error("删除会话失败");

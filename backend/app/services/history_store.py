@@ -8,16 +8,17 @@ def create_session(
     default_kb_ids: List[str],
     search_mode: str,
     model_id: Optional[str],
+    owner_id: Optional[str] = None,
 ) -> str:
-    return chat_dao.create_session(title, default_kb_ids, search_mode, model_id)
+    return chat_dao.create_session(title, default_kb_ids, search_mode, model_id, owner_id)
 
 
 def append_message(session_id: str, role: str, content: str, metadata: Optional[dict] = None) -> str:
     return chat_dao.append_message(session_id, role, content, metadata)
 
 
-def list_sessions(page: int = 1, page_size: int = 20):
-    return chat_dao.list_sessions(page, page_size)
+def list_sessions(page: int = 1, page_size: int = 20, owner_id: Optional[str] = None):
+    return chat_dao.list_sessions(page, page_size, owner_id)
 
 
 def get_session(session_id: str):
