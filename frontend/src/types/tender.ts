@@ -27,6 +27,25 @@ export type TenderDirectoryNode = {
   evidence_chunk_ids: string[];
 };
 
+// ==================== Step F: 新增类型 ====================
+
+export type ReviewStatus = "PASS" | "WARN" | "FAIL" | "PENDING";
+export type EvidenceRole = "tender" | "bid";
+
+export interface EvidenceItem {
+  role: EvidenceRole;
+  segment_id?: string;
+  asset_id?: string;
+  page_start?: number | null;
+  page_end?: number | null;
+  heading_path?: string | null;
+  quote?: string | null;
+  source?: string; // doc_segments/fallback_chunk/derived_consistency
+  meta?: any;
+}
+
+// ==================== 原有类型（扩展） ====================
+
 export type TenderReviewItem = {
   id: string;
   dimension: string;
@@ -34,11 +53,23 @@ export type TenderReviewItem = {
   tender_requirement: string;
   bidder_name?: string | null;
   bid_response?: string | null;
+  
+  // Legacy fields (保留兼容)
   result: "pass" | "risk" | "fail";
   is_hard: boolean;
   remark?: string | null;
   tender_evidence_chunk_ids: string[];
   bid_evidence_chunk_ids: string[];
+  
+  // Step F: 新增字段
+  status?: ReviewStatus;
+  evaluator?: string;
+  requirement_id?: string;
+  matched_response_id?: string;
+  
+  evidence_json?: EvidenceItem[] | null;
+  rule_trace_json?: any;
+  computed_trace_json?: any;
 };
 
 export type EvidenceChunk = {
