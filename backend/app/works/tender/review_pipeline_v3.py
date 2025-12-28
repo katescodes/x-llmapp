@@ -4,14 +4,206 @@ Step 5: 实现 Mapping → Hard Gate → Quant Checks → Semantic Escalation �
 Step A: 修复落库可追溯性（requirement_id + matched_response_id + review_run_id）
 Step B: 修复 Mapping（topK 候选 + 轻量相似度）
 Step C: 语义审核降级为 PENDING（禁止假 PASS）
+Step D: NUMERIC 真实比较（从 schema/文本解析阈值）
+Step E: Consistency 归一化+阈值
 """
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 import uuid
 from psycopg.rows import dict_row
 
 logger = logging.getLogger(__name__)
+
+
+# ==================== Step D: 辅助函数 ====================
+
+def _extract_number(text: str) -> Optional[float]:
+    """从文本中提取数值"""
+    if not text:
+        return None
+    
+    # 移除常见单位和空格
+    text = re.sub(r'[元天月年日个人台套%]', '', text)
+    text = text.strip()
+    
+    # 匹配数字（支持小数）
+    match = re.search(r'[-+]?\d*\.?\d+', text)
+    if match:
+        try:
+            return float(match.group())
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_threshold_from_text(text: str) -> Dict[str, Optional[float]]:
+    """
+    从文本中解析阈值（Step D）
+    支持格式:
+    - 不少于XX天/月/年
+    - 不超过XX元
+    - ≥XX, ≤XX, >XX, <XX
+    - XX-YY之间
+    """
+    result = {"min": None, "max": None, "exact": None}
+    
+    if not text:
+        return result
+    
+    # 1. "不少于XX"、"≥XX"、">XX"
+    patterns_min = [
+        r'不少于\s*(\d+\.?\d*)',
+        r'大于等于\s*(\d+\.?\d*)',
+        r'[≥>=]\s*(\d+\.?\d*)',
+        r'最少\s*(\d+\.?\d*)',
+        r'至少\s*(\d+\.?\d*)',
+    ]
+    
+    for pattern in patterns_min:
+        match = re.search(pattern, text)
+        if match:
+            result["min"] = float(match.group(1))
+            break
+    
+    # 2. "不超过XX"、"≤XX"、"<XX"
+    patterns_max = [
+        r'不超过\s*(\d+\.?\d*)',
+        r'小于等于\s*(\d+\.?\d*)',
+        r'[≤<=]\s*(\d+\.?\d*)',
+        r'最多\s*(\d+\.?\d*)',
+    ]
+    
+    for pattern in patterns_max:
+        match = re.search(pattern, text)
+        if match:
+            result["max"] = float(match.group(1))
+            break
+    
+    # 3. "XX-YY之间"、"XX至YY"
+    range_patterns = [
+        r'(\d+\.?\d*)\s*[-~至]\s*(\d+\.?\d*)',
+    ]
+    
+    for pattern in range_patterns:
+        match = re.search(pattern, text)
+        if match:
+            result["min"] = float(match.group(1))
+            result["max"] = float(match.group(2))
+            break
+    
+    # 4. "XX天"、"XX元"（精确值）
+    if not result["min"] and not result["max"]:
+        exact_match = re.search(r'(\d+\.?\d*)\s*[天月年元]', text)
+        if exact_match:
+            result["exact"] = float(exact_match.group(1))
+    
+    return result
+
+
+# Step E: 归一化函数
+def normalize_money(value: Union[str, int, float]) -> Optional[int]:
+    """
+    归一化金额为"分"（Step E）
+    支持: "1000元", "10万元", "1.5万", "￥1000", "1,000"
+    """
+    if value is None:
+        return None
+    
+    if isinstance(value, (int, float)):
+        return int(value * 100)  # 假设输入是元
+    
+    text = str(value)
+    
+    # 移除货币符号和空格
+    text = re.sub(r'[￥¥$,，\s]', '', text)
+    
+    # 处理"万"
+    if '万' in text:
+        num_str = text.replace('万', '').replace('元', '')
+        try:
+            num = float(num_str)
+            return int(num * 10000 * 100)  # 万元转分
+        except ValueError:
+            return None
+    
+    # 处理"元"
+    if '元' in text:
+        num_str = text.replace('元', '')
+        try:
+            num = float(num_str)
+            return int(num * 100)  # 元转分
+        except ValueError:
+            return None
+    
+    # 纯数字（假设是元）
+    try:
+        num = float(text)
+        return int(num * 100)
+    except ValueError:
+        return None
+
+
+def normalize_duration(value: Union[str, int, float]) -> Optional[int]:
+    """
+    归一化工期为"天"（Step E）
+    支持: "30天", "3个月", "1年", "90"
+    """
+    if value is None:
+        return None
+    
+    if isinstance(value, (int, float)):
+        return int(value)  # 假设输入是天
+    
+    text = str(value)
+    
+    # 处理"年"
+    if '年' in text:
+        num_str = re.search(r'(\d+\.?\d*)', text)
+        if num_str:
+            return int(float(num_str.group(1)) * 365)
+    
+    # 处理"月"
+    if '月' in text:
+        num_str = re.search(r'(\d+\.?\d*)', text)
+        if num_str:
+            return int(float(num_str.group(1)) * 30)
+    
+    # 处理"天"或纯数字
+    num_str = re.search(r'(\d+\.?\d*)', text)
+    if num_str:
+        return int(float(num_str.group(1)))
+    
+    return None
+
+
+def normalize_company_name(value: str) -> str:
+    """
+    归一化公司名称（Step E）
+    - 去除空格
+    - 全角转半角
+    - 统一大小写
+    """
+    if not value:
+        return ""
+    
+    # 全角转半角
+    result = []
+    for char in value:
+        code = ord(char)
+        if code == 0x3000:  # 全角空格
+            code = 0x0020
+        elif 0xFF01 <= code <= 0xFF5E:  # 全角字符
+            code -= 0xFEE0
+        result.append(chr(code))
+    
+    text = ''.join(result)
+    
+    # 去除空格并转小写
+    text = text.replace(' ', '').replace('\t', '').replace('\n', '')
+    text = text.lower()
+    
+    return text
 
 
 def _tokenize(text: str) -> set:
@@ -387,32 +579,104 @@ class ReviewPipelineV3:
         resp: Optional[Dict],
         eval_method: str
     ) -> Tuple[str, str, Dict]:
-        """执行数值/表格评估"""
+        """
+        执行数值/表格评估（Step D: 改进版）
+        
+        改进点：
+        1. 从 value_schema_json 读取阈值
+        2. 从 requirement_text 解析阈值（兜底）
+        3. 从 extracted_value_json 取数值
+        4. 真实比较并记录完整过程
+        5. 无法解析 → PENDING（不要假 PASS）
+        """
         
         if not resp:
             return "FAIL", "未提供响应", {"method": eval_method, "reason": "no_response"}
         
         if eval_method == "NUMERIC":
-            # 数值比较（简化版）
+            # Step D: 真实数值比较
             value_schema = req.get("value_schema_json", {})
             extracted_value = resp.get("extracted_value_json", {})
+            requirement_text = req.get("requirement_text", "")
             
-            # 如果没有提取到数值，降级为 PENDING
-            if not extracted_value or not isinstance(extracted_value, dict):
-                return "PENDING", "未能提取数值，需人工确认", {
-                    "method": "NUMERIC",
-                    "reason": "no_extracted_value"
-                }
+            # 1. 从 schema 获取阈值
+            required_min = value_schema.get("minimum") if isinstance(value_schema, dict) else None
+            required_max = value_schema.get("maximum") if isinstance(value_schema, dict) else None
+            required_const = value_schema.get("const") if isinstance(value_schema, dict) else None
             
-            # 简化：假设通过
-            return "PASS", "数值符合要求", {
+            # 2. 如果 schema 没有阈值，从 requirement_text 解析
+            if required_min is None and required_max is None and required_const is None:
+                thresholds = _parse_threshold_from_text(requirement_text)
+                required_min = thresholds.get("min")
+                required_max = thresholds.get("max")
+                required_const = thresholds.get("exact")
+            
+            # 3. 从 extracted_value 获取实际值
+            actual_value = None
+            if isinstance(extracted_value, dict):
+                # 尝试多个可能的键
+                for key in ["value", "number", "amount", "days", "months", "duration"]:
+                    if key in extracted_value:
+                        actual_value = _extract_number(str(extracted_value[key]))
+                        if actual_value is not None:
+                            break
+            
+            # 如果还是拿不到，从 response_text 提取
+            if actual_value is None:
+                response_text = resp.get("response_text", "")
+                actual_value = _extract_number(response_text)
+            
+            # 4. 构建 trace
+            computed_trace = {
                 "method": "NUMERIC",
-                "schema": value_schema,
-                "extracted": extracted_value
+                "required_min": required_min,
+                "required_max": required_max,
+                "required_const": required_const,
+                "extracted_value": actual_value,
+                "source": "schema" if value_schema else "text_parse",
             }
+            
+            # 5. 判断逻辑
+            # 如果无法提取数值 → PENDING
+            if actual_value is None:
+                computed_trace["reason"] = "cannot_extract_value"
+                return "PENDING", "未能提取数值，需人工确认", computed_trace
+            
+            # 如果没有阈值 → PENDING
+            if required_min is None and required_max is None and required_const is None:
+                computed_trace["reason"] = "no_threshold"
+                return "PENDING", "未找到阈值要求，需人工确认", computed_trace
+            
+            # 精确匹配
+            if required_const is not None:
+                if abs(actual_value - required_const) < 0.01:  # 浮点数容差
+                    computed_trace["pass"] = True
+                    return "PASS", f"数值符合要求（{actual_value} = {required_const}）", computed_trace
+                else:
+                    computed_trace["pass"] = False
+                    return "FAIL", f"数值不符（实际:{actual_value}, 要求:{required_const}）", computed_trace
+            
+            # 范围检查
+            pass_check = True
+            reasons = []
+            
+            if required_min is not None and actual_value < required_min:
+                pass_check = False
+                reasons.append(f"低于最小值（{actual_value} < {required_min}）")
+            
+            if required_max is not None and actual_value > required_max:
+                pass_check = False
+                reasons.append(f"超过最大值（{actual_value} > {required_max}）")
+            
+            computed_trace["pass"] = pass_check
+            
+            if pass_check:
+                return "PASS", f"数值符合要求（{actual_value}）", computed_trace
+            else:
+                return "FAIL", "; ".join(reasons), computed_trace
         
         elif eval_method == "TABLE_COMPARE":
-            # 表格对照（简化版）
+            # Step D: 表格对照（暂时仍为 PENDING，实际需要更复杂逻辑）
             return "PENDING", "表格对照需人工审核", {
                 "method": "TABLE_COMPARE",
                 "reason": "complex_comparison"
@@ -557,104 +821,162 @@ class ReviewPipelineV3:
     
     def _consistency_check(self, responses: List[Dict]) -> List[Dict[str, Any]]:
         """
-        Step 5: Consistency Check (Step 6)
+        Step 5: Consistency Check (Step E: 改进版)
         检查跨维度一致性（最小集：公司名称、报价、工期）
+        
+        改进点（Step E）:
+        1. 使用归一化函数处理数值
+        2. 添加阈值判断（报价: 0.5%）
+        3. 可降级（PENDING/WARN）而不是直接 FAIL
         """
         results = []
         
         # 1. 检查公司名称一致性
         company_names = []
         for resp in responses:
-            normalized = resp.get("normalized_fields_json", {})
-            if isinstance(normalized, dict):
-                company_name = normalized.get("company_name")
+            normalized_fields = resp.get("normalized_fields_json", {})
+            if isinstance(normalized_fields, dict):
+                company_name = normalized_fields.get("company_name")
                 if company_name:
+                    # Step E: 归一化公司名称
+                    normalized = normalize_company_name(company_name)
                     company_names.append({
-                        "name": company_name,
+                        "original": company_name,
+                        "normalized": normalized,
                         "dimension": resp.get("dimension"),
                         "response_id": resp.get("id")
                     })
         
-        if len(set(c["name"] for c in company_names)) > 1:
-            # 发现不一致
-            names_str = ", ".join(set(c["name"] for c in company_names))
-            results.append({
-                "requirement_id": "consistency_company_name",
-                "matched_response_id": None,  # 一致性检查不针对单个响应
-                "dimension": "consistency",
-                "clause_title": "公司名称一致性检查",
-                "tender_requirement": "投标文件中公司名称应保持一致",
-                "bid_response": f"发现多个名称: {names_str}",
-                "status": "WARN",
-                "result": "risk",
-                "is_hard": False,
-                "remark": "投标文件中公司名称不一致，请核实",
-                "evaluator": "consistency_check",
-                "evidence_json": [{"type": "inconsistency", "values": company_names}],
-            })
+        # 检查归一化后的名称是否一致
+        if company_names:
+            unique_normalized = set(c["normalized"] for c in company_names)
+            if len(unique_normalized) > 1:
+                # 发现不一致
+                names_str = ", ".join(set(c["original"] for c in company_names))
+                results.append({
+                    "requirement_id": "consistency_company_name",
+                    "matched_response_id": None,
+                    "dimension": "consistency",
+                    "clause_title": "公司名称一致性检查",
+                    "tender_requirement": "投标文件中公司名称应保持一致",
+                    "bid_response": f"发现多个名称: {names_str}",
+                    "status": "WARN",  # Step E: 降级为 WARN 而不是 FAIL
+                    "result": "risk",
+                    "is_hard": False,
+                    "remark": "投标文件中公司名称不一致，请核实",
+                    "evaluator": "consistency_check",
+                    "evidence_json": [{"type": "inconsistency", "values": company_names}],
+                })
         
-        # 2. 检查报价一致性
+        # 2. 检查报价一致性（Step E: 改进版）
         prices = []
         for resp in responses:
             if resp.get("dimension") == "price":
-                normalized = resp.get("normalized_fields_json", {})
-                if isinstance(normalized, dict):
-                    price = normalized.get("total_price") or normalized.get("price")
-                    if price:
-                        prices.append({
-                            "price": price,
-                            "response_id": resp.get("id")
-                        })
+                normalized_fields = resp.get("normalized_fields_json", {})
+                if isinstance(normalized_fields, dict):
+                    price_field = normalized_fields.get("total_price") or normalized_fields.get("price")
+                    if price_field:
+                        # Step E: 归一化为"分"
+                        normalized_price = normalize_money(price_field)
+                        if normalized_price is not None:
+                            prices.append({
+                                "original": price_field,
+                                "normalized": normalized_price,  # 单位：分
+                                "response_id": resp.get("id")
+                            })
         
-        if len(set(str(p["price"]) for p in prices)) > 1:
-            # 发现报价不一致
-            prices_str = ", ".join(set(str(p["price"]) for p in prices))
+        if len(prices) > 1:
+            # Step E: 使用阈值判断
+            unique_prices = set(p["normalized"] for p in prices)
+            
+            if len(unique_prices) > 1:
+                # 计算差异
+                price_values = [p["normalized"] for p in prices]
+                max_price = max(price_values)
+                min_price = min(price_values)
+                diff_ratio = (max_price - min_price) / max_price if max_price > 0 else 0
+                
+                # Step E: 阈值判断
+                if diff_ratio > 0.005:  # 0.5%
+                    status = "WARN"  # 不直接 FAIL，降级为 WARN
+                    remark = f"投标报价在不同章节不一致（差异: {diff_ratio*100:.2f}%），请核实"
+                else:
+                    # 差异很小，可能是四舍五入
+                    status = "WARN"
+                    remark = f"投标报价略有差异（差异: {diff_ratio*100:.2f}%），可能是四舍五入"
+                
+                prices_str = ", ".join(f"{p['original']}" for p in prices)
+                results.append({
+                    "requirement_id": "consistency_price",
+                    "matched_response_id": None,
+                    "dimension": "consistency",
+                    "clause_title": "报价一致性检查",
+                    "tender_requirement": "投标总价在各处表述应一致",
+                    "bid_response": f"发现多个报价: {prices_str} (差异:{diff_ratio*100:.2f}%)",
+                    "status": status,
+                    "result": "risk",
+                    "is_hard": False,  # Step E: 不设为硬性要求
+                    "remark": remark,
+                    "evaluator": "consistency_check",
+                    "evidence_json": [{
+                        "type": "inconsistency",
+                        "values": prices,
+                        "diff_ratio": diff_ratio
+                    }],
+                })
+        elif len(prices) == 0:
+            # Step E: 无法解析报价 → PENDING
             results.append({
                 "requirement_id": "consistency_price",
-                "matched_response_id": None,  # 一致性检查不针对单个响应
+                "matched_response_id": None,
                 "dimension": "consistency",
                 "clause_title": "报价一致性检查",
                 "tender_requirement": "投标总价在各处表述应一致",
-                "bid_response": f"发现多个报价: {prices_str}",
-                "status": "FAIL",
-                "result": "fail",
-                "is_hard": True,
-                "remark": "投标报价在不同章节不一致，视为废标",
+                "bid_response": "未能解析报价信息",
+                "status": "PENDING",
+                "result": "risk",
+                "is_hard": False,
+                "remark": "未能解析报价信息，需人工核实",
                 "evaluator": "consistency_check",
-                "evidence_json": [{"type": "inconsistency", "values": prices}],
+                "evidence_json": [],
             })
         
-        # 3. 检查工期一致性
+        # 3. 检查工期一致性（Step E: 改进版）
         durations = []
         for resp in responses:
             if resp.get("dimension") in ("business", "technical"):
-                normalized = resp.get("normalized_fields_json", {})
-                if isinstance(normalized, dict):
-                    duration = normalized.get("duration") or normalized.get("construction_period")
-                    if duration:
-                        durations.append({
-                            "duration": duration,
-                            "dimension": resp.get("dimension"),
-                            "response_id": resp.get("id")
-                        })
+                normalized_fields = resp.get("normalized_fields_json", {})
+                if isinstance(normalized_fields, dict):
+                    duration_field = normalized_fields.get("duration") or normalized_fields.get("construction_period")
+                    if duration_field:
+                        # Step E: 归一化为"天"
+                        normalized_duration = normalize_duration(duration_field)
+                        if normalized_duration is not None:
+                            durations.append({
+                                "original": duration_field,
+                                "normalized": normalized_duration,  # 单位：天
+                                "dimension": resp.get("dimension"),
+                                "response_id": resp.get("id")
+                            })
         
-        if len(set(str(d["duration"]) for d in durations)) > 1:
-            # 发现工期不一致
-            durations_str = ", ".join(set(str(d["duration"]) for d in durations))
-            results.append({
-                "requirement_id": "consistency_duration",
-                "matched_response_id": None,  # 一致性检查不针对单个响应
-                "dimension": "consistency",
-                "clause_title": "工期一致性检查",
-                "tender_requirement": "承诺工期在各处表述应一致",
-                "bid_response": f"发现多个工期: {durations_str}",
-                "status": "WARN",
-                "result": "risk",
-                "is_hard": False,
-                "remark": "工期表述不一致，请核实",
-                "evaluator": "consistency_check",
-                "evidence_json": [{"type": "inconsistency", "values": durations}],
-            })
+        if len(durations) > 1:
+            unique_durations = set(d["normalized"] for d in durations)
+            if len(unique_durations) > 1:
+                durations_str = ", ".join(f"{d['original']}" for d in durations)
+                results.append({
+                    "requirement_id": "consistency_duration",
+                    "matched_response_id": None,
+                    "dimension": "consistency",
+                    "clause_title": "工期一致性检查",
+                    "tender_requirement": "承诺工期在各处表述应一致",
+                    "bid_response": f"发现多个工期: {durations_str}",
+                    "status": "WARN",  # Step E: 降级为 WARN
+                    "result": "risk",
+                    "is_hard": False,
+                    "remark": "工期表述不一致，请核实",
+                    "evaluator": "consistency_check",
+                    "evidence_json": [{"type": "inconsistency", "values": durations}],
+                })
         
         return results
     
