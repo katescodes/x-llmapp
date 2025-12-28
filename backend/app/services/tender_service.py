@@ -606,9 +606,25 @@ class TenderService:
                 tpl_meta["ingest_v2_status"] = "success"
                 tpl_meta["ingest_v2_segments"] = ingest_v2_result.segment_count
                 
+                # 重要：从 doc_version_id 获取 document_id 作为 kb_doc_id
+                with self.dao.pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT document_id 
+                            FROM document_versions 
+                            WHERE id = %s
+                        """, (ingest_v2_result.doc_version_id,))
+                        row = cur.fetchone()
+                        if row:
+                            kb_doc_id = row[0]
+                            logger.info(f"IngestV2: Got document_id={kb_doc_id} from doc_version_id={ingest_v2_result.doc_version_id}")
+                        else:
+                            logger.warning(f"IngestV2: Failed to get document_id from doc_version_id={ingest_v2_result.doc_version_id}")
+                
                 logger.info(
                     f"IngestV2 NEW_ONLY success: "
                     f"doc_version_id={ingest_v2_result.doc_version_id} "
+                    f"document_id={kb_doc_id} "
                     f"segments={ingest_v2_result.segment_count}"
                 )
             
