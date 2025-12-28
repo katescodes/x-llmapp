@@ -292,7 +292,7 @@ async def apply_snippet_to_node(
                 if not row:
                     raise HTTPException(status_code=404, detail="目录节点不存在")
                 
-                meta_json = json.loads(row[0]) if row[0] else {}
+                meta_json = json.loads(list(row.values())[0]) if list(row.values())[0] else {}
                 
                 # 应用范本
                 if request.mode == "replace":

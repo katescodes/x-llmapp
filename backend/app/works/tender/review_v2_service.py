@@ -85,10 +85,14 @@ class ReviewV2Service:
         model_id: Optional[str],
         bidder_name: Optional[str],
         bid_asset_ids: List[str],
+        custom_rule_pack_ids: Optional[List[str]] = None,
         run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         运行审核 (v2) - 检索驱动 + 分维度生成
+        
+        Args:
+            custom_rule_pack_ids: 自定义规则包ID列表（可选）
         
         Returns:
             Dict[str, Any] - 包含 items, retrieval_trace, raw_outputs 等

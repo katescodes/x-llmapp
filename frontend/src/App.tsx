@@ -63,90 +63,41 @@ const MainApp: React.FC = () => {
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
       {/* 顶部导航 */}
-      <nav style={{
-        padding: "8px 20px",
-        borderBottom: "1px solid rgba(148, 163, 184, 0.2)",
-        background: "rgba(15, 23, 42, 0.9)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between"
-      }}>
-        <div style={{ display: "flex", gap: "16px" }}>
+      <nav className="app-nav">
+        <div className="nav-buttons">
         <button
           onClick={() => setCurrentPage("chat")}
-          style={{
-            padding: "8px 16px",
-            border: "none",
-            background: currentPage === "chat" ? "rgba(79, 70, 229, 0.2)" : "transparent",
-            color: "#e5e7eb",
-            borderRadius: "6px",
-            cursor: "pointer"
-          }}
+          className={`nav-btn ${currentPage === "chat" ? "active" : ""}`}
         >
           💬 对话
         </button>
         <button
           onClick={() => setCurrentPage("kb")}
-          style={{
-            padding: "8px 16px",
-            border: "none",
-            background: currentPage === "kb" ? "rgba(79, 70, 229, 0.2)" : "transparent",
-            color: "#e5e7eb",
-            borderRadius: "6px",
-            cursor: "pointer"
-          }}
+          className={`nav-btn ${currentPage === "kb" ? "active" : ""}`}
         >
           📚 知识库
         </button>
         <button
           onClick={() => setCurrentPage("tender")}
-          style={{
-            padding: "8px 16px",
-            border: "none",
-            background: currentPage === "tender" ? "rgba(79, 70, 229, 0.2)" : "transparent",
-            color: "#e5e7eb",
-            borderRadius: "6px",
-            cursor: "pointer"
-          }}
+          className={`nav-btn ${currentPage === "tender" ? "active" : ""}`}
         >
           🧾 招投标
         </button>
         <button
           onClick={() => setCurrentPage("declare")}
-          style={{
-            padding: "8px 16px",
-            border: "none",
-            background: currentPage === "declare" ? "rgba(79, 70, 229, 0.2)" : "transparent",
-            color: "#e5e7eb",
-            borderRadius: "6px",
-            cursor: "pointer"
-          }}
+          className={`nav-btn ${currentPage === "declare" ? "active" : ""}`}
         >
           📝 申报书
         </button>
         <button
           onClick={() => setCurrentPage("recordings")}
-          style={{
-            padding: "8px 16px",
-            border: "none",
-            background: currentPage === "recordings" ? "rgba(79, 70, 229, 0.2)" : "transparent",
-            color: "#e5e7eb",
-            borderRadius: "6px",
-            cursor: "pointer"
-          }}
+          className={`nav-btn ${currentPage === "recordings" ? "active" : ""}`}
         >
           📼 我的录音
         </button>
         <button
           onClick={() => setCurrentPage("settings")}
-          style={{
-            padding: "8px 16px",
-            border: "none",
-            background: currentPage === "settings" ? "rgba(79, 70, 229, 0.2)" : "transparent",
-            color: "#e5e7eb",
-            borderRadius: "6px",
-            cursor: "pointer"
-          }}
+          className={`nav-btn ${currentPage === "settings" ? "active" : ""}`}
         >
           ⚙️ 系统设置
         </button>
@@ -154,14 +105,7 @@ const MainApp: React.FC = () => {
         {user.role === 'admin' && (
           <button
             onClick={() => setCurrentPage("permissions")}
-            style={{
-              padding: "8px 16px",
-              border: "none",
-              background: currentPage === "permissions" ? "rgba(79, 70, 229, 0.2)" : "transparent",
-              color: "#e5e7eb",
-              borderRadius: "6px",
-              cursor: "pointer"
-            }}
+            className={`nav-btn ${currentPage === "permissions" ? "active" : ""}`}
           >
             🔐 权限管理
           </button>
@@ -169,40 +113,24 @@ const MainApp: React.FC = () => {
         </div>
         
         {/* 用户信息和退出 */}
-        <div style={{ 
-          display: "flex", 
-          alignItems: "center", 
-          gap: "16px",
-          color: "#e5e7eb",
-          fontSize: "14px"
-        }}>
-          <span>
-            👤 {user.display_name || user.username}
-            <span style={{ 
-              marginLeft: "8px",
-              padding: "2px 8px",
-              background: user.role === 'admin' ? "rgba(239, 68, 68, 0.2)" : 
-                          user.role === 'employee' ? "rgba(59, 130, 246, 0.2)" : 
-                          "rgba(34, 197, 94, 0.2)",
-              borderRadius: "4px",
-              fontSize: "12px"
-            }}>
-              {user.role === 'admin' ? '管理员' : 
-               user.role === 'employee' ? '员工' : '客户'}
+        <div className="nav-user-section">
+          <div className="nav-user-info">
+            <div className="nav-user-avatar">
+              {user.display_name?.charAt(0).toUpperCase() || user.username?.charAt(0).toUpperCase() || "U"}
+            </div>
+            <span className="nav-user-name">
+              {user.display_name || user.username}
+              <span className={`badge ${
+                user.role === 'admin' ? 'badge-error' : 
+                user.role === 'employee' ? 'badge-info' : 
+                'badge-success'
+              }`} style={{ marginLeft: '8px' }}>
+                {user.role === 'admin' ? '管理员' : 
+                 user.role === 'employee' ? '员工' : '客户'}
+              </span>
             </span>
-          </span>
-          <button
-            onClick={logout}
-            style={{
-              padding: "6px 12px",
-              border: "1px solid rgba(239, 68, 68, 0.3)",
-              background: "rgba(239, 68, 68, 0.1)",
-              color: "#fca5a5",
-              borderRadius: "6px",
-              cursor: "pointer",
-              fontSize: "13px"
-            }}
-          >
+          </div>
+          <button onClick={logout} className="nav-logout-btn">
             退出登录
           </button>
         </div>

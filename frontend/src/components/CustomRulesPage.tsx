@@ -63,16 +63,12 @@ export default function CustomRulesPage({ projectId, onBack, embedded = false }:
   const [packName, setPackName] = useState('');
   const [ruleRequirements, setRuleRequirements] = useState('');
 
-  // 加载规则包列表
+  // 加载规则包列表（加载所有共享规则包，不限制项目）
   const loadRulePacks = async () => {
     setLoading(true);
     try {
-      const params: any = {};
-      if (projectId) {
-        params.project_id = projectId;
-      }
+      // 不传project_id，加载所有共享规则包
       const res = await axios.get(`${API_BASE}/api/custom-rules/rule-packs`, {
-        params,
         headers: getAuthHeaders(),
       });
       setRulePacks(res.data || []);
@@ -116,7 +112,7 @@ export default function CustomRulesPage({ projectId, onBack, embedded = false }:
       const res = await axios.post(
         `${API_BASE}/api/custom-rules/rule-packs`,
         {
-          project_id: projectId || null,  // NULL表示共享规则包
+          project_id: null,  // 规则包是共享的，不属于特定项目
           pack_name: packName,
           rule_requirements: ruleRequirements,
         },
@@ -225,20 +221,6 @@ export default function CustomRulesPage({ projectId, onBack, embedded = false }:
           {showCreateForm ? '取消' : '+ 创建规则包'}
         </button>
       </div>
-
-      {/* 项目提示 */}
-      {!projectId && (
-        <div style={{ 
-          padding: '12px 16px', 
-          background: '#fff3cd', 
-          borderRadius: '6px', 
-          color: '#856404',
-          marginBottom: '16px',
-          fontSize: '14px'
-        }}>
-          💡 提示：当前未选择项目，显示所有规则包。创建规则包需要先选择项目。
-        </div>
-      )}
 
       {/* 创建表单 */}
       {showCreateForm && (

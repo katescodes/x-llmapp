@@ -29,21 +29,21 @@ def get_all_configs() -> List[Dict[str, Any]]:
             rows = cur.fetchall()
             return [
                 {
-                    "id": row[0],
-                    "name": row[1],
-                    "api_url": row[2],
-                    "api_key": "***" if row[3] else None,  # 隐藏API密钥
-                    "model_name": row[4],
-                    "response_format": row[5],
-                    "is_active": row[6],
-                    "is_default": row[7],
-                    "extra_params": row[8] or {},
-                    "usage_count": row[9],
-                    "last_test_at": row[10].isoformat() if row[10] else None,
-                    "last_test_status": row[11],
-                    "last_test_message": row[12],
-                    "created_at": row[13].isoformat() if row[13] else None,
-                    "updated_at": row[14].isoformat() if row[14] else None,
+                    "id": row['id'],
+                    "name": row['name'],
+                    "api_url": row['api_url'],
+                    "api_key": "***" if row.get('api_key') else None,  # 隐藏API密钥
+                    "model_name": row['model_name'],
+                    "response_format": row['response_format'],
+                    "is_active": row['is_active'],
+                    "is_default": row['is_default'],
+                    "extra_params": row.get('extra_params') or {},
+                    "usage_count": row['usage_count'],
+                    "last_test_at": row['last_test_at'].isoformat() if row.get('last_test_at') else None,
+                    "last_test_status": row['last_test_status'],
+                    "last_test_message": row['last_test_message'],
+                    "created_at": row['created_at'].isoformat() if row.get('created_at') else None,
+                    "updated_at": row['updated_at'].isoformat() if row.get('updated_at') else None,
                 }
                 for row in rows
             ]
@@ -66,21 +66,21 @@ def get_config_by_id(config_id: str) -> Optional[Dict[str, Any]]:
                 return None
             
             return {
-                "id": row[0],
-                "name": row[1],
-                "api_url": row[2],
-                "api_key": row[3],  # 完整API密钥
-                "model_name": row[4],
-                "response_format": row[5],
-                "is_active": row[6],
-                "is_default": row[7],
-                "extra_params": row[8] or {},
-                "usage_count": row[9],
-                "last_test_at": row[10].isoformat() if row[10] else None,
-                "last_test_status": row[11],
-                "last_test_message": row[12],
-                "created_at": row[13].isoformat() if row[13] else None,
-                "updated_at": row[14].isoformat() if row[14] else None,
+                "id": row['id'],
+                "name": row['name'],
+                "api_url": row['api_url'],
+                "api_key": row['api_key'],  # 完整API密钥
+                "model_name": row['model_name'],
+                "response_format": row['response_format'],
+                "is_active": row['is_active'],
+                "is_default": row['is_default'],
+                "extra_params": row.get('extra_params') or {},
+                "usage_count": row['usage_count'],
+                "last_test_at": row['last_test_at'].isoformat() if row.get('last_test_at') else None,
+                "last_test_status": row['last_test_status'],
+                "last_test_message": row['last_test_message'],
+                "created_at": row['created_at'].isoformat() if row.get('created_at') else None,
+                "updated_at": row['updated_at'].isoformat() if row.get('updated_at') else None,
             }
 
 def create_config(
@@ -115,17 +115,17 @@ def create_config(
             conn.commit()
             
             return {
-                "id": row[0],
-                "name": row[1],
-                "api_url": row[2],
-                "model_name": row[3],
-                "response_format": row[4],
-                "is_active": row[5],
-                "is_default": row[6],
-                "extra_params": row[7] or {},
-                "usage_count": row[8],
-                "created_at": row[9].isoformat() if row[9] else None,
-                "updated_at": row[10].isoformat() if row[10] else None,
+                "id": row['id'],
+                "name": row['name'],
+                "api_url": row['api_url'],
+                "model_name": row['model_name'],
+                "response_format": row['response_format'],
+                "is_active": row['is_active'],
+                "is_default": row['is_default'],
+                "extra_params": row.get('extra_params') or {},
+                "usage_count": row['usage_count'],
+                "created_at": row['created_at'].isoformat() if row.get('created_at') else None,
+                "updated_at": row['updated_at'].isoformat() if row.get('updated_at') else None,
             }
 
 def update_config(
@@ -217,7 +217,7 @@ def delete_config(config_id: str) -> bool:
             if not row:
                 return False
             
-            if row[0]:  # is_default
+            if row['is_default']:  # is_default
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Cannot delete default configuration. Set another config as default first."

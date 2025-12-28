@@ -133,7 +133,7 @@ class NewRetriever:
     ) -> List[str]:
         """从项目资产表获取 doc_version_ids，支持 tender 和 declare 项目"""
         with self.pool.connection() as conn:
-            with conn.cursor(row_factory=None) as cur:
+            with conn.cursor() as cur:
                 # 根据 project_id 前缀判断使用哪个表
                 if project_id.startswith("declare_proj_"):
                     # 申报书项目：使用 declare_assets 表
@@ -161,7 +161,7 @@ class NewRetriever:
                     
                     cur.execute(sql, params)
                     rows = cur.fetchall()
-                    return [row[0] for row in rows if row[0]]
+                    return [list(row.values())[0] for row in rows if list(row.values())[0]]
                 else:
                     # 招投标项目：使用 tender_project_assets 表
                     sql = """
@@ -178,7 +178,7 @@ class NewRetriever:
                     
                     cur.execute(sql, params)
                     rows = cur.fetchall()
-                    return [row[0] for row in rows if row[0]]
+                    return [list(row.values())[0] for row in rows if list(row.values())[0]]
     
     async def _search_dense(
         self,
@@ -249,7 +249,7 @@ class NewRetriever:
         """PG tsvector 全文检索"""
         try:
             with self.pool.connection() as conn:
-                with conn.cursor(row_factory=None) as cur:
+                with conn.cursor() as cur:
                     # 使用 tsvector 检索
                     sql = """
                         SELECT id, ts_rank(tsv, query) as rank
@@ -267,8 +267,8 @@ class NewRetriever:
                     
                     return [
                         {
-                            "chunk_id": row[0],
-                            "score": float(row[1]),
+                            "chunk_id": row['id'],
+                            "score": float(row['rank']),
                             "rank": idx,
                         }
                         for idx, row in enumerate(rows)
@@ -284,7 +284,7 @@ class NewRetriever:
         
         try:
             with self.pool.connection() as conn:
-                with conn.cursor(row_factory=None) as cur:
+                with conn.cursor() as cur:
                     sql = """
                         SELECT id, content_text, meta_json, doc_version_id
                         FROM doc_segments
@@ -295,13 +295,13 @@ class NewRetriever:
                     
                     # 按原始顺序返回
                     chunk_map = {
-                        row[0]: RetrievedChunk(
-                            chunk_id=row[0],
-                            text=row[1],
+                        row['id']: RetrievedChunk(
+                            chunk_id=row['id'],
+                            text=row['content_text'],
                             score=0.0,  # 这里 score 会被后续 RRF 覆盖
                             meta={
-                                "doc_version_id": row[3],
-                                **row[2],
+                                "doc_version_id": row['doc_version_id'],
+                                **row['meta_json'],
                             },
                         )
                         for row in rows

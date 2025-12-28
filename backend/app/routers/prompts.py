@@ -138,11 +138,16 @@ def list_prompts(
         with conn.cursor() as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
-            columns = [desc[0] for desc in cur.description]
     
     prompts = []
     for row in rows:
-        row_dict = dict(zip(columns, row))
+        row_dict = dict(row)
+        
+        # DEBUG: 打印实际数据
+        import sys
+        print(f"DEBUG row type: {type(row)}", file=sys.stderr)
+        print(f"DEBUG row_dict: {row_dict}", file=sys.stderr)
+        print(f"DEBUG content: {row_dict.get('content', 'NO CONTENT')[:100]}", file=sys.stderr)
         
         # 处理时间字段：可能已经是字符串（psycopg3）或 datetime 对象
         created_at = row_dict.get("created_at")
@@ -199,8 +204,7 @@ def get_prompt(
             if not row:
                 raise HTTPException(status_code=404, detail="Prompt not found")
             
-            columns = [desc[0] for desc in cur.description]
-            row_dict = dict(zip(columns, row))
+            row_dict = dict(row)
     
     # 处理时间字段
     created_at = row_dict.get("created_at")
@@ -362,11 +366,10 @@ def get_prompt_history(
                 (prompt_id,)
             )
             rows = cur.fetchall()
-            columns = [desc[0] for desc in cur.description]
     
     history = []
     for row in rows:
-        row_dict = dict(zip(columns, row))
+        row_dict = dict(row)
         
         # 处理时间字段
         changed_at = row_dict.get("changed_at")
@@ -413,8 +416,7 @@ def get_prompt_version(
             if not row:
                 raise HTTPException(status_code=404, detail="Version not found")
             
-            columns = [desc[0] for desc in cur.description]
-            row_dict = dict(zip(columns, row))
+            row_dict = dict(row)
     
     # 处理时间字段
     changed_at = row_dict.get("changed_at")

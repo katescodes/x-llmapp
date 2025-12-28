@@ -12,26 +12,26 @@ from app.services.kb_service import import_document
 class RecordingResponse:
     """录音响应模型"""
     def __init__(self, row: tuple):
-        self.id = row[0]
-        self.user_id = row[1]
-        self.title = row[2]
-        self.filename = row[3]
-        self.duration = row[4]
-        self.file_size = row[5]
-        self.audio_format = row[6]
-        self.transcript = row[7]
-        self.word_count = row[8]
-        self.language = row[9]
-        self.kb_id = row[10]
-        self.doc_id = row[11]
-        self.import_status = row[12]
-        self.tags = row[13] or []
-        self.category = row[14]
-        self.notes = row[15]
-        self.created_at = row[16]
-        self.imported_at = row[17]
-        self.audio_path = row[18] if len(row) > 18 else None
-        self.keep_audio = row[19] if len(row) > 19 else False
+        self.id = row['id']
+        self.user_id = row['user_id']
+        self.title = row['title']
+        self.filename = row['filename']
+        self.duration = row['duration']
+        self.file_size = row['file_size']
+        self.audio_format = row['audio_format']
+        self.transcript = row['transcript']
+        self.word_count = row['word_count']
+        self.language = row['language']
+        self.kb_id = row['kb_id']
+        self.doc_id = row['doc_id']
+        self.import_status = row['import_status']
+        self.tags = row.get('tags') or []
+        self.category = row['category']
+        self.notes = row['notes']
+        self.created_at = row['created_at']
+        self.imported_at = row.get('imported_at')
+        self.audio_path = row.get('audio_path')
+        self.keep_audio = row.get('keep_audio', False)
     
     def to_dict(self, include_kb_name: bool = False, kb_name: Optional[str] = None) -> Dict[str, Any]:
         result = {
@@ -87,7 +87,7 @@ def get_recordings(
             
             # 查询总数
             cur.execute(f"SELECT COUNT(*) FROM voice_recordings WHERE {where_clause}", params)
-            total = cur.fetchone()[0]
+            total = list(cur.fetchone().values())[0]
             
             # 查询数据
             offset = (page - 1) * page_size
@@ -114,7 +114,7 @@ def get_recordings(
                 if rec.kb_id:
                     cur.execute("SELECT name FROM knowledge_bases WHERE id = %s", (rec.kb_id,))
                     kb_row = cur.fetchone()
-                    rec_dict["kb_name"] = kb_row[0] if kb_row else None
+                    rec_dict["kb_name"] = list(kb_row.values())[0] if kb_row else None
                 recording_dicts.append(rec_dict)
             
             return recording_dicts, total
@@ -144,7 +144,7 @@ def get_recording_by_id(recording_id: str, user_id: str) -> Optional[Dict[str, A
                 """, (recording_id,))
                 check_row = cur.fetchone()
                 if check_row:
-                    print(f"[ERROR] Recording exists but user_id mismatch! DB user_id={check_row[1]}, requested user_id={user_id}")
+                    print(f"[ERROR] Recording exists but user_id mismatch! DB user_id={list(check_row.values())[1]}, requested user_id={user_id}")
                 else:
                     print(f"[ERROR] Recording not found in database: {recording_id}")
                 return None
@@ -156,7 +156,7 @@ def get_recording_by_id(recording_id: str, user_id: str) -> Optional[Dict[str, A
             if rec.kb_id:
                 cur.execute("SELECT name FROM knowledge_bases WHERE id = %s", (rec.kb_id,))
                 kb_row = cur.fetchone()
-                rec_dict["kb_name"] = kb_row[0] if kb_row else None
+                rec_dict["kb_name"] = list(kb_row.values())[0] if kb_row else None
             
             return rec_dict
 

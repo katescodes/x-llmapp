@@ -506,16 +506,16 @@ def get_requirements(project_id: str, request: Request):
                 requirements = []
                 for row in rows:
                     requirements.append({
-                        "id": row[0],
-                        "requirement_id": row[1],
-                        "dimension": row[2],
-                        "req_type": row[3],
-                        "requirement_text": row[4],
-                        "is_hard": row[5],
-                        "allow_deviation": row[6],
-                        "value_schema_json": row[7],
-                        "evidence_chunk_ids": row[8] or [],
-                        "created_at": row[9].isoformat() if row[9] else None
+                        "id": row['id'],
+                        "requirement_id": row['requirement_id'],
+                        "dimension": row['dimension'],
+                        "req_type": row['req_type'],
+                        "requirement_text": row['requirement_text'],
+                        "is_hard": row['is_hard'],
+                        "allow_deviation": row['allow_deviation'],
+                        "value_schema_json": row['value_schema_json'],
+                        "evidence_chunk_ids": row.get('evidence_chunk_ids') or [],
+                        "created_at": row['created_at'].isoformat() if row.get('created_at') else None
                     })
                 
                 return {
@@ -983,6 +983,155 @@ def apply_template_directory(project_id: str, req: TemplateDirReq, request: Requ
         raise HTTPException(status_code=404, detail=str(e))
 
 
+# ==================== 投标响应抽取 ====================
+
+@router.post("/projects/{project_id}/extract-bid-responses")
+async def extract_bid_responses(
+    project_id: str,
+    bidder_name: str,
+    request: Request,
+    user=Depends(get_current_user_sync),
+):
+    """
+    抽取投标响应要素 (for V3 review)
+    
+    Args:
+        bidder_name: 投标人名称
+    """
+    from app.platform.extraction.engine import ExtractionEngine
+    from app.platform.retrieval.facade import RetrievalFacade
+    from app.works.tender.bid_response_service import BidResponseService
+    
+    pool = _get_pool(request)
+    llm = _get_llm(request)
+    engine = ExtractionEngine()
+    retriever = RetrievalFacade(pool)
+    
+    service = BidResponseService(
+        pool=pool,
+        engine=engine,
+        retriever=retriever,
+        llm=llm
+    )
+    
+    try:
+        result = await service.extract_bid_response_v1(
+            project_id=project_id,
+            bidder_name=bidder_name,
+            model_id=None,
+            run_id=None
+        )
+        return {
+            "success": True,
+            "message": f"成功抽取{result.get('total_responses', 0)}条响应数据",
+            "data": result
+        }
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception(f"Extract bid responses failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/projects/{project_id}/bid-responses")
+def get_bid_responses(
+    project_id: str,
+    bidder_name: Optional[str] = None,
+    request: Request = None,
+    user=Depends(get_current_user_sync),
+):
+    """
+    获取投标响应数据
+    
+    Args:
+        project_id: 项目ID
+        bidder_name: 投标人名称（可选，不传则返回所有投标人）
+    """
+    pool = _get_pool(request)
+    
+    try:
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                if bidder_name:
+                    cur.execute("""
+                        SELECT 
+                            id,
+                            bidder_name,
+                            dimension,
+                            response_type,
+                            response_text,
+                            extracted_value_json,
+                            evidence_chunk_ids,
+                            created_at
+                        FROM tender_bid_response_items
+                        WHERE project_id = %s AND bidder_name = %s
+                        ORDER BY dimension, created_at
+                    """, (project_id, bidder_name))
+                else:
+                    cur.execute("""
+                        SELECT 
+                            id,
+                            bidder_name,
+                            dimension,
+                            response_type,
+                            response_text,
+                            extracted_value_json,
+                            evidence_chunk_ids,
+                            created_at
+                        FROM tender_bid_response_items
+                        WHERE project_id = %s
+                        ORDER BY bidder_name, dimension, created_at
+                    """, (project_id,))
+                
+                rows = cur.fetchall()
+                
+                responses = []
+                for row in rows:
+                    responses.append({
+                        "id": row['id'],
+                        "bidder_name": row['bidder_name'],
+                        "dimension": row['dimension'],
+                        "response_type": row['response_type'],
+                        "response_text": row['response_text'],
+                        "extracted_value_json": row['extracted_value_json'],
+                        "evidence_chunk_ids": row.get('evidence_chunk_ids') or [],
+                        "created_at": row['created_at'].isoformat() if row.get('created_at') else None
+                    })
+                
+                # 按维度统计
+                cur.execute("""
+                    SELECT 
+                        bidder_name,
+                        dimension,
+                        COUNT(*) as count
+                    FROM tender_bid_response_items
+                    WHERE project_id = %s
+                    """ + (" AND bidder_name = %s" if bidder_name else "") + """
+                    GROUP BY bidder_name, dimension
+                    ORDER BY bidder_name, dimension
+                """, (project_id, bidder_name) if bidder_name else (project_id,))
+                
+                stats_rows = cur.fetchall()
+                stats = [
+                    {
+                        "bidder_name": row['bidder_name'],
+                        "dimension": row['dimension'],
+                        "count": row['count']
+                    }
+                    for row in stats_rows
+                ]
+                
+                return {
+                    "count": len(responses),
+                    "responses": responses,
+                    "stats": stats
+                }
+    
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception(f"Get bid responses failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ==================== 审核 ====================
 
 @router.post("/projects/{project_id}/review/run")
@@ -1021,6 +1170,8 @@ def run_review(
                 req.custom_rule_asset_ids,
                 req.bidder_name,
                 req.bid_asset_ids,
+                custom_rule_pack_ids=req.custom_rule_pack_ids,
+                use_llm_semantic=req.use_llm_semantic,
                 run_id=run_id,
                 owner_id=owner_id,
             )

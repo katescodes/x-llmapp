@@ -20,6 +20,7 @@ class EffectiveRulesetBuilder:
         project_id: str,
         include_system_defaults: bool = True,
         include_project_rules: bool = True,
+        custom_rule_pack_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         构建有效规则集
@@ -27,13 +28,15 @@ class EffectiveRulesetBuilder:
         规则合并策略：
         1. 加载系统内置规则（is_system_default=true）
         2. 加载项目级自定义规则（project_id匹配）
-        3. 按 priority 升序排序（数字越小优先级越高）
-        4. 同 rule_key 的规则，项目级覆盖系统级
+        3. 加载自定义规则包（custom_rule_pack_ids）
+        4. 按 priority 升序排序（数字越小优先级越高）
+        5. 同 rule_key 的规则，项目级/自定义覆盖系统级
         
         Args:
             project_id: 项目ID
             include_system_defaults: 是否包含系统内置规则
             include_project_rules: 是否包含项目自定义规则
+            custom_rule_pack_ids: 自定义规则包ID列表（可选）
         
         Returns:
             有效规则列表，按 priority 升序排序
@@ -47,81 +50,142 @@ class EffectiveRulesetBuilder:
         
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
-                # 1. 加载系统内置规则
+                # 1. 加载系统内置规则（pack_type = 'system'）
                 if include_system_defaults:
                     cur.execute("""
-                        SELECT r.id, r.rule_key, r.name, r.description, r.priority,
-                               r.severity, r.rule_type, r.condition_json, r.action_json,
-                               r.is_active, rp.name as rule_pack_name
+                        SELECT r.id, r.rule_key, r.rule_name, r.dimension, 
+                               r.evaluator, r.severity, r.condition_json, r.is_hard,
+                               rp.pack_name as rule_pack_name
                         FROM tender_rules r
                         JOIN tender_rule_packs rp ON r.rule_pack_id = rp.id
-                        WHERE rp.is_system_default = true
-                          AND r.is_active = true
-                        ORDER BY r.priority ASC
+                        WHERE rp.pack_type = 'system'
+                          AND rp.is_active = true
+                        ORDER BY rp.priority ASC, r.rule_key ASC
                     """)
                     
                     system_rules = cur.fetchall()
                     for row in system_rules:
                         all_rules.append({
-                            "id": row[0],
-                            "rule_key": row[1],
-                            "name": row[2],
-                            "description": row[3],
-                            "priority": row[4],
-                            "severity": row[5],
-                            "rule_type": row[6],
-                            "condition_json": row[7],
-                            "action_json": row[8],
-                            "is_active": row[9],
-                            "rule_pack_name": row[10],
+                            "id": row['id'],
+                            "rule_key": row['rule_key'],
+                            "name": row['rule_name'],
+                            "dimension": row['dimension'],
+                            "evaluator": row['evaluator'],
+                            "severity": row['severity'],
+                            "condition_json": row['condition_json'],
+                            "is_hard": row['is_hard'],
+                            "rule_pack_name": row['rule_pack_name'],
                             "source": "system_default"
                         })
                 
-                # 2. 加载项目级自定义规则
+                # 2. 加载项目级自定义规则（project_id = 当前项目）
                 if include_project_rules:
                     cur.execute("""
-                        SELECT r.id, r.rule_key, r.name, r.description, r.priority,
-                               r.severity, r.rule_type, r.condition_json, r.action_json,
-                               r.is_active, rp.name as rule_pack_name
+                        SELECT r.id, r.rule_key, r.rule_name, r.dimension,
+                               r.evaluator, r.severity, r.condition_json, r.is_hard,
+                               rp.pack_name as rule_pack_name
                         FROM tender_rules r
                         JOIN tender_rule_packs rp ON r.rule_pack_id = rp.id
                         WHERE rp.project_id = %s
-                          AND r.is_active = true
-                        ORDER BY r.priority ASC
+                          AND rp.is_active = true
+                        ORDER BY rp.priority ASC, r.rule_key ASC
                     """, (project_id,))
                     
                     project_rules = cur.fetchall()
                     for row in project_rules:
                         all_rules.append({
-                            "id": row[0],
-                            "rule_key": row[1],
-                            "name": row[2],
-                            "description": row[3],
-                            "priority": row[4],
-                            "severity": row[5],
-                            "rule_type": row[6],
-                            "condition_json": row[7],
-                            "action_json": row[8],
-                            "is_active": row[9],
-                            "rule_pack_name": row[10],
+                            "id": row['id'],
+                            "rule_key": row['rule_key'],
+                            "name": row['rule_name'],
+                            "dimension": row['dimension'],
+                            "evaluator": row['evaluator'],
+                            "severity": row['severity'],
+                            "condition_json": row['condition_json'],
+                            "is_hard": row['is_hard'],
+                            "rule_pack_name": row['rule_pack_name'],
                             "source": "project_custom"
                         })
+                
+                # 3. 加载用户选择的自定义规则包中的规则
+                if custom_rule_pack_ids:
+                    from psycopg.sql import SQL, Identifier
+                    placeholders = ','.join(['%s'] * len(custom_rule_pack_ids))
+                    cur.execute(f"""
+                        SELECT r.id, r.rule_key, r.rule_name, r.dimension,
+                               r.evaluator, r.severity, r.condition_json, r.is_hard,
+                               rp.pack_name as rule_pack_name
+                        FROM tender_rules r
+                        JOIN tender_rule_packs rp ON r.rule_pack_id = rp.id
+                        WHERE rp.id IN ({placeholders})
+                          AND rp.is_active = true
+                        ORDER BY rp.priority ASC, r.rule_key ASC
+                    """, tuple(custom_rule_pack_ids))
+                    
+                    custom_rules = cur.fetchall()
+                    logger.info(f"EffectiveRuleset: Loaded {len(custom_rules)} rules from {len(custom_rule_pack_ids)} custom rule packs")
+                    for row in custom_rules:
+                        all_rules.append({
+                            "id": row['id'],
+                            "rule_key": row['rule_key'],
+                            "name": row['rule_name'],
+                            "dimension": row['dimension'],
+                            "evaluator": row['evaluator'],
+                            "severity": row['severity'],
+                            "condition_json": row['condition_json'],
+                            "is_hard": row['is_hard'],
+                            "rule_pack_name": row['rule_pack_name'],
+                            "source": "user_selected_custom"
+                        })
         
-        # 3. 去重：同 rule_key 的规则，项目级覆盖系统级
+        # 4. 去重：同 rule_key 的规则，项目级/用户选择覆盖系统级
         effective_rules = self._deduplicate_by_rule_key(all_rules)
         
-        # 4. 按 priority 排序
-        effective_rules.sort(key=lambda r: r["priority"])
+        # 5. 去重：按 rule_key 去重，优先级：user_selected_custom > project_custom > system_default
+        seen_keys = set()
+        effective_rules = []
+        for rule in all_rules:
+            if rule["rule_key"] not in seen_keys:
+                effective_rules.append(rule)
+                seen_keys.add(rule["rule_key"])
         
         logger.info(
             f"EffectiveRuleset: Built ruleset with {len(effective_rules)} rules "
             f"(system={sum(1 for r in effective_rules if r['source'] == 'system_default')}, "
-            f"project={sum(1 for r in effective_rules if r['source'] == 'project_custom')})"
+            f"project={sum(1 for r in effective_rules if r['source'] == 'project_custom')}, "
+            f"custom={sum(1 for r in effective_rules if r['source'] == 'user_selected_custom')})"
         )
         
         return effective_rules
     
     def _deduplicate_by_rule_key(self, rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        按 rule_key 去重，项目级/用户选择覆盖系统级
+        
+        策略：
+        - 同 rule_key 的规则，优先级: user_selected_custom > project_custom > system_default
+        - 保留优先级最高的规则
+        """
+        rule_map = {}
+        source_priority = {
+            "user_selected_custom": 3,
+            "project_custom": 2,
+            "system_default": 1
+        }
+        
+        for rule in rules:
+            rule_key = rule["rule_key"]
+            
+            if rule_key not in rule_map:
+                rule_map[rule_key] = rule
+            else:
+                # 根据source优先级决定是否覆盖
+                current_priority = source_priority.get(rule["source"], 0)
+                existing_priority = source_priority.get(rule_map[rule_key]["source"], 0)
+                if current_priority > existing_priority:
+                    rule_map[rule_key] = rule
+                    logger.info(f"EffectiveRuleset: Rule '{rule_key}' overridden by {rule['source']}")
+        
+        return list(rule_map.values())
         """
         按 rule_key 去重，项目级覆盖系统级
         

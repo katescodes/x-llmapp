@@ -222,7 +222,7 @@ class DocStoreService:
             with conn.cursor() as cur:
                 cur.execute(sql, (doc_version_id,))
                 row = cur.fetchone()
-                return int(row[0] if row else 0)
+                return int(list(row.values())[0] if row else 0)
 
     def get_document(self, document_id: str) -> Optional[Dict[str, Any]]:
         """

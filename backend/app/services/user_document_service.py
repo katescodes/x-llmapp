@@ -522,14 +522,14 @@ class UserDocumentService:
             return {}
         
         return {
-            "id": row[0],
-            "project_id": row[1],
-            "category_name": row[2],
-            "category_desc": row[3],
-            "display_order": row[4],
-            "created_at": row[5].isoformat() if row[5] else None,
-            "updated_at": row[6].isoformat() if row[6] else None,
-            "doc_count": row[7] if len(row) > 7 else 0,
+            "id": row['id'],
+            "project_id": row['project_id'],
+            "category_name": row['category_name'],
+            "category_desc": row['category_desc'],
+            "display_order": row['display_order'],
+            "created_at": row['created_at'].isoformat() if row.get('created_at') else None,
+            "updated_at": row['updated_at'].isoformat() if row.get('updated_at') else None,
+            "doc_count": row.get('doc_count', 0),
         }
     
     def _row_to_document(self, row) -> Dict[str, Any]:
@@ -538,24 +538,24 @@ class UserDocumentService:
             return {}
         
         return {
-            "id": row[0],
-            "project_id": row[1],
-            "category_id": row[2],
-            "doc_name": row[3],
-            "filename": row[4],
-            "file_type": row[5],
-            "mime_type": row[6],
-            "file_size": row[7],
-            "storage_path": row[8],
-            "kb_doc_id": row[9],
-            "doc_tags": row[10] or [],
-            "description": row[11],
-            "is_analyzed": row[12],
-            "analysis_json": row[13] or {},
-            "meta_json": row[14] or {},
-            "owner_id": row[15],
-            "created_at": row[16].isoformat() if row[16] else None,
-            "updated_at": row[17].isoformat() if row[17] else None,
-            "category_name": row[18] if len(row) > 18 else None,
+            "id": row['id'],
+            "project_id": row['project_id'],
+            "category_id": row['category_id'],
+            "doc_name": row['doc_name'],
+            "filename": row['filename'],
+            "file_type": row['file_type'],
+            "mime_type": row['mime_type'],
+            "file_size": row['file_size'],
+            "storage_path": row['storage_path'],
+            "kb_doc_id": row['kb_doc_id'],
+            "doc_tags": row.get('doc_tags') or [],
+            "description": row['description'],
+            "is_analyzed": row['is_analyzed'],
+            "analysis_json": row.get('analysis_json') or {},
+            "meta_json": row.get('meta_json') or {},
+            "owner_id": row['owner_id'],
+            "created_at": row['created_at'].isoformat() if row.get('created_at') else None,
+            "updated_at": row['updated_at'].isoformat() if row.get('updated_at') else None,
+            "category_name": row.get('category_name'),
         }
 

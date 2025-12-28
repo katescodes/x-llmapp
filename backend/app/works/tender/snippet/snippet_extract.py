@@ -210,17 +210,17 @@ def get_snippets_by_project(project_id: str, db_pool) -> List[Dict[str, Any]]:
             snippets = []
             for row in rows:
                 snippets.append({
-                    "id": row[0],
-                    "project_id": row[1],
-                    "source_file_id": row[2],
-                    "norm_key": row[3],
-                    "title": row[4],
-                    "start_block_id": row[5],
-                    "end_block_id": row[6],
-                    "blocks_json": json.loads(row[7]) if row[7] else [],
-                    "suggest_outline_titles": row[8] or [],
-                    "confidence": row[9],
-                    "created_at": row[10].isoformat() if row[10] else None
+                    "id": row['id'],
+                    "project_id": row['project_id'],
+                    "source_file_id": row['source_file_id'],
+                    "norm_key": row['norm_key'],
+                    "title": row['title'],
+                    "start_block_id": row['start_block_id'],
+                    "end_block_id": row['end_block_id'],
+                    "blocks_json": json.loads(row['blocks_json']) if row.get('blocks_json') else [],
+                    "suggest_outline_titles": row.get('suggest_outline_titles') or [],
+                    "confidence": row['confidence'],
+                    "created_at": row['created_at'].isoformat() if row.get('created_at') else None
                 })
             
             return snippets
@@ -258,16 +258,16 @@ def get_snippet_by_id(snippet_id: str, db_pool) -> Optional[Dict[str, Any]]:
                 return None
             
             return {
-                "id": row[0],
-                "project_id": row[1],
-                "source_file_id": row[2],
-                "norm_key": row[3],
-                "title": row[4],
-                "start_block_id": row[5],
-                "end_block_id": row[6],
-                "blocks_json": json.loads(row[7]) if row[7] else [],
-                "suggest_outline_titles": row[8] or [],
-                "confidence": row[9],
-                "created_at": row[10].isoformat() if row[10] else None
+                "id": row['id'],
+                "project_id": row['project_id'],
+                "source_file_id": row['source_file_id'],
+                "norm_key": row['norm_key'],
+                "title": row['title'],
+                "start_block_id": row['start_block_id'],
+                "end_block_id": row['end_block_id'],
+                "blocks_json": json.loads(row['blocks_json']) if row.get('blocks_json') else [],
+                "suggest_outline_titles": row.get('suggest_outline_titles') or [],
+                "confidence": row['confidence'],
+                "created_at": row['created_at'].isoformat() if row.get('created_at') else None
             }
 

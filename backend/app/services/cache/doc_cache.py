@@ -10,7 +10,7 @@ def should_skip(url: str, content_hash: str) -> bool:
             row = cur.fetchone()
             if not row:
                 return False
-            return row[0] == content_hash
+            return row['content_hash'] == content_hash
 
 
 def upsert(url: str, content_hash: str) -> None:

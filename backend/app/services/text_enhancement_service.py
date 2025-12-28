@@ -4,7 +4,7 @@
 """
 import logging
 from typing import Optional, Dict, Any
-from app.services.llm.llm_model_store import LLMModelStore
+from app.services.llm_model_store import LLMModelStore
 
 logger = logging.getLogger(__name__)
 

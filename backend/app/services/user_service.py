@@ -65,18 +65,18 @@ def create_user(user_data: UserCreate) -> UserResponse:
             conn.commit()
             
             return UserResponse(
-                id=row[0],
-                username=row[1],
-                email=row[2],
-                role=row[3],
-                display_name=row[4],
-                phone=row[5],
-                department=row[6],
-                company=row[7],
-                avatar_url=row[8],
-                is_active=row[9],
-                last_login_at=row[10],
-                created_at=row[11]
+                id=row['id'],
+                username=row['username'],
+                email=row['email'],
+                role=row['role'],
+                display_name=row['display_name'],
+                phone=row['phone'],
+                department=row['department'],
+                company=row['company'],
+                avatar_url=row['avatar_url'],
+                is_active=row['is_active'],
+                last_login_at=row['last_login_at'],
+                created_at=row['created_at']
             )
 
 def authenticate_user(username: str, password: str) -> Optional[UserInDB]:
@@ -97,11 +97,11 @@ def authenticate_user(username: str, password: str) -> Optional[UserInDB]:
                 return None
             
             # 验证密码
-            if not verify_password(password, row[2]):
+            if not verify_password(password, row['password_hash']):
                 return None
             
             # 检查用户是否激活
-            if not row[10]:  # is_active
+            if not row['is_active']:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="User account is disabled"
@@ -110,25 +110,25 @@ def authenticate_user(username: str, password: str) -> Optional[UserInDB]:
             # 更新最后登录时间
             cur.execute(
                 "UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = %s",
-                (row[0],)
+                (row['id'],)
             )
             conn.commit()
             
             return UserInDB(
-                id=row[0],
-                username=row[1],
-                password_hash=row[2],
-                email=row[3],
-                role=row[4],
-                display_name=row[5],
-                phone=row[6],
-                department=row[7],
-                company=row[8],
-                avatar_url=row[9],
-                is_active=row[10],
-                last_login_at=row[11] or datetime.now(),
-                created_at=row[12],
-                updated_at=row[13]
+                id=row['id'],
+                username=row['username'],
+                password_hash=row['password_hash'],
+                email=row['email'],
+                role=row['role'],
+                display_name=row['display_name'],
+                phone=row['phone'],
+                department=row['department'],
+                company=row['company'],
+                avatar_url=row['avatar_url'],
+                is_active=row['is_active'],
+                last_login_at=row['last_login_at'] or datetime.now(),
+                created_at=row['created_at'],
+                updated_at=row['updated_at']
             )
 
 def get_user_by_id(user_id: str) -> Optional[UserResponse]:
@@ -148,18 +148,18 @@ def get_user_by_id(user_id: str) -> Optional[UserResponse]:
                 return None
             
             return UserResponse(
-                id=row[0],
-                username=row[1],
-                email=row[2],
-                role=row[3],
-                display_name=row[4],
-                phone=row[5],
-                department=row[6],
-                company=row[7],
-                avatar_url=row[8],
-                is_active=row[9],
-                last_login_at=row[10],
-                created_at=row[11]
+                id=row['id'],
+                username=row['username'],
+                email=row['email'],
+                role=row['role'],
+                display_name=row['display_name'],
+                phone=row['phone'],
+                department=row['department'],
+                company=row['company'],
+                avatar_url=row['avatar_url'],
+                is_active=row['is_active'],
+                last_login_at=row['last_login_at'],
+                created_at=row['created_at']
             )
 
 def get_all_users(role: Optional[UserRole] = None) -> List[UserResponse]:
@@ -187,18 +187,18 @@ def get_all_users(role: Optional[UserRole] = None) -> List[UserResponse]:
             rows = cur.fetchall()
             return [
                 UserResponse(
-                    id=row[0],
-                    username=row[1],
-                    email=row[2],
-                    role=row[3],
-                    display_name=row[4],
-                    phone=row[5],
-                    department=row[6],
-                    company=row[7],
-                    avatar_url=row[8],
-                    is_active=row[9],
-                    last_login_at=row[10],
-                    created_at=row[11]
+                    id=row['id'],
+                    username=row['username'],
+                    email=row['email'],
+                    role=row['role'],
+                    display_name=row['display_name'],
+                    phone=row['phone'],
+                    department=row['department'],
+                    company=row['company'],
+                    avatar_url=row['avatar_url'],
+                    is_active=row['is_active'],
+                    last_login_at=row['last_login_at'],
+                    created_at=row['created_at']
                 )
                 for row in rows
             ]
@@ -264,18 +264,18 @@ def update_user(user_id: str, update_data: UserUpdate) -> UserResponse:
             conn.commit()
             
             return UserResponse(
-                id=row[0],
-                username=row[1],
-                email=row[2],
-                role=row[3],
-                display_name=row[4],
-                phone=row[5],
-                department=row[6],
-                company=row[7],
-                avatar_url=row[8],
-                is_active=row[9],
-                last_login_at=row[10],
-                created_at=row[11]
+                id=row['id'],
+                username=row['username'],
+                email=row['email'],
+                role=row['role'],
+                display_name=row['display_name'],
+                phone=row['phone'],
+                department=row['department'],
+                company=row['company'],
+                avatar_url=row['avatar_url'],
+                is_active=row['is_active'],
+                last_login_at=row['last_login_at'],
+                created_at=row['created_at']
             )
 
 def change_password(user_id: str, old_password: str, new_password: str) -> bool:
@@ -296,7 +296,7 @@ def change_password(user_id: str, old_password: str, new_password: str) -> bool:
                 )
             
             # 验证旧密码
-            if not verify_password(old_password, row[0]):
+            if not verify_password(old_password, row['password_hash']):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Incorrect old password"

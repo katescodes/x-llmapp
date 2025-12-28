@@ -7,9 +7,9 @@ from typing import Any, Dict, List, Optional
 
 from app.platform.extraction.engine import ExtractionEngine
 from app.platform.retrieval.facade import RetrievalFacade
-from app.platform.llm.orchestrator import LLMOrchestrator
-from app.services.embedding_store import get_embedding_store
-from app.works.tender.dao import TenderDAO
+# from app.platform.llm.orchestrator import LLMOrchestrator  # 不存在的路径
+from app.services.embedding_provider_store import get_embedding_store
+from app.services.dao.tender_dao import TenderDAO
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class BidResponseService:
         pool: Any,
         engine: ExtractionEngine,
         retriever: RetrievalFacade,
-        llm: LLMOrchestrator,
+        llm: Any,  # LLM orchestrator (使用Any避免循环导入)
     ):
         self.pool = pool
         self.engine = engine
@@ -88,10 +88,12 @@ class BidResponseService:
         
         # 4. 解析结果
         responses_list = []
-        extracted_bidder_name = bidder_name  # 默认使用传入的投标人名称
+        # 重要：直接使用传入的bidder_name，不使用LLM提取的值
+        # 这样可以确保前后端的bidder_name一致，避免查询时匹配不上
+        extracted_bidder_name = bidder_name
         
         if isinstance(result.data, dict):
-            extracted_bidder_name = result.data.get("bidder_name", bidder_name)
+            # 不再使用LLM提取的bidder_name: extracted_bidder_name = result.data.get("bidder_name", bidder_name)
             responses_list = result.data.get("responses", [])
         else:
             logger.warning(f"BidResponseService: unexpected data format, type={type(result.data)}")
@@ -108,11 +110,16 @@ class BidResponseService:
             # 确保每个 response 有唯一的 ID
             db_id = str(uuid.uuid4())
             
+            # 转换dict和list为JSON字符串（Psycopg3需要）
+            import json
+            extracted_value_json = resp.get("extracted_value_json", {})
+            evidence_chunk_ids = resp.get("evidence_chunk_ids", [])
+            
             self.dao._execute("""
                 INSERT INTO tender_bid_response_items (
                     id, project_id, bidder_name, dimension, response_type,
                     response_text, extracted_value_json, evidence_chunk_ids
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::text[])
             """, (
                 db_id,
                 project_id,
@@ -120,8 +127,8 @@ class BidResponseService:
                 resp.get("dimension", "other"),
                 resp.get("response_type", "text"),
                 resp.get("response_text", ""),
-                resp.get("extracted_value_json", {}),
-                resp.get("evidence_chunk_ids", []),
+                json.dumps(extracted_value_json) if extracted_value_json else '{}',
+                evidence_chunk_ids,
             ))
             added_count += 1
         

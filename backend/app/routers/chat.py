@@ -115,7 +115,7 @@ def _find_projects_by_kb_ids(pool, kb_ids: List[str]) -> List[str]:
                 kb_ids
             )
             rows = cur.fetchall()
-            return [row[0] for row in rows]
+            return [row[list(row.keys())[0]] for row in rows]
 
 
 def _prepare_sources(retrieved_chunks: list[dict], min_sources: int = 0) -> list[Source]:

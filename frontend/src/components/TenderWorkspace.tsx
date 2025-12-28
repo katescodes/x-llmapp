@@ -13,6 +13,7 @@ import DirectoryToolbar from './tender/DirectoryToolbar';
 import DocumentCanvas from './tender/DocumentCanvas';
 import SampleSidebar, { SamplePreviewState } from './tender/SampleSidebar';
 import ReviewTable from './tender/ReviewTable';
+import BidResponseTable from './tender/BidResponseTable';
 import RichTocPreview from './template/RichTocPreview';
 import { templateSpecToTemplateStyle, templateSpecToTocItems } from './template/templatePreviewUtils';
 import FormatTemplatesPage from './FormatTemplatesPage';
@@ -146,6 +147,24 @@ export default function TenderWorkspace() {
   
   // ========== 新架构：按项目ID存储所有状态 ==========
   
+  // 投标响应数据接口
+  interface BidResponse {
+    id: string;
+    bidder_name: string;
+    dimension: string;
+    response_type: string;
+    response_text: string;
+    extracted_value_json: any;
+    evidence_chunk_ids: string[];
+    created_at: string;
+  }
+
+  interface BidResponseStats {
+    bidder_name: string;
+    dimension: string;
+    count: number;
+  }
+
   // 每个项目的完整状态
   interface ProjectState {
     // 数据
@@ -153,6 +172,8 @@ export default function TenderWorkspace() {
     projectInfo: ProjectInfo | null;
     riskAnalysisData: RiskAnalysisData | null;
     directory: DirectoryNode[];
+    bidResponses: BidResponse[];
+    bidResponseStats: BidResponseStats[];
     reviewItems: ReviewItem[];
     evidenceChunks: Chunk[];
     bodyByNodeId: Record<string, string>;
@@ -162,6 +183,7 @@ export default function TenderWorkspace() {
       info: TenderRun | null;
       risk: TenderRun | null;
       directory: TenderRun | null;
+      bidResponse: TenderRun | null;
       review: TenderRun | null;
     };
     
@@ -186,6 +208,8 @@ export default function TenderWorkspace() {
     projectInfo: null,
     riskAnalysisData: null,
     directory: [],
+    bidResponses: [],
+    bidResponseStats: [],
     reviewItems: [],
     evidenceChunks: [],
     bodyByNodeId: {},
@@ -193,6 +217,7 @@ export default function TenderWorkspace() {
       info: null,
       risk: null,
       directory: null,
+      bidResponse: null,
       review: null,
     },
     samplesOpen: false,
@@ -292,6 +317,24 @@ export default function TenderWorkspace() {
   const setDirRun = useCallback((value: TenderRun | null) => {
     if (!currentProject) return;
     updateProjectState(currentProject.id, { runs: { ...state.runs, directory: value } });
+  }, [currentProject, state.runs, updateProjectState]);
+  
+  const bidResponses = state.bidResponses;
+  const setBidResponses = useCallback((value: BidResponse[]) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { bidResponses: value });
+  }, [currentProject, updateProjectState]);
+  
+  const bidResponseStats = state.bidResponseStats;
+  const setBidResponseStats = useCallback((value: BidResponseStats[]) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { bidResponseStats: value });
+  }, [currentProject, updateProjectState]);
+  
+  const bidResponseRun = state.runs.bidResponse;
+  const setBidResponseRun = useCallback((value: TenderRun | null) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { runs: { ...state.runs, bidResponse: value } });
   }, [currentProject, state.runs, updateProjectState]);
   
   const bodyByNodeId = state.bodyByNodeId;
@@ -405,7 +448,7 @@ export default function TenderWorkspace() {
   const [autoFillingSamples, setAutoFillingSamples] = useState(false);
   const [formatPreviewLoading, setFormatPreviewLoading] = useState<boolean>(false);
   
-  // 自定义规则包列表（按项目加载）
+  // 自定义规则包列表（全局共享，所有项目都能看到）
   const [rulePacks, setRulePacks] = useState<any[]>([]);
 
   // 轻量 Toast（不引入第三方库）
@@ -428,7 +471,7 @@ export default function TenderWorkspace() {
   const pollTimersRef = useRef<Map<string, Map<string, ReturnType<typeof setInterval>>>>(new Map());
   
   // 停止指定项目的轮询
-  const stopPolling = useCallback((projectId: string, taskType?: 'info' | 'risk' | 'directory' | 'review') => {
+  const stopPolling = useCallback((projectId: string, taskType?: 'info' | 'risk' | 'directory' | 'bidResponse' | 'review') => {
     const timers = pollTimersRef.current.get(projectId);
     if (!timers) return;
     
@@ -458,7 +501,7 @@ export default function TenderWorkspace() {
   // 启动轮询
   const startPolling = useCallback((
     projectId: string,
-    taskType: 'info' | 'risk' | 'directory' | 'review',
+    taskType: 'info' | 'risk' | 'directory' | 'bidResponse' | 'review',
     runId: string,
     onSuccess: () => void
   ) => {
@@ -659,26 +702,17 @@ export default function TenderWorkspace() {
     }
   }, [currentProject]);
   
-  // 加载自定义规则包列表
-  const loadRulePacks = useCallback(async (forceProjectId?: string) => {
-    const projectId = forceProjectId || currentProject?.id;
-    if (!projectId) return;
-    
+  // 加载自定义规则包列表（全局共享，不限制项目）
+  const loadRulePacks = useCallback(async () => {
     try {
-      const data = await api.get(`/api/custom-rules/rule-packs?project_id=${projectId}`);
-      
-      // ✅ 加载后验证项目ID
-      if (currentProject && currentProject.id !== projectId) {
-        console.log('[loadRulePacks] 加载完成时项目已切换，丢弃数据');
-        return;
-      }
-      
+      // 不传project_id，加载所有共享规则包
+      const data = await api.get(`/api/custom-rules/rule-packs`);
       setRulePacks(data || []);
     } catch (err) {
       console.error('Failed to load rule packs:', err);
       setRulePacks([]);
     }
-  }, [currentProject]);
+  }, []); // 不依赖currentProject
 
   const loadProjectInfo = useCallback(async (forceProjectId?: string) => {
     // 使用传入的projectId或当前项目ID
@@ -771,6 +805,108 @@ export default function TenderWorkspace() {
     const nodes = await loadDirectory();
     return nodes;
   }, [loadDirectory]);
+
+  const loadBidResponses = useCallback(async (forceProjectId?: string) => {
+    const projectId = forceProjectId || currentProject?.id;
+    if (!projectId) return;
+    
+    // 加载前验证项目ID
+    if (!forceProjectId && currentProject && currentProject.id !== projectId) {
+      console.log('[loadBidResponses] 项目已切换，跳过加载');
+      return;
+    }
+    
+    try {
+      // 传入bidder_name参数进行过滤
+      // 现在后端已修改为使用前端传入的bidder_name，可以正确匹配
+      const selectedBidderName = state.selectedBidder;
+      const params = selectedBidderName ? `?bidder_name=${encodeURIComponent(selectedBidderName)}` : '';
+      const data = await api.get(`/api/apps/tender/projects/${projectId}/bid-responses${params}`);
+      
+      // 加载后验证项目ID
+      if (currentProject && currentProject.id !== projectId) {
+        console.log('[loadBidResponses] 加载完成时项目已切换，丢弃数据');
+        return;
+      }
+      
+      setBidResponses(data.responses || []);
+      setBidResponseStats(data.stats || []);
+    } catch (err) {
+      console.error('Failed to load bid responses:', err);
+      setBidResponses([]);
+      setBidResponseStats([]);
+    }
+  }, [currentProject, state.selectedBidder]);
+
+  const extractBidResponses = useCallback(async () => {
+    if (!currentProject) return;
+    if (!state.selectedBidder) {
+      alert('请先选择投标人');
+      return;
+    }
+    
+    const projectId = currentProject.id;
+    const bidderName = state.selectedBidder;
+    
+    setBidResponseRun({
+      id: 'temp',
+      status: 'running',
+      progress: 0,
+      message: '开始抽取投标响应数据...',
+      kind: 'extract_bid_responses',
+    } as TenderRun);
+    
+    try {
+      const res = await api.post(
+        `/api/apps/tender/projects/${projectId}/extract-bid-responses?bidder_name=${encodeURIComponent(bidderName)}`,
+        {}
+      );
+      
+      // 验证项目是否切换
+      if (currentProject && currentProject.id !== projectId) {
+        console.log('[extractBidResponses] 完成时项目已切换，丢弃结果');
+        return;
+      }
+      
+      if (res.success) {
+        setBidResponseRun({
+          id: 'temp',
+          status: 'success',
+          progress: 1.0,
+          message: `抽取完成！共抽取 ${res.data?.total_responses || 0} 条投标响应数据`,
+          kind: 'extract_bid_responses',
+        } as TenderRun);
+        
+        // 重新加载投标响应数据
+        await loadBidResponses(projectId);
+        
+        showToast('success', `抽取完成！共抽取 ${res.data?.total_responses || 0} 条投标响应数据`);
+      } else {
+        setBidResponseRun({
+          id: 'temp',
+          status: 'failed',
+          progress: 0,
+          message: res.message || '抽取失败',
+          kind: 'extract_bid_responses',
+        } as TenderRun);
+        showToast('error', `抽取失败: ${res.message || '未知错误'}`);
+      }
+    } catch (err: any) {
+      if (currentProject && currentProject.id !== projectId) {
+        console.log('[extractBidResponses] 错误时项目已切换，丢弃错误');
+        return;
+      }
+      
+      setBidResponseRun({
+        id: 'temp',
+        status: 'failed',
+        progress: 0,
+        message: err.message || '抽取失败',
+        kind: 'extract_bid_responses',
+      } as TenderRun);
+      showToast('error', `抽取失败: ${err.message || err}`);
+    }
+  }, [currentProject, state.selectedBidder, loadBidResponses]);
 
   const loadFormatTemplates = useCallback(async () => {
     try {
@@ -1439,6 +1575,7 @@ export default function TenderWorkspace() {
     loadProjectInfo(projectId);
     loadRisks(projectId);
     loadDirectory(projectId);
+    loadBidResponses(projectId);
     loadReview(projectId);
     loadSampleFragments(projectId);
     
@@ -1457,6 +1594,7 @@ export default function TenderWorkspace() {
         const infoRunData = data.extract_project_info || null;
         const riskRunData = data.extract_risks || null;
         const dirRunData = data.generate_directory || null;
+        const bidResponseRunData = data.extract_bid_responses || null;
         const reviewRunData = data.review || null;
         
         // 更新状态到ProjectState
@@ -1465,6 +1603,7 @@ export default function TenderWorkspace() {
             info: infoRunData,
             risk: riskRunData,
             directory: dirRunData,
+            bidResponse: bidResponseRunData,
             review: reviewRunData,
           }
         });
@@ -1487,6 +1626,10 @@ export default function TenderWorkspace() {
             }
             await loadSampleFragments(projectId);
           });
+        }
+        if (bidResponseRunData?.status === 'running') {
+          console.log('[loadAndRestoreRuns] 恢复投标响应抽取轮询:', bidResponseRunData.id);
+          startPolling(projectId, 'bidResponse', bidResponseRunData.id, () => loadBidResponses(projectId));
         }
         if (reviewRunData?.status === 'running') {
           console.log('[loadAndRestoreRuns] 恢复审核轮询:', reviewRunData.id);
@@ -1949,15 +2092,20 @@ export default function TenderWorkspace() {
                   { id: 2, label: 'Step 2: 风险识别' },
                   { id: 3, label: '③ 目录生成' },
                   { id: 4, label: '④ AI生成全文（预留）' },
-                  { id: 5, label: '⑤ 审核' },
+                  { id: 5, label: '⑤ 投标响应抽取' },
+                  { id: 6, label: '⑥ 审核' },
                 ].map(tab => (
                   <button
                     key={tab.id}
                     onClick={() => {
                       setActiveTab(tab.id);
-                      // 切换到审核Tab时加载规则包列表
-                      if (tab.id === 5 && currentProject) {
-                        loadRulePacks(currentProject.id);
+                      // 切换到审核Tab时加载规则包列表（全局共享）
+                      if (tab.id === 6) {
+                        loadRulePacks();
+                      }
+                      // 切换到投标响应抽取Tab时加载投标响应数据
+                      if (tab.id === 5) {
+                        loadBidResponses();
                       }
                     }}
                     className={activeTab === tab.id ? 'pill-button' : 'link-button'}
@@ -2266,8 +2414,71 @@ export default function TenderWorkspace() {
                 </section>
               )}
 
-              {/* Step 5: 审核（改为选择规则文件资产） */}
+              {/* Step 5: 投标响应抽取 */}
               {activeTab === 5 && (
+                <section className="kb-upload-section">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                    <h4>投标响应抽取</h4>
+                    <button 
+                      onClick={extractBidResponses} 
+                      className="kb-create-form" 
+                      style={{ width: 'auto', marginBottom: 0 }}
+                      disabled={bidResponseRun?.status === 'running' || !selectedBidder}
+                    >
+                      {bidResponseRun?.status === 'running' ? '抽取中...' : '开始抽取'}
+                    </button>
+                  </div>
+                  
+                  {bidResponseRun && (
+                    <div className="kb-import-results">
+                      <div className="kb-import-item">
+                        状态: {bidResponseRun.status}
+                      </div>
+                      {bidResponseRun.message && (
+                        <div className="kb-import-item">{bidResponseRun.message}</div>
+                      )}
+                    </div>
+                  )}
+                  
+                  <div className="kb-doc-meta" style={{ marginBottom: '16px', padding: '12px', backgroundColor: '#e0f2fe', borderRadius: '4px' }}>
+                    💡 <strong>说明</strong>：从投标文件中抽取结构化响应数据，用于V3审核。操作前请先选择投标人。
+                  </div>
+                  
+                  <div className="kb-create-form">
+                    {bidderOptions.length > 0 && (
+                      <>
+                        <label className="sidebar-label">选择投标人:</label>
+                        <select
+                          value={selectedBidder}
+                          onChange={e => setSelectedBidder(e.target.value)}
+                          className="sidebar-select"
+                        >
+                          <option value="">-- 请选择 --</option>
+                          {bidderOptions.map(name => (
+                            <option key={name} value={name}>{name}</option>
+                          ))}
+                        </select>
+                      </>
+                    )}
+                  </div>
+                  
+                  {/* 使用表格组件展示投标响应数据 */}
+                  {bidResponses.length > 0 ? (
+                    <BidResponseTable
+                      responses={bidResponses}
+                      stats={bidResponseStats}
+                      onOpenEvidence={showEvidence}
+                    />
+                  ) : (
+                    <div className="kb-empty" style={{ marginTop: '16px' }}>
+                      {!selectedBidder ? '请先选择投标人，然后点击"开始抽取"' : '暂无投标响应数据'}
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {/* Step 6: 审核（改为选择规则文件资产） */}
+              {activeTab === 6 && (
                 <section className="kb-upload-section">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                     <h4>投标文件审核</h4>
@@ -2298,9 +2509,19 @@ export default function TenderWorkspace() {
                       </>
                     )}
                     
-                    <label className="sidebar-label">可选：选择自定义规则包（可多选）:</label>
-                    <div className="kb-doc-meta" style={{ marginBottom: '12px' }}>
-                      💡 选中的规则包将应用于审核，规则包在"自定义规则管理"页面创建
+                    <label className="sidebar-label">自定义规则包（可选，不选则使用基础评估）:</label>
+                    <div className="kb-doc-meta" style={{
+                      padding: '12px',
+                      backgroundColor: '#eff6ff',
+                      borderLeft: '4px solid #3b82f6',
+                      marginBottom: '12px',
+                      fontSize: '13px'
+                    }}>
+                      <div style={{ fontWeight: 600, marginBottom: '8px', color: '#1e40af' }}>💡 审核模式说明</div>
+                      <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                        <li style={{ marginBottom: '4px' }}><strong>不选规则包</strong>：基础评估模式 - 快速检查每个招标要求是否有投标响应</li>
+                        <li><strong>选择规则包</strong>：详细审核模式 - 使用自定义规则 + 基础评估，进行全面合规性审核</li>
+                      </ul>
                     </div>
                     {rulePacks.length > 0 ? (
                       rulePacks.map(pack => (

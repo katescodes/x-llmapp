@@ -91,7 +91,7 @@ def augment_directory_from_tender_info_v3(
                     "SELECT COALESCE(MAX(order_no), 0) FROM tender_directory_nodes WHERE project_id = %s",
                     (project_id,)
                 )
-                max_order = cur.fetchone()[0]
+                max_order = list(cur.fetchone().values())[0]
                 
                 for i, node in enumerate(required_nodes):
                     node_id = str(uuid.uuid4())
@@ -144,12 +144,12 @@ def _get_existing_directory_nodes(pool: Any, project_id: str) -> List[Dict[str, 
             rows = cur.fetchall()
             return [
                 {
-                    "id": row[0],
-                    "title": row[1],
-                    "level": row[2],
-                    "order_no": row[3],
-                    "is_required": row[4],
-                    "source": row[5]
+                    "id": row['id'],
+                    "title": row['title'],
+                    "level": row['level'],
+                    "order_no": row['order_no'],
+                    "is_required": row['is_required'],
+                    "source": row['source']
                 }
                 for row in rows
             ]

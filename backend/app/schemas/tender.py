@@ -130,6 +130,9 @@ class ReviewRunReq(BaseModel):
     # 新字段：规则包 IDs
     custom_rule_pack_ids: List[str] = Field(default_factory=list, description="自定义规则包ID列表")
     
+    # 新字段：LLM语义审核
+    use_llm_semantic: bool = Field(False, description="是否使用LLM语义审核（默认False）")
+    
     # 旧字段：兼容（前端没升级时也不炸）
     custom_rule_set_ids: Optional[List[str]] = Field(None, description="[已弃用] 兼容旧字段")
 

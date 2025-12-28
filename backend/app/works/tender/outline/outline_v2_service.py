@@ -85,9 +85,9 @@ def generate_outline_v2(
                 if rows:
                     chunks = [
                         {
-                            "chunk_id": row[0],
-                            "content": row[1],
-                            "position": row[2],
+                            "chunk_id": row['chunk_id'],
+                            "content": row['content'],
+                            "position": row['position'],
                         }
                         for row in rows
                     ]
@@ -109,9 +109,9 @@ def generate_outline_v2(
                     rows = cur.fetchall()
                     chunks = [
                         {
-                            "chunk_id": row[0],
-                            "content": row[1],
-                            "position": row[2],
+                            "chunk_id": row['chunk_id'],
+                            "content": row['content'],
+                            "position": row['position'],
                         }
                         for row in rows
                     ]

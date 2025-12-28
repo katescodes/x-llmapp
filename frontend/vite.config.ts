@@ -85,12 +85,18 @@ export default defineConfig(({ mode }) => {
       };
 
   return {
+    base: "/ylAI/",
     plugins: [react()],
     server: {
       port: devPort,
       host: "0.0.0.0",
       allowedHosts: true,
-      hmr: resolvedHmr,
+      hmr: {
+        protocol: "wss",
+        host: "ai.yglinker.com",
+        clientPort: 6399,
+        path: "/ylAI/"
+      },
       proxy
     }
   };

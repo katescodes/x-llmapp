@@ -34,6 +34,10 @@ const RecordingsList: React.FC = () => {
   const [transcribeRecordingId, setTranscribeRecordingId] = useState<string | null>(null);
   const [enhanceEnabled, setEnhanceEnabled] = useState(false);
   const [enhancementType, setEnhancementType] = useState('punctuation');
+  
+  // 导入音频文件
+  const [showImportDialog, setShowImportDialog] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
 
   // 加载录音列表
   const loadRecordings = useCallback(async () => {
@@ -244,6 +248,102 @@ const RecordingsList: React.FC = () => {
     // setShowImportWizard(true);
   };
 
+  // 下载录音文件
+  const handleDownload = async (recordingId: string, title: string, audioFormat: string) => {
+    try {
+      const response = await authFetch(`${apiBaseUrl}/api/recordings/${recordingId}/download`);
+      
+      if (response.ok) {
+        // 获取文件名（从响应头或使用默认值）
+        const contentDisposition = response.headers.get('content-disposition');
+        let filename = `${title}.${audioFormat || 'webm'}`;
+        
+        if (contentDisposition) {
+          const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+          if (filenameMatch && filenameMatch[1]) {
+            filename = filenameMatch[1].replace(/['"]/g, '');
+          }
+        }
+        
+        // 下载文件
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        
+        // 延迟清理，确保下载开始
+        setTimeout(() => {
+          window.URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+        }, 100);
+        
+        console.log(`下载成功: ${filename}`);
+      } else {
+        const errorText = await response.text();
+        console.error('下载失败:', response.status, errorText);
+        alert(`下载失败: ${response.status} - ${errorText || '未知错误'}`);
+      }
+    } catch (error) {
+      console.error('下载失败:', error);
+      alert(`下载失败: ${error instanceof Error ? error.message : '网络错误'}`);
+    }
+  };
+
+  // 上传音频文件
+  const handleUploadAudio = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // 检查文件类型
+    const allowedTypes = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/m4a', 'audio/ogg', 'audio/webm', 'audio/flac', 'audio/aac'];
+    const fileExt = file.name.split('.').pop()?.toLowerCase();
+    const allowedExts = ['mp3', 'wav', 'm4a', 'ogg', 'webm', 'flac', 'aac'];
+    
+    if (!allowedExts.includes(fileExt || '')) {
+      alert('不支持的音频格式，支持的格式: mp3, wav, m4a, ogg, webm, flac, aac');
+      event.target.value = ''; // 清空input
+      return;
+    }
+
+    // 检查文件大小（100MB限制）
+    if (file.size > 100 * 1024 * 1024) {
+      alert('文件过大，最大支持100MB');
+      event.target.value = '';
+      return;
+    }
+
+    setUploadingFile(true);
+    
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await authFetch(`${apiBaseUrl}/api/recordings/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        alert(`${data.message}\n\n文件名: ${file.name}\n大小: ${formatFileSize(data.file_size)}`);
+        setShowImportDialog(false);
+        loadRecordings();
+      } else {
+        const errorData = await response.json();
+        alert(`上传失败：${errorData.detail || '未知错误'}`);
+      }
+    } catch (error) {
+      console.error('上传失败:', error);
+      alert('上传失败，请重试');
+    } finally {
+      setUploadingFile(false);
+      event.target.value = ''; // 清空input
+    }
+  };
+
   return (
     <div className="recordings-container">
       {/* 录音界面 */}
@@ -279,24 +379,44 @@ const RecordingsList: React.FC = () => {
                 共 {filteredRecordings.length} 条录音
               </div>
             </div>
-            <button
-              onClick={() => setIsRecording(true)}
-              style={{
-                padding: '10px 20px',
-                background: 'linear-gradient(135deg, #22c55e, #16a34a)',
-                color: 'white',
-                border: 'none',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                fontSize: '16px',
-                fontWeight: '600',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px'
-              }}
-            >
-              🎤 新录音
-            </button>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                onClick={() => setShowImportDialog(true)}
+                style={{
+                  padding: '10px 20px',
+                  background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontSize: '16px',
+                  fontWeight: '600',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}
+              >
+                📁 导入音频
+              </button>
+              <button
+                onClick={() => setIsRecording(true)}
+                style={{
+                  padding: '10px 20px',
+                  background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontSize: '16px',
+                  fontWeight: '600',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}
+              >
+                🎤 新录音
+              </button>
+            </div>
           </div>
 
           {/* 筛选和搜索 */}
@@ -378,12 +498,20 @@ const RecordingsList: React.FC = () => {
 
                 <div className="recording-actions">
                   {recording.keep_audio && (
-                    <button
-                      className="action-btn play"
-                      onClick={() => setPlayingAudio(recording.id)}
-                    >
-                      ▶️ 播放
-                    </button>
+                    <>
+                      <button
+                        className="action-btn play"
+                        onClick={() => setPlayingAudio(recording.id)}
+                      >
+                        ▶️ 播放
+                      </button>
+                      <button
+                        className="action-btn download"
+                        onClick={() => handleDownload(recording.id, recording.title, recording.audio_format)}
+                      >
+                        💾 导出
+                      </button>
+                    </>
                   )}
                   {(!recording.transcript || recording.word_count === 0) && recording.keep_audio && (
                     <button
@@ -656,6 +784,115 @@ const RecordingsList: React.FC = () => {
                 disabled={transcribingId !== null}
               >
                 开始转写
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 导入音频文件对话框 */}
+      {showImportDialog && (
+        <div className="modal-overlay" onClick={() => setShowImportDialog(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+            <div className="modal-header">
+              <h3>📁 导入音频文件</h3>
+              <button className="close-btn" onClick={() => setShowImportDialog(false)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ padding: '30px' }}>
+              <div style={{
+                border: '2px dashed rgba(148, 163, 184, 0.3)',
+                borderRadius: '12px',
+                padding: '40px',
+                textAlign: 'center',
+                background: 'rgba(148, 163, 184, 0.05)',
+                cursor: 'pointer',
+                transition: 'all 0.3s ease'
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.currentTarget.style.borderColor = '#3b82f6';
+                e.currentTarget.style.background = 'rgba(59, 130, 246, 0.1)';
+              }}
+              onDragLeave={(e) => {
+                e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.3)';
+                e.currentTarget.style.background = 'rgba(148, 163, 184, 0.05)';
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.3)';
+                e.currentTarget.style.background = 'rgba(148, 163, 184, 0.05)';
+                
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                  const input = document.getElementById('audio-file-input') as HTMLInputElement;
+                  if (input) {
+                    // 创建新的DataTransfer对象来设置input的files
+                    const dataTransfer = new DataTransfer();
+                    dataTransfer.items.add(files[0]);
+                    input.files = dataTransfer.files;
+                    
+                    // 触发change事件
+                    const event = new Event('change', { bubbles: true });
+                    input.dispatchEvent(event);
+                  }
+                }
+              }}
+              onClick={() => document.getElementById('audio-file-input')?.click()}>
+                {uploadingFile ? (
+                  <>
+                    <div style={{ fontSize: '48px', marginBottom: '15px' }}>⏳</div>
+                    <div style={{ fontSize: '16px', fontWeight: '500', marginBottom: '10px' }}>
+                      上传中...
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: '48px', marginBottom: '15px' }}>📁</div>
+                    <div style={{ fontSize: '16px', fontWeight: '500', marginBottom: '10px' }}>
+                      点击选择或拖拽音频文件
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '15px' }}>
+                      支持格式: MP3, WAV, M4A, OGG, WebM, FLAC, AAC
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                      文件大小限制: 100MB
+                    </div>
+                  </>
+                )}
+              </div>
+              <input
+                id="audio-file-input"
+                type="file"
+                accept=".mp3,.wav,.m4a,.ogg,.webm,.flac,.aac,audio/*"
+                onChange={handleUploadAudio}
+                style={{ display: 'none' }}
+                disabled={uploadingFile}
+              />
+              
+              <div style={{ 
+                marginTop: '20px', 
+                padding: '15px', 
+                background: 'rgba(59, 130, 246, 0.1)', 
+                borderRadius: '8px',
+                fontSize: '13px',
+                color: '#94a3b8',
+                lineHeight: '1.6'
+              }}>
+                <div style={{ fontWeight: '500', marginBottom: '8px', color: '#3b82f6' }}>
+                  📝 使用说明：
+                </div>
+                <div>1. 上传成功后，音频文件会保存到"我的录音"列表</div>
+                <div>2. 点击"转写"按钮进行语音识别</div>
+                <div>3. 转写完成后可以播放音频、查看全文或导入知识库</div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button 
+                className="btn-secondary" 
+                onClick={() => setShowImportDialog(false)}
+                disabled={uploadingFile}
+              >
+                关闭
               </button>
             </div>
           </div>

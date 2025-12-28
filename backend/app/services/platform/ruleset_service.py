@@ -193,7 +193,7 @@ class RuleSetService:
             with conn.cursor() as cur:
                 cur.execute(sql_get_version, (rule_set_id,))
                 row = cur.fetchone()
-                version_no = row[0] if row else 1
+                version_no = list(row.values())[0] if row else 1
         
         sql = """
             INSERT INTO rule_set_versions (

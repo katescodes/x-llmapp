@@ -139,15 +139,15 @@ class RiskAnalysisService:
                 rows = cur.fetchall()
                 return [
                     {
-                        "id": row[0],
-                        "requirement_id": row[1],
-                        "dimension": row[2],
-                        "req_type": row[3],
-                        "requirement_text": row[4],
-                        "is_hard": row[5],
-                        "allow_deviation": row[6],
-                        "value_schema_json": row[7],
-                        "evidence_chunk_ids": row[8] or [],
+                        "id": row['id'],
+                        "requirement_id": row['requirement_id'],
+                        "dimension": row['dimension'],
+                        "req_type": row['req_type'],
+                        "requirement_text": row['requirement_text'],
+                        "is_hard": row['is_hard'],
+                        "allow_deviation": row['allow_deviation'],
+                        "value_schema_json": row['value_schema_json'],
+                        "evidence_chunk_ids": row.get('evidence_chunk_ids') or [],
                     }
                     for row in rows
                 ]

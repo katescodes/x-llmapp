@@ -33,13 +33,13 @@ def list_kbs_by_owner(owner_id: str):
             rows = cur.fetchall()
             return [
                 {
-                    "id": row[0],
-                    "name": row[1],
-                    "description": row[2],
-                    "category_id": row[3],
-                    "created_at": row[4],
-                    "updated_at": row[5],
-                    "owner_id": row[6],
+                    "id": row['id'],
+                    "name": row['name'],
+                    "description": row['description'],
+                    "category_id": row['category_id'],
+                    "created_at": row['created_at'],
+                    "updated_at": row['updated_at'],
+                    "owner_id": row['owner_id'],
                 }
                 for row in rows
             ]
@@ -95,7 +95,7 @@ def delete_kb(kb_id: str):
                     """,
                     (kb_id, kb_id)
                 )
-                doc_version_ids = [row[0] for row in cur.fetchall()]
+                doc_version_ids = [row[list(row.keys())[0]] for row in cur.fetchall()]
         
         # 删除每个文档版本的向量
         for doc_version_id in doc_version_ids:

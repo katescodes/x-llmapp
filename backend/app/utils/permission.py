@@ -86,8 +86,8 @@ class DataFilter:
                 cur.execute("SELECT data_scope FROM users WHERE id = %s", (user_id,))
                 row = cur.fetchone()
                 
-                if row and row[0]:
-                    data_scope = row[0]
+                if row and row.get('data_scope'):
+                    data_scope = row['data_scope']
                 else:
                     data_scope = "self"
                 
@@ -101,8 +101,8 @@ class DataFilter:
                     
                     dp_row = cur.fetchone()
                     if dp_row:
-                        data_scope = dp_row[0]
-                        custom_scope = dp_row[1]
+                        data_scope = dp_row['data_scope']
+                        custom_scope = dp_row['custom_scope_json']
                         
                         if data_scope == "custom" and custom_scope:
                             # 自定义范围

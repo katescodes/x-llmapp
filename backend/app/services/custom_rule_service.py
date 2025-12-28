@@ -278,7 +278,7 @@ class CustomRuleService:
         列出自定义规则包
         
         Args:
-            project_id: 项目ID（可选）
+            project_id: 项目ID（可选，不传则返回所有共享规则包）
             owner_id: 所有者ID（可选）
             
         Returns:
@@ -288,7 +288,14 @@ class CustomRuleService:
             with conn.cursor() as cur:
                 sql = """
                 SELECT 
-                    rp.*,
+                    rp.id,
+                    rp.pack_name,
+                    rp.pack_type,
+                    rp.project_id,
+                    rp.priority,
+                    rp.is_active,
+                    rp.created_at,
+                    rp.updated_at,
                     COUNT(r.id) as rule_count
                 FROM tender_rule_packs rp
                 LEFT JOIN tender_rules r ON r.rule_pack_id = rp.id
@@ -299,8 +306,11 @@ class CustomRuleService:
                 if project_id:
                     sql += " AND rp.project_id = %s"
                     params.append(project_id)
+                else:
+                    # 不传project_id时，只返回共享规则包（project_id IS NULL）
+                    sql += " AND rp.project_id IS NULL"
                 
-                sql += " GROUP BY rp.id ORDER BY rp.created_at DESC"
+                sql += " GROUP BY rp.id, rp.pack_name, rp.pack_type, rp.project_id, rp.priority, rp.is_active, rp.created_at, rp.updated_at ORDER BY rp.created_at DESC"
                 
                 cur.execute(sql, params)
                 rows = cur.fetchall()
@@ -314,12 +324,19 @@ class CustomRuleService:
                 cur.execute(
                     """
                     SELECT 
-                        rp.*,
+                        rp.id,
+                        rp.pack_name,
+                        rp.pack_type,
+                        rp.project_id,
+                        rp.priority,
+                        rp.is_active,
+                        rp.created_at,
+                        rp.updated_at,
                         COUNT(r.id) as rule_count
                     FROM tender_rule_packs rp
                     LEFT JOIN tender_rules r ON r.rule_pack_id = rp.id
                     WHERE rp.id = %s
-                    GROUP BY rp.id
+                    GROUP BY rp.id, rp.pack_name, rp.pack_type, rp.project_id, rp.priority, rp.is_active, rp.created_at, rp.updated_at
                     """,
                     (pack_id,),
                 )

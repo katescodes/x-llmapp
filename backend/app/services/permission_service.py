@@ -55,10 +55,11 @@ def create_permission(perm_data: PermissionCreate) -> PermissionResponse:
             conn.commit()
             
             return PermissionResponse(
-                id=row[0], code=row[1], name=row[2], description=row[3],
-                module=row[4], parent_code=row[5], resource_type=row[6],
-                display_order=row[7], is_active=row[8], created_at=row[9], updated_at=row[10]
-            )
+                    id=row['id'], code=row['code'], name=row['name'], description=row['description'],
+                    module=row['module'], parent_code=row['parent_code'], resource_type=row['resource_type'],
+                    display_order=row['display_order'], is_active=row['is_active'], 
+                    created_at=row['created_at'], updated_at=row['updated_at']
+                )
 
 def get_permissions(module: Optional[str] = None, active_only: bool = True) -> List[PermissionResponse]:
     """获取权限列表"""
@@ -86,9 +87,10 @@ def get_permissions(module: Optional[str] = None, active_only: bool = True) -> L
             
             return [
                 PermissionResponse(
-                    id=row[0], code=row[1], name=row[2], description=row[3],
-                    module=row[4], parent_code=row[5], resource_type=row[6],
-                    display_order=row[7], is_active=row[8], created_at=row[9], updated_at=row[10]
+                    id=row['id'], code=row['code'], name=row['name'], description=row['description'],
+                    module=row['module'], parent_code=row['parent_code'], resource_type=row['resource_type'],
+                    display_order=row['display_order'], is_active=row['is_active'], 
+                    created_at=row['created_at'], updated_at=row['updated_at']
                 )
                 for row in rows
             ]
@@ -125,10 +127,11 @@ def get_permission_by_id(perm_id: str) -> Optional[PermissionResponse]:
                 return None
             
             return PermissionResponse(
-                id=row[0], code=row[1], name=row[2], description=row[3],
-                module=row[4], parent_code=row[5], resource_type=row[6],
-                display_order=row[7], is_active=row[8], created_at=row[9], updated_at=row[10]
-            )
+                    id=row['id'], code=row['code'], name=row['name'], description=row['description'],
+                    module=row['module'], parent_code=row['parent_code'], resource_type=row['resource_type'],
+                    display_order=row['display_order'], is_active=row['is_active'], 
+                    created_at=row['created_at'], updated_at=row['updated_at']
+                )
 
 def update_permission(perm_id: str, perm_data: PermissionUpdate) -> PermissionResponse:
     """更新权限"""
@@ -181,10 +184,11 @@ def update_permission(perm_id: str, perm_data: PermissionUpdate) -> PermissionRe
             conn.commit()
             
             return PermissionResponse(
-                id=row[0], code=row[1], name=row[2], description=row[3],
-                module=row[4], parent_code=row[5], resource_type=row[6],
-                display_order=row[7], is_active=row[8], created_at=row[9], updated_at=row[10]
-            )
+                    id=row['id'], code=row['code'], name=row['name'], description=row['description'],
+                    module=row['module'], parent_code=row['parent_code'], resource_type=row['resource_type'],
+                    display_order=row['display_order'], is_active=row['is_active'], 
+                    created_at=row['created_at'], updated_at=row['updated_at']
+                )
 
 # ==================== 角色管理 ====================
 def create_role(role_data: RoleCreate) -> RoleResponse:
@@ -211,8 +215,7 @@ def create_role(role_data: RoleCreate) -> RoleResponse:
             conn.commit()
             
             return RoleResponse(
-                id=row[0], code=row[1], name=row[2], description=row[3],
-                is_system=row[4], is_active=row[5], created_at=row[6], updated_at=row[7]
+                id=row['id'], code=row['code'], name=row['name'], description=row['description'], is_system=row['is_system'], is_active=row['is_active'], created_at=row['created_at'], updated_at=row['updated_at']
             )
 
 def get_roles(active_only: bool = True) -> List[RoleResponse]:
@@ -235,8 +238,7 @@ def get_roles(active_only: bool = True) -> List[RoleResponse]:
             
             return [
                 RoleResponse(
-                    id=row[0], code=row[1], name=row[2], description=row[3],
-                    is_system=row[4], is_active=row[5], created_at=row[6], updated_at=row[7]
+                    id=row['id'], code=row['code'], name=row['name'], description=row['description'], is_system=row['is_system'], is_active=row['is_active'], created_at=row['created_at'], updated_at=row['updated_at']
                 )
                 for row in rows
             ]
@@ -255,8 +257,7 @@ def get_role_by_id(role_id: str) -> Optional[RoleResponse]:
                 return None
             
             return RoleResponse(
-                id=row[0], code=row[1], name=row[2], description=row[3],
-                is_system=row[4], is_active=row[5], created_at=row[6], updated_at=row[7]
+                id=row['id'], code=row['code'], name=row['name'], description=row['description'], is_system=row['is_system'], is_active=row['is_active'], created_at=row['created_at'], updated_at=row['updated_at']
             )
 
 def get_role_with_permissions(role_id: str) -> Optional[RoleWithPermissions]:
@@ -282,7 +283,7 @@ def update_role(role_id: str, role_data: RoleUpdate) -> RoleResponse:
                     detail="Role not found"
                 )
             
-            if row[0]:  # is_system
+            if row['is_system']:  # is_system
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Cannot modify system role"
@@ -324,8 +325,7 @@ def update_role(role_id: str, role_data: RoleUpdate) -> RoleResponse:
             conn.commit()
             
             return RoleResponse(
-                id=row[0], code=row[1], name=row[2], description=row[3],
-                is_system=row[4], is_active=row[5], created_at=row[6], updated_at=row[7]
+                id=row['id'], code=row['code'], name=row['name'], description=row['description'], is_system=row['is_system'], is_active=row['is_active'], created_at=row['created_at'], updated_at=row['updated_at']
             )
 
 def delete_role(role_id: str) -> None:
@@ -341,7 +341,7 @@ def delete_role(role_id: str) -> None:
                     detail="Role not found"
                 )
             
-            if row[0]:  # is_system
+            if row['is_system']:  # is_system
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Cannot delete system role"
@@ -368,9 +368,10 @@ def get_role_permissions(role_id: str) -> List[PermissionResponse]:
             
             return [
                 PermissionResponse(
-                    id=row[0], code=row[1], name=row[2], description=row[3],
-                    module=row[4], parent_code=row[5], resource_type=row[6],
-                    display_order=row[7], is_active=row[8], created_at=row[9], updated_at=row[10]
+                    id=row['id'], code=row['code'], name=row['name'], description=row['description'],
+                    module=row['module'], parent_code=row['parent_code'], resource_type=row['resource_type'],
+                    display_order=row['display_order'], is_active=row['is_active'], 
+                    created_at=row['created_at'], updated_at=row['updated_at']
                 )
                 for row in rows
             ]
@@ -391,7 +392,7 @@ def assign_permissions_to_role(role_id: str, permission_ids: List[str]) -> None:
             cur.execute("""
                 SELECT id FROM permissions WHERE id = ANY(%s)
             """, (permission_ids,))
-            existing_perms = {row[0] for row in cur.fetchall()}
+            existing_perms = {row['id'] for row in cur.fetchall()}
             
             invalid_perms = set(permission_ids) - existing_perms
             if invalid_perms:
@@ -440,8 +441,7 @@ def get_user_roles(user_id: str) -> List[UserRoleResponse]:
             
             return [
                 UserRoleResponse(
-                    id=row[0], user_id=row[1], role_id=row[2], role_code=row[3],
-                    role_name=row[4], granted_by=row[5], granted_at=row[6], expires_at=row[7]
+                    id=row['id'], user_id=row['user_id'], role_id=row['role_id'], role_code=row['role_code'], role_name=row['role_name'], granted_by=row['granted_by'], granted_at=row['granted_at'], expires_at=row['expires_at']
                 )
                 for row in rows
             ]
@@ -460,7 +460,7 @@ def assign_roles_to_user(user_id: str, role_ids: List[str], granted_by: Optional
             
             # 检查角色是否存在
             cur.execute("SELECT id FROM roles WHERE id = ANY(%s)", (role_ids,))
-            existing_roles = {row[0] for row in cur.fetchall()}
+            existing_roles = {row['id'] for row in cur.fetchall()}
             
             invalid_roles = set(role_ids) - existing_roles
             if invalid_roles:
@@ -507,7 +507,8 @@ def get_user_permissions(user_id: str) -> UserPermissionsResponse:
                     detail="User not found"
                 )
             
-            username, data_scope = user_row
+            username = user_row['username']
+            data_scope = user_row['data_scope']
             
             # 获取用户的角色
             cur.execute("""
@@ -520,8 +521,7 @@ def get_user_permissions(user_id: str) -> UserPermissionsResponse:
             
             roles = [
                 RoleResponse(
-                    id=row[0], code=row[1], name=row[2], description=row[3],
-                    is_system=row[4], is_active=row[5], created_at=row[6], updated_at=row[7]
+                    id=row['id'], code=row['code'], name=row['name'], description=row['description'], is_system=row['is_system'], is_active=row['is_active'], created_at=row['created_at'], updated_at=row['updated_at']
                 )
                 for row in cur.fetchall()
             ]
@@ -552,9 +552,10 @@ def get_user_permissions(user_id: str) -> UserPermissionsResponse:
             
             permissions = [
                 PermissionResponse(
-                    id=row[0], code=row[1], name=row[2], description=row[3],
-                    module=row[4], parent_code=row[5], resource_type=row[6],
-                    display_order=row[7], is_active=row[8], created_at=row[9], updated_at=row[10]
+                    id=row['id'], code=row['code'], name=row['name'], description=row['description'],
+                    module=row['module'], parent_code=row['parent_code'], resource_type=row['resource_type'],
+                    display_order=row['display_order'], is_active=row['is_active'], 
+                    created_at=row['created_at'], updated_at=row['updated_at']
                 )
                 for row in cur.fetchall()
             ]
@@ -580,7 +581,7 @@ def check_user_permissions(user_id: str, permission_codes: List[str]) -> Dict[st
                 WHERE ur.user_id = %s AND p.is_active = TRUE
             """, (user_id,))
             
-            user_perms = {row[0] for row in cur.fetchall()}
+            user_perms = {row['id'] for row in cur.fetchall()}
             
             # 检查每个权限
             result = {}
@@ -609,7 +610,8 @@ def has_permission(user_id: str, permission_code: str) -> bool:
                 )
             """, (user_id,))
             
-            is_admin = cur.fetchone()[0]
+            row = cur.fetchone()
+            is_admin = list(row.values())[0] if row else False
             if is_admin:
                 return True  # 管理员拥有所有权限
             
@@ -633,12 +635,10 @@ def get_data_permission(user_id: str, resource_type: str) -> Optional[DataPermis
             if not row:
                 return None
             
-            custom_scope = json.loads(row[4]) if row[4] else None
+            custom_scope = json.loads(row['custom_scope_json']) if row.get('custom_scope_json') else None
             
             return DataPermissionResponse(
-                id=row[0], user_id=row[1], resource_type=row[2],
-                data_scope=row[3], custom_scope_json=custom_scope,
-                created_at=row[5], updated_at=row[6]
+                id=row['id'], user_id=row['user_id'], resource_type=row['resource_type'], data_scope=row['data_scope'], custom_scope_json=custom_scope, created_at=row['created_at'], updated_at=row['updated_at']
             )
 
 def set_data_permission(user_id: str, resource_type: str, data_scope: str, custom_scope_json: Optional[dict] = None) -> DataPermissionResponse:
@@ -671,12 +671,10 @@ def set_data_permission(user_id: str, resource_type: str, data_scope: str, custo
             row = cur.fetchone()
             conn.commit()
             
-            custom_scope = json.loads(row[4]) if row[4] else None
+            custom_scope = json.loads(row['custom_scope_json']) if row.get('custom_scope_json') else None
             
             return DataPermissionResponse(
-                id=row[0], user_id=row[1], resource_type=row[2],
-                data_scope=row[3], custom_scope_json=custom_scope,
-                created_at=row[5], updated_at=row[6]
+                id=row['id'], user_id=row['user_id'], resource_type=row['resource_type'], data_scope=row['data_scope'], custom_scope_json=custom_scope, created_at=row['created_at'], updated_at=row['updated_at']
             )
 
 # ==================== 统计信息 ====================
@@ -696,10 +694,6 @@ def get_permission_stats() -> PermissionStats:
             row = cur.fetchone()
             
             return PermissionStats(
-                total_permissions=row[0],
-                total_roles=row[1],
-                total_user_roles=row[2],
-                active_permissions=row[3],
-                active_roles=row[4]
+                total_permissions=row['total_permissions'], total_roles=row['total_roles'], total_user_roles=row['total_user_roles'], active_permissions=row['active_permissions'], active_roles=row['active_roles']
             )
 

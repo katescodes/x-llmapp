@@ -56,7 +56,7 @@ class ProjectDeletionOrchestrator:
         if not row:
             raise ValueError(f"Project {project_id} not found")
         
-        project_name = row[1]
+        project_name = row['name']
         
         # 2. 收集各类资源的删除计划
         items: List[DeletePlanItem] = []
@@ -138,7 +138,7 @@ class ProjectDeletionOrchestrator:
                 )
                 row = cur.fetchone()
         
-        project_name = row[0] if row else "Unknown"
+        project_name = list(row.values())[0] if row else "Unknown"
         audit_id = f"audit_{uuid.uuid4().hex}"
         
         with self.pool.connection() as conn:

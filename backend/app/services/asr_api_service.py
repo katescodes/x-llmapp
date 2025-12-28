@@ -70,7 +70,7 @@ async def call_remote_asr_api(
             write=30.0     # 写入超时30秒
         )
         async with httpx.AsyncClient(timeout=timeout_config, verify=False) as client:
-            logger.info(f"Calling remote ASR API: {api_url} (timeout={timeout}s)")
+            logger.info(f"Calling ASR API: url={api_url}, file={audio_file_path.name}, size={len(audio_data)} bytes, model={model_name}, format={response_format}")
             
             response = await client.post(
                 api_url,
@@ -79,10 +79,12 @@ async def call_remote_asr_api(
                 headers=headers
             )
             
+            logger.info(f"ASR API response: status={response.status_code}")
+            
             response.raise_for_status()
             result = response.json()
             
-            logger.info(f"ASR API response received: {len(result.get('text', ''))} chars")
+            logger.info(f"ASR API success: text_length={len(result.get('text', ''))} chars")
             
             # 解析响应
             if response_format == "verbose_json":
@@ -111,18 +113,39 @@ async def call_remote_asr_api(
     
     except httpx.HTTPStatusError as e:
         error_text = e.response.text
-        logger.error(f"ASR API HTTP error: {e.response.status_code} - {error_text}")
+        status_code = e.response.status_code
         
-        # 提供更友好的错误信息
-        error_message = f"ASR API调用失败: HTTP {e.response.status_code}"
+        # 记录完整的错误信息
+        logger.error(f"ASR API HTTP error: status={status_code}, response={error_text[:500]}")
         
-        # 检查是否是显存不足错误
-        if "out of memory" in error_text.lower() or "oom" in error_text.lower():
-            error_message = "ASR服务显存不足，请联系管理员重启服务或稍后重试"
-        elif "model" in error_text.lower() and "load" in error_text.lower():
+        # 尝试解析JSON错误
+        error_detail = error_text
+        try:
+            error_json = e.response.json()
+            error_detail = error_json.get('error', {}).get('message', error_text) if isinstance(error_json.get('error'), dict) else str(error_json)
+        except:
+            pass
+        
+        # 构建友好的错误信息
+        error_message = f"ASR API调用失败 (HTTP {status_code}): {error_detail[:200]}"
+        
+        # 检查具体错误类型（不要轻易判断为OOM）
+        error_lower = error_text.lower()
+        if "out of memory" in error_lower or "oom" in error_lower:
+            # 只有明确的OOM错误才提示显存不足
+            if "cuda" in error_lower or "gpu" in error_lower or "memory" in error_lower:
+                error_message = f"ASR服务显存不足: {error_detail[:200]}"
+            else:
+                # 可能不是真正的显存问题
+                error_message = f"ASR处理失败: {error_detail[:200]}"
+        elif "model" in error_lower and "load" in error_lower:
             error_message = "ASR模型加载失败，请检查服务状态"
-        elif e.response.status_code == 503:
+        elif status_code == 503:
             error_message = "ASR服务暂时不可用，请稍后重试"
+        elif status_code == 413:
+            error_message = "音频文件过大，请尝试较短的音频"
+        elif status_code == 400:
+            error_message = f"请求参数错误: {error_detail[:200]}"
         
         raise RuntimeError(error_message)
     

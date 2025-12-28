@@ -2279,6 +2279,8 @@ class TenderService:
         custom_rule_asset_ids: List[str],
         bidder_name: Optional[str],
         bid_asset_ids: List[str],
+        custom_rule_pack_ids: Optional[List[str]] = None,
+        use_llm_semantic: bool = False,
         run_id: Optional[str] = None,
         owner_id: Optional[str] = None,
     ):
@@ -2287,8 +2289,10 @@ class TenderService:
         
         Args:
             custom_rule_asset_ids: 自定义规则文件资产ID列表（直接叠加原文）
+            custom_rule_pack_ids: 自定义规则包ID列表（应用规则包中的规则）
             bidder_name: 投标人名称（选择投标人）
             bid_asset_ids: 投标资产ID列表（精确指定文件）
+            use_llm_semantic: 是否使用LLM语义审核（默认False）
             owner_id: 任务所有者ID（可选）
         """
         # 旁路双写：创建 platform job（如果启用）
@@ -2307,8 +2311,7 @@ class TenderService:
                 print(f"[WARN] Failed to create platform job: {e}")
         
         try:
-            # 全部使用新审核模式 (ReviewV2Service)
-            # 旧的对比审核和规则审核逻辑已删除
+            # 使用 ReviewV3Service (支持规则引擎和自定义规则包)
             
             # 如果没有指定model_id，使用默认模型
             if not model_id:
@@ -2321,32 +2324,32 @@ class TenderService:
                 else:
                     logger.warning("No model_id provided and no default model configured")
             
-            logger.info(f"NEW_ONLY review mode: project={project_id}, model_id={model_id}, bidder={bidder_name}")
+            logger.info(f"ReviewV3 mode: project={project_id}, model_id={model_id}, bidder={bidder_name}, custom_rule_pack_ids={custom_rule_pack_ids}")
             
             arr = []  # 初始化审核项列表
             try:
                 import asyncio
-                from app.works.tender.review_v2_service import ReviewV2Service
+                from app.works.tender.review_v3_service import ReviewV3Service
                 from app.services.db.postgres import _get_pool
                 
                 pool = _get_pool()
-                review_v2 = ReviewV2Service(pool, self.llm)
-                logger.info("Created ReviewV2Service")
+                review_v3 = ReviewV3Service(pool, self.llm)
+                logger.info("Created ReviewV3Service")
                 
-                # 运行 v2 审核
-                logger.info("Calling run_review_v2...")
-                v2_results = asyncio.run(review_v2.run_review_v2(
+                # 运行 v3 审核
+                logger.info(f"Calling run_review_v3 with use_llm_semantic={use_llm_semantic}...")
+                v3_results = asyncio.run(review_v3.run_review_v3(
                     project_id=project_id,
-                    model_id=model_id,
                     bidder_name=bidder_name,
-                    bid_asset_ids=bid_asset_ids,
+                    model_id=model_id,
+                    custom_rule_pack_ids=custom_rule_pack_ids,
+                    use_llm_semantic=use_llm_semantic,
                     run_id=run_id
                 ))
-                logger.info(f"run_review_v2 completed")
+                logger.info(f"run_review_v3 completed")
                 
-                # v2 成功：使用 v2 结果，写入旧表以保证前端兼容
-                # v2_results 是字典，包含 'items' 键
-                arr = v2_results.get("items", [])  # 提取 items 列表
+                # v3 成功：使用 v3 结果，写入旧表以保证前端兼容
+                arr = v3_results.get("items", [])  # 提取 items 列表
                 logger.info(f"Extracted {len(arr)} review items")
                 
                 # 写入旧表（保证前端兼容）
@@ -2359,7 +2362,11 @@ class TenderService:
                         message="ok",
                         result_json={
                             "count": len(arr),
-                            "review_v2_status": "ok"
+                            "review_v3_status": "ok",
+                            "review_mode": v3_results.get("review_mode", "UNKNOWN"),
+                            "pass_count": v3_results.get("pass_count", 0),
+                            "fail_count": v3_results.get("fail_count", 0),
+                            "warn_count": v3_results.get("warn_count", 0)
                         }
                     )
                 
@@ -2379,8 +2386,8 @@ class TenderService:
                         run_id, "failed", progress=0.0,
                         message=error_msg,
                         result_json={
-                            "review_v2_status": "failed",
-                            "review_v2_error": str(e)
+                            "review_v3_status": "failed",
+                            "review_v3_error": str(e)
                         }
                     )
                 

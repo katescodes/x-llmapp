@@ -349,5 +349,5 @@ def count_chunks_by_doc(doc_id: str) -> int:
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM kb_chunks WHERE doc_id=%s", (doc_id,))
             row = cur.fetchone()
-            return int(row[0] if row else 0)
+            return int(list(row.values())[0] if row else 0)
 

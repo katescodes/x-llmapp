@@ -56,8 +56,8 @@ class AssetResourceCleaner(ProjectResourceCleaner):
                 rows = cur.fetchall()
         
         count = len(rows)
-        samples = [row[2] or f"{row[1]}_{row[0][:8]}" for row in rows[:5]]
-        physical_targets = [row[3] for row in rows if row[3]]  # storage_path
+        samples = [row.get('title') or f"{row.get('filename')}_{row.get('id', '')[:8]}" for row in rows[:5]]
+        physical_targets = [row.get('storage_path') for row in rows if row.get('storage_path')]  # storage_path
         
         return {
             "type": self.type(),
@@ -123,7 +123,7 @@ class DocumentResourceCleaner(ProjectResourceCleaner):
                 rows = cur.fetchall()
         
         count = len(rows)
-        samples = [f"{row[1]}_{row[2][:8]}" for row in rows[:5]]
+        samples = [f"{list(row.values())[1]}_{list(row.values())[2][:8]}" for row in rows[:5]]
         
         return {
             "type": self.type(),
@@ -173,7 +173,7 @@ class KnowledgeBaseResourceCleaner(ProjectResourceCleaner):
                 "physical_targets": [],
             }
         
-        kb_id = row[0]
+        kb_id = list(row.values())[0]
         
         # 2. 统计 kb_documents
         with self.pool.connection() as conn:
@@ -193,10 +193,10 @@ class KnowledgeBaseResourceCleaner(ProjectResourceCleaner):
                     "SELECT COUNT(*) FROM kb_chunks WHERE kb_id=%s",
                     (kb_id,)
                 )
-                chunk_count = cur.fetchone()[0]
+                chunk_count = list(cur.fetchone().values())[0]
         
         doc_count = len(docs)
-        samples = [row[1] or row[0][:12] for row in docs[:5]]
+        samples = [list(row.values())[1] or list(row.values())[0][:12] for row in docs[:5]]
         physical_targets = [f"kb_collection: {kb_id}", f"chunks: {chunk_count}"]
         
         return {
@@ -221,7 +221,7 @@ class KnowledgeBaseResourceCleaner(ProjectResourceCleaner):
             logger.warning(f"Project {project_id} not found, skipping KB cleanup")
             return
         
-        kb_id = row[0]
+        kb_id = list(row.values())[0]
         
         # 2. 删除 kb_chunks
         with self.pool.connection() as conn:
@@ -267,20 +267,20 @@ class MetadataResourceCleaner(ProjectResourceCleaner):
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 # 统计各类资源
-                cur.execute("SELECT COUNT(*) FROM tender_risks WHERE project_id=%s", (project_id,))
-                counts["risks"] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) as count FROM tender_risks WHERE project_id=%s", (project_id,))
+                counts["risks"] = cur.fetchone()['count']
                 
-                cur.execute("SELECT COUNT(*) FROM tender_directory_nodes WHERE project_id=%s", (project_id,))
-                counts["directory"] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) as count FROM tender_directory_nodes WHERE project_id=%s", (project_id,))
+                counts["directory"] = cur.fetchone()['count']
                 
-                cur.execute("SELECT COUNT(*) FROM tender_review_items WHERE project_id=%s", (project_id,))
-                counts["review"] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) as count FROM tender_review_items WHERE project_id=%s", (project_id,))
+                counts["review"] = cur.fetchone()['count']
                 
-                cur.execute("SELECT COUNT(*) FROM tender_runs WHERE project_id=%s", (project_id,))
-                counts["runs"] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) as count FROM tender_runs WHERE project_id=%s", (project_id,))
+                counts["runs"] = cur.fetchone()['count']
                 
-                cur.execute("SELECT COUNT(*) FROM tender_project_info WHERE project_id=%s", (project_id,))
-                counts["project_info"] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) as count FROM tender_project_info WHERE project_id=%s", (project_id,))
+                counts["project_info"] = cur.fetchone()['count']
         
         total = sum(counts.values())
         samples = [f"{k}: {v}" for k, v in counts.items() if v > 0]

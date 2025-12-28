@@ -15,10 +15,16 @@ import httpx
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
-import librosa
-import numpy as np
-import soundfile as sf
-# pydub removed - no longer needed for remote ASR API
+# 音频处理库（可选，仅在启用音频预处理时需要）
+try:
+    import librosa
+    import numpy as np
+    import soundfile as sf
+    AUDIO_PROCESSING_AVAILABLE = True
+except ImportError:
+    AUDIO_PROCESSING_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("Audio processing libraries (librosa) not available. Audio preprocessing will be disabled.")
 
 from ..config import get_settings
 
@@ -70,13 +76,13 @@ def _get_default_asr_config() -> Optional[Dict[str, Any]]:
                 
                 if row:
                     return {
-                        "id": row[0],
-                        "name": row[1],
-                        "api_url": row[2],
-                        "api_key": row[3],
-                        "model_name": row[4] or "whisper",
-                        "response_format": row[5] or "verbose_json",
-                        "extra_params": row[6] or {}
+                        "id": row['id'],
+                        "name": row['name'],
+                        "api_url": row['api_url'],
+                        "api_key": row['api_key'],
+                        "model_name": row.get('model_name') or "whisper",
+                        "response_format": row.get('response_format') or "verbose_json",
+                        "extra_params": row.get('extra_params') or {}
                     }
                 
                 return None
@@ -208,6 +214,10 @@ def preprocess_audio(
     Returns:
         处理后的音频文件路径
     """
+    if not AUDIO_PROCESSING_AVAILABLE:
+        logger.warning("Audio processing libraries not available, skipping preprocessing")
+        return audio_path
+    
     if not reduce_noise and not normalize:
         return audio_path
     
