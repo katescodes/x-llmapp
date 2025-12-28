@@ -1,17 +1,14 @@
 import React, { useMemo, useState } from "react";
+import type { TenderReviewItem } from "../../types/tender";
+import { getStatus, getStatusText, getStatusColor } from "../../types/reviewUtils";
 
-export type ReviewItem = {
-  id: string;
-  source?: string; // "compare" | "rule"
-  dimension: string;
-  requirement_text?: string;
-  response_text?: string;
-  result: "pass" | "risk" | "fail";
-  remark?: string;
-  rigid: boolean;
+// 兼容旧版本的 ReviewItem（用于内部类型，实际数据用 TenderReviewItem）
+export type ReviewItem = TenderReviewItem & {
+  source?: string; // "compare" | "rule" | "v3"
+  requirement_text?: string; // 兼容旧字段名
+  response_text?: string; // 兼容旧字段名
+  rigid?: boolean; // 兼容旧字段名
   rule_id?: string; // 规则ID（仅规则审核）
-  tender_evidence_chunk_ids: string[];
-  bid_evidence_chunk_ids: string[];
 };
 
 export default function ReviewTable({
@@ -21,36 +18,59 @@ export default function ReviewTable({
   items: ReviewItem[];
   onOpenEvidence: (chunkIds: string[]) => void;
 }) {
-  const [resultFilter, setResultFilter] = useState<"all" | "pass" | "risk" | "fail">("all");
-  const [sourceFilter, setSourceFilter] = useState<"all" | "compare" | "rule">("all");
+  const [resultFilter, setResultFilter] = useState<"all" | "pass" | "risk" | "fail" | "pending">("all");
+  const [sourceFilter, setSourceFilter] = useState<"all" | "compare" | "rule" | "v3">("all");
   const [kw, setKw] = useState("");
 
   const filtered = useMemo(() => {
     const k = kw.trim().toLowerCase();
     return (items || []).filter((it) => {
-      // 结果筛选
-      if (resultFilter !== "all" && it.result !== resultFilter) return false;
+      // 结果筛选（支持新 status 和旧 result）
+      if (resultFilter !== "all") {
+        const status = getStatus(it).toLowerCase();
+        const legacyResult = it.result || "risk";
+        
+        // 映射：pending → pending, pass → pass, fail → fail, warn/risk → risk
+        if (resultFilter === "pending" && status !== "pending") return false;
+        if (resultFilter === "pass" && status !== "pass") return false;
+        if (resultFilter === "fail" && status !== "fail") return false;
+        if (resultFilter === "risk" && status !== "warn" && legacyResult !== "risk") return false;
+      }
+      
       // 来源筛选
       if (sourceFilter !== "all") {
-        const itemSource = it.source || "compare";
+        const itemSource = it.source || "v3"; // 默认为 v3
         if (itemSource !== sourceFilter) return false;
       }
+      
       // 关键词筛选
       if (!k) return true;
+      const reqText = it.requirement_text || it.tender_requirement || "";
+      const respText = it.response_text || it.bid_response || "";
       return (
         (it.dimension || "").toLowerCase().includes(k) ||
-        (it.requirement_text || "").toLowerCase().includes(k) ||
-        (it.response_text || "").toLowerCase().includes(k) ||
+        reqText.toLowerCase().includes(k) ||
+        respText.toLowerCase().includes(k) ||
         (it.remark || "").toLowerCase().includes(k) ||
-        (it.rule_id || "").toLowerCase().includes(k)
+        (it.rule_id || "").toLowerCase().includes(k) ||
+        (it.evaluator || "").toLowerCase().includes(k)
       );
     });
   }, [items, resultFilter, sourceFilter, kw]);
 
-  const badge = (r: ReviewItem["result"]) => {
-    if (r === "pass") return <span className="tender-badge pass">通过</span>;
-    if (r === "risk") return <span className="tender-badge risk">风险</span>;
-    return <span className="tender-badge fail">不合格</span>;
+  const badge = (item: ReviewItem) => {
+    const status = getStatus(item);
+    const color = getStatusColor(status);
+    const text = getStatusText(status);
+    
+    // 映射到 tender-badge 类名
+    let badgeClass = "tender-badge ";
+    if (status === "PASS") badgeClass += "pass";
+    else if (status === "FAIL") badgeClass += "fail";
+    else if (status === "WARN") badgeClass += "risk";
+    else badgeClass += "pending"; // PENDING 用新样式
+    
+    return <span className={badgeClass}>{text}</span>;
   };
 
   return (
@@ -60,6 +80,7 @@ export default function ReviewTable({
 
         <select className="sidebar-select" style={{ minWidth: 140 }} value={resultFilter} onChange={(e) => setResultFilter(e.target.value as any)}>
           <option value="all">全部结果</option>
+          <option value="pending">待复核</option>
           <option value="fail">不合格</option>
           <option value="risk">风险</option>
           <option value="pass">通过</option>
@@ -67,6 +88,7 @@ export default function ReviewTable({
 
         <select className="sidebar-select" style={{ minWidth: 140 }} value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as any)}>
           <option value="all">全部来源</option>
+          <option value="v3">V3流水线</option>
           <option value="compare">对比审核</option>
           <option value="rule">规则审核</option>
         </select>
@@ -86,7 +108,8 @@ export default function ReviewTable({
             <tr>
               <th style={{ width: 90 }}>来源</th>
               <th style={{ width: 110 }}>维度</th>
-              <th style={{ width: 110 }}>结果</th>
+              <th style={{ width: 90 }}>状态</th>
+              <th style={{ width: 110 }}>评估器</th>
               <th style={{ width: 70 }}>硬性</th>
               <th>招标要求</th>
               <th>投标响应</th>
@@ -95,13 +118,21 @@ export default function ReviewTable({
           </thead>
           <tbody>
             {filtered.map((it) => {
-              const itemSource = it.source || "compare";
+              const itemSource = it.source || "v3";
+              const reqText = it.requirement_text || it.tender_requirement || "-";
+              const respText = it.response_text || it.bid_response || "-";
+              const isHard = it.rigid !== undefined ? it.rigid : (it.is_hard || false);
+              
               return (
                 <tr key={it.id}>
                   <td>
                     {itemSource === "rule" ? (
                       <span className="tender-badge" style={{ background: "#8b5cf6", color: "white", fontSize: "11px" }}>
                         规则
+                      </span>
+                    ) : itemSource === "v3" ? (
+                      <span className="tender-badge" style={{ background: "#10b981", color: "white", fontSize: "11px" }}>
+                        V3
                       </span>
                     ) : (
                       <span className="tender-badge" style={{ background: "#6366f1", color: "white", fontSize: "11px" }}>
@@ -115,10 +146,15 @@ export default function ReviewTable({
                     )}
                   </td>
                   <td>{it.dimension || "其他"}</td>
-                  <td>{badge(it.result)}</td>
-                  <td>{it.rigid ? <span className="tender-badge required">硬性</span> : "-"}</td>
-                  <td className="tender-cell">{it.requirement_text || "-"}</td>
-                  <td className="tender-cell">{it.response_text || "-"}</td>
+                  <td>{badge(it)}</td>
+                  <td>
+                    <span style={{ fontSize: "12px", color: "#64748b" }}>
+                      {it.evaluator || "-"}
+                    </span>
+                  </td>
+                  <td>{isHard ? <span className="tender-badge required">硬性</span> : "-"}</td>
+                  <td className="tender-cell">{reqText}</td>
+                  <td className="tender-cell">{respText}</td>
                   <td>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       {it.tender_evidence_chunk_ids?.length > 0 && (
@@ -138,7 +174,7 @@ export default function ReviewTable({
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={7} className="kb-empty" style={{ textAlign: "center", padding: 20 }}>
+                <td colSpan={8} className="kb-empty" style={{ textAlign: "center", padding: 20 }}>
                   暂无数据
                 </td>
               </tr>

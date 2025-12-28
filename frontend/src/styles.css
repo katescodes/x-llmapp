@@ -1732,6 +1732,11 @@ body {
   color: #ef4444;
 }
 
+.tender-badge.pending {
+  border-color: rgba(148, 163, 184, 0.35);
+  color: #94a3b8;
+}
+
 /* 目录树：复用 kb-doc-card，不改变配色，只增强结构 */
 .tender-tree-row.active {
   outline: 1px solid rgba(96, 165, 250, 0.35);
