@@ -85,7 +85,8 @@ class ReviewV3Service:
                 project_id=project_id,
                 bidder_name=bidder_name,
                 model_id=model_id,
-                use_llm_semantic=use_llm_semantic
+                use_llm_semantic=use_llm_semantic,
+                review_run_id=run_id,  # Step A: 传递 review_run_id
             )
             
             return {

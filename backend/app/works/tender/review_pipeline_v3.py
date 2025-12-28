@@ -1,10 +1,12 @@
 """
 审核流水线 V3.1 - 固定分层裁决
 Step 5: 实现 Mapping → Hard Gate → Quant Checks → Semantic Escalation → Consistency → Summary
+Step A: 修复落库可追溯性（requirement_id + matched_response_id + review_run_id）
 """
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
+from psycopg.rows import dict_row
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,7 @@ class ReviewPipelineV3:
         bidder_name: str,
         model_id: Optional[str] = None,
         use_llm_semantic: bool = True,
+        review_run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         运行固定流水线审核
@@ -34,7 +37,11 @@ class ReviewPipelineV3:
         5. Consistency: 一致性检查（跨维度）
         6. Aggregate: 汇总结果
         """
-        logger.info(f"ReviewPipeline: START project={project_id}, bidder={bidder_name}")
+        # 生成审核批次 ID
+        if not review_run_id:
+            review_run_id = str(uuid.uuid4())
+        
+        logger.info(f"ReviewPipeline: START project={project_id}, bidder={bidder_name}, run_id={review_run_id}")
         
         # 1. 加载数据
         requirements = self._load_requirements(project_id)
@@ -73,8 +80,8 @@ class ReviewPipelineV3:
         # 7. 合并所有结果
         all_results = hard_gate_results + quant_results + semantic_results + consistency_results
         
-        # 8. 落库
-        self._save_review_items(project_id, bidder_name, all_results)
+        # 8. 落库（传入 review_run_id）
+        self._save_review_items(project_id, bidder_name, all_results, review_run_id)
         
         # 9. 统计
         stats = self._calculate_stats(all_results)
@@ -89,7 +96,7 @@ class ReviewPipelineV3:
     def _load_requirements(self, project_id: str) -> List[Dict[str, Any]]:
         """加载招标要求（含新字段）"""
         with self.pool.connection() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute("""
                     SELECT id, requirement_id, dimension, req_type, requirement_text,
                            is_hard, allow_deviation, value_schema_json, evidence_chunk_ids,
@@ -105,7 +112,7 @@ class ReviewPipelineV3:
     def _load_responses(self, project_id: str, bidder_name: str) -> List[Dict[str, Any]]:
         """加载投标响应"""
         with self.pool.connection() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute("""
                     SELECT id, dimension, response_type, response_text,
                            extracted_value_json, evidence_chunk_ids,
@@ -182,6 +189,7 @@ class ReviewPipelineV3:
             
             result = {
                 "requirement_id": req.get("requirement_id"),
+                "matched_response_id": str(resp.get("id")) if resp else None,
                 "dimension": req.get("dimension"),
                 "clause_title": req.get("requirement_text")[:50],
                 "tender_requirement": req.get("requirement_text"),
@@ -279,6 +287,7 @@ class ReviewPipelineV3:
             
             result = {
                 "requirement_id": req_id,
+                "matched_response_id": str(resp.get("id")) if resp else None,
                 "dimension": req.get("dimension"),
                 "clause_title": req.get("requirement_text")[:50],
                 "tender_requirement": req.get("requirement_text"),
@@ -392,6 +401,7 @@ class ReviewPipelineV3:
                 
                 result = {
                     "requirement_id": req.get("requirement_id"),
+                    "matched_response_id": str(resp.get("id")) if resp else None,
                     "dimension": req.get("dimension"),
                     "clause_title": req.get("requirement_text")[:50],
                     "tender_requirement": req.get("requirement_text"),
@@ -449,6 +459,7 @@ class ReviewPipelineV3:
             names_str = ", ".join(set(c["name"] for c in company_names))
             results.append({
                 "requirement_id": "consistency_company_name",
+                "matched_response_id": None,  # 一致性检查不针对单个响应
                 "dimension": "consistency",
                 "clause_title": "公司名称一致性检查",
                 "tender_requirement": "投标文件中公司名称应保持一致",
@@ -479,6 +490,7 @@ class ReviewPipelineV3:
             prices_str = ", ".join(set(str(p["price"]) for p in prices))
             results.append({
                 "requirement_id": "consistency_price",
+                "matched_response_id": None,  # 一致性检查不针对单个响应
                 "dimension": "consistency",
                 "clause_title": "报价一致性检查",
                 "tender_requirement": "投标总价在各处表述应一致",
@@ -510,6 +522,7 @@ class ReviewPipelineV3:
             durations_str = ", ".join(set(str(d["duration"]) for d in durations))
             results.append({
                 "requirement_id": "consistency_duration",
+                "matched_response_id": None,  # 一致性检查不针对单个响应
                 "dimension": "consistency",
                 "clause_title": "工期一致性检查",
                 "tender_requirement": "承诺工期在各处表述应一致",
@@ -548,7 +561,8 @@ class ReviewPipelineV3:
         self,
         project_id: str,
         bidder_name: str,
-        results: List[Dict]
+        results: List[Dict],
+        review_run_id: str,
     ):
         """保存审核结果到数据库"""
         # 先删除旧数据
@@ -573,14 +587,19 @@ class ReviewPipelineV3:
                     computed_trace = result.get("computed_trace_json")
                     evidence = result.get("evidence_json", [])
                     
+                    # 提取可追溯性字段
+                    requirement_id = result.get("requirement_id")
+                    matched_response_id = result.get("matched_response_id")
+                    
                     cur.execute("""
                         INSERT INTO tender_review_items (
                             id, project_id, dimension, clause_title,
                             tender_requirement, bidder_name, bid_response,
                             result, status, is_hard, remark,
                             evaluator, rule_trace_json, computed_trace_json, evidence_json,
-                            tender_evidence_chunk_ids, bid_evidence_chunk_ids
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            tender_evidence_chunk_ids, bid_evidence_chunk_ids,
+                            requirement_id, matched_response_id, review_run_id
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """, (
                         item_id,
                         project_id,
@@ -598,7 +617,10 @@ class ReviewPipelineV3:
                         Json(computed_trace) if computed_trace else None,
                         Json(evidence) if evidence else None,
                         [],
-                        []
+                        [],
+                        requirement_id,
+                        matched_response_id,
+                        review_run_id,
                     ))
                 
                 conn.commit()
