@@ -1,3 +1,7 @@
+/**
+ * 投标响应表格组件
+ * 样式与 RiskAnalysisTables 保持一致
+ */
 import React, { useMemo, useState } from "react";
 
 export type BidResponse = {
@@ -17,6 +21,22 @@ export type BidResponseStats = {
   count: number;
 };
 
+// 维度标签映射
+const DIMENSION_LABELS: Record<string, string> = {
+  qualification: "资格",
+  commercial: "商务",
+  technical: "技术",
+  other: "其他",
+};
+
+// 响应类型标签映射
+const RESPONSE_TYPE_LABELS: Record<string, string> = {
+  text: "文本",
+  document_ref: "文档引用",
+  structured: "结构化",
+  number: "数值",
+};
+
 export default function BidResponseTable({
   responses,
   stats,
@@ -28,6 +48,19 @@ export default function BidResponseTable({
 }) {
   const [dimensionFilter, setDimensionFilter] = useState<string>("all");
   const [kw, setKw] = useState("");
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  const toggleExpand = (id: string) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   // 获取所有唯一的维度
   const dimensions = useMemo(() => {
@@ -52,186 +85,299 @@ export default function BidResponseTable({
     });
   }, [responses, dimensionFilter, kw]);
 
-  const typeBadge = (type: string) => {
-    const typeMap: Record<string, { bg: string; text: string }> = {
-      text: { bg: "#3b82f6", text: "文本" },
-      document_ref: { bg: "#8b5cf6", text: "文档引用" },
-      structured: { bg: "#10b981", text: "结构化" },
-      number: { bg: "#f59e0b", text: "数值" },
-    };
-    const info = typeMap[type] || { bg: "#64748b", text: type };
-    return (
-      <span
-        className="tender-badge"
-        style={{ background: info.bg, color: "white", fontSize: "11px" }}
-      >
-        {info.text}
-      </span>
-    );
+  // 响应类型颜色映射
+  const getResponseTypeColor = (type: string) => {
+    switch (type) {
+      case "structured":
+        return "#10b981";
+      case "number":
+        return "#f59e0b";
+      case "document_ref":
+        return "#8b5cf6";
+      case "text":
+      default:
+        return "#60a5fa";
+    }
   };
 
+  // 计算总统计
+  const totalCount = stats.reduce((sum, s) => sum + s.count, 0);
+
   return (
-    <div className="source-card">
-      {/* 统计信息 */}
+    <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+      {/* 统计卡片 */}
       {stats.length > 0 && (
         <div
-          className="kb-doc-meta"
           style={{
-            marginBottom: "16px",
-            padding: "12px",
-            backgroundColor: "#f0fdf4",
-            borderRadius: "4px",
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+            gap: "12px",
           }}
         >
-          <div style={{ fontWeight: 600, marginBottom: "8px", color: "#166534" }}>
-            📊 抽取统计
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
-            {stats.map((stat, idx) => (
-              <div
-                key={idx}
-                style={{
-                  fontSize: "13px",
-                  color: "#15803d",
-                  padding: "4px 8px",
-                  backgroundColor: "white",
-                  borderRadius: "4px",
-                  border: "1px solid #bbf7d0",
-                }}
-              >
-                {stat.dimension}: <strong>{stat.count}</strong> 条
-              </div>
-            ))}
-          </div>
-          <div
-            style={{
-              marginTop: "8px",
-              paddingTop: "8px",
-              borderTop: "1px solid #bbf7d0",
-              fontWeight: 600,
-              color: "#166534",
-            }}
-          >
-            总计: {stats.reduce((sum, s) => sum + s.count, 0)} 条投标响应数据
-          </div>
+          <StatCard label="总响应数" value={totalCount} color="#60a5fa" />
+          {stats.slice(0, 5).map((stat, idx) => (
+            <StatCard
+              key={idx}
+              label={DIMENSION_LABELS[stat.dimension] || stat.dimension}
+              value={stat.count}
+              color={
+                stat.dimension === "qualification"
+                  ? "#ef4444"
+                  : stat.dimension === "commercial"
+                  ? "#fbbf24"
+                  : "#10b981"
+              }
+            />
+          ))}
         </div>
       )}
 
-      {/* 筛选和搜索 */}
-      <div
-        style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}
-      >
-        <div style={{ fontWeight: 600 }}>投标响应详情</div>
-
-        <select
-          className="sidebar-select"
-          style={{ minWidth: 140 }}
-          value={dimensionFilter}
-          onChange={(e) => setDimensionFilter(e.target.value)}
-        >
-          <option value="all">全部维度</option>
-          {dimensions.map((dim) => (
-            <option key={dim} value={dim}>
-              {dim}
-            </option>
-          ))}
-        </select>
-
-        <input
-          placeholder="搜索维度/类型/内容/投标人"
-          value={kw}
-          onChange={(e) => setKw(e.target.value)}
-          style={{ flex: 1, minWidth: 220 }}
-        />
-        <div className="kb-doc-meta">共 {filtered.length} 条</div>
-      </div>
-
       {/* 表格 */}
-      <div className="tender-table-wrap" style={{ marginTop: 12 }}>
-        <table className="tender-table">
-          <thead>
-            <tr>
-              <th style={{ width: 50 }}>#</th>
-              <th style={{ width: 120 }}>投标人</th>
-              <th style={{ width: 110 }}>维度</th>
-              <th style={{ width: 90 }}>类型</th>
-              <th>响应内容</th>
-              <th style={{ width: 120 }}>证据</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((it, idx) => {
-              return (
-                <tr key={it.id}>
-                  <td style={{ textAlign: "center", color: "#64748b" }}>{idx + 1}</td>
-                  <td>
-                    <div
-                      style={{
-                        fontSize: "13px",
-                        color: "#334155",
-                        fontWeight: 500,
-                      }}
-                    >
-                      {it.bidder_name || "-"}
-                    </div>
-                  </td>
-                  <td>
-                    <span
-                      className="tender-badge"
-                      style={{
-                        background: "#e0f2fe",
-                        color: "#0369a1",
-                        fontSize: "12px",
-                      }}
-                    >
-                      {it.dimension || "其他"}
-                    </span>
-                  </td>
-                  <td>{typeBadge(it.response_type || "text")}</td>
-                  <td className="tender-cell">
-                    <div
-                      style={{
-                        maxHeight: "100px",
-                        overflowY: "auto",
-                        whiteSpace: "pre-wrap",
-                        fontSize: "13px",
-                        lineHeight: "1.5",
-                      }}
-                    >
-                      {it.response_text || "-"}
-                    </div>
-                  </td>
-                  <td>
-                    {it.evidence_chunk_ids?.length > 0 ? (
-                      <button
-                        className="link-button"
-                        onClick={() => onOpenEvidence(it.evidence_chunk_ids)}
-                        style={{ fontSize: "12px" }}
-                      >
-                        查看证据 ({it.evidence_chunk_ids.length})
-                      </button>
-                    ) : (
-                      <span style={{ color: "#94a3b8", fontSize: "12px" }}>无</span>
-                    )}
-                  </td>
+      <div>
+        <h3
+          style={{
+            fontSize: "16px",
+            fontWeight: 600,
+            color: "#e5e7eb",
+            marginBottom: "12px",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
+          <span
+            style={{
+              width: "4px",
+              height: "16px",
+              background: "#60a5fa",
+              borderRadius: "2px",
+            }}
+          />
+          投标响应详情
+          <span style={{ fontSize: "14px", color: "#94a3b8", fontWeight: 400 }}>
+            ({filtered.length})
+          </span>
+        </h3>
+
+        {/* 筛选和搜索 */}
+        <div
+          style={{
+            display: "flex",
+            gap: "12px",
+            alignItems: "center",
+            flexWrap: "wrap",
+            marginBottom: "12px",
+          }}
+        >
+          <select
+            className="sidebar-select"
+            style={{
+              minWidth: 140,
+              padding: "6px 10px",
+              background: "rgba(15, 23, 42, 0.6)",
+              border: "1px solid rgba(148, 163, 184, 0.3)",
+              borderRadius: "6px",
+              color: "#e5e7eb",
+              fontSize: "13px",
+            }}
+            value={dimensionFilter}
+            onChange={(e) => setDimensionFilter(e.target.value)}
+          >
+            <option value="all">全部维度</option>
+            {dimensions.map((dim) => (
+              <option key={dim} value={dim}>
+                {DIMENSION_LABELS[dim] || dim}
+              </option>
+            ))}
+          </select>
+
+          <input
+            placeholder="搜索维度/类型/内容/投标人"
+            value={kw}
+            onChange={(e) => setKw(e.target.value)}
+            style={{
+              flex: 1,
+              minWidth: 220,
+              padding: "6px 12px",
+              background: "rgba(15, 23, 42, 0.6)",
+              border: "1px solid rgba(148, 163, 184, 0.3)",
+              borderRadius: "6px",
+              color: "#e5e7eb",
+              fontSize: "13px",
+            }}
+          />
+        </div>
+
+        {filtered.length === 0 ? (
+          <div
+            className="kb-empty"
+            style={{
+              padding: "24px",
+              textAlign: "center",
+              background: "rgba(15, 23, 42, 0.6)",
+              borderRadius: "8px",
+            }}
+          >
+            暂无投标响应数据
+          </div>
+        ) : (
+          <div className="source-card" style={{ padding: "0" }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: "13px",
+              }}
+            >
+              <thead
+                style={{
+                  background: "rgba(15, 23, 42, 0.8)",
+                }}
+              >
+                <tr>
+                  <th style={thStyle}>投标人</th>
+                  <th style={thStyle}>维度</th>
+                  <th style={thStyle}>类型</th>
+                  <th style={thStyle}>响应内容</th>
+                  <th style={thStyle}>证据</th>
                 </tr>
-              );
-            })}
-            {filtered.length === 0 && (
-              <tr>
-                <td
-                  colSpan={6}
-                  className="kb-empty"
-                  style={{ textAlign: "center", padding: 20 }}
-                >
-                  暂无数据
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+              </thead>
+              <tbody>
+                {filtered.map((it) => (
+                  <tr
+                    key={it.id}
+                    style={{
+                      borderBottom: "1px solid rgba(148, 163, 184, 0.1)",
+                      background: "rgba(15, 23, 42, 0.4)",
+                    }}
+                  >
+                    <td style={tdStyle}>
+                      <div
+                        style={{
+                          fontSize: "13px",
+                          color: "#e5e7eb",
+                          fontWeight: 500,
+                        }}
+                      >
+                        {it.bidder_name || "-"}
+                      </div>
+                    </td>
+                    <td style={tdStyle}>
+                      <span
+                        style={{
+                          fontSize: "11px",
+                          padding: "2px 6px",
+                          borderRadius: "4px",
+                          background: "rgba(96, 165, 250, 0.15)",
+                          color: "#60a5fa",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {DIMENSION_LABELS[it.dimension] || it.dimension || "其他"}
+                      </span>
+                    </td>
+                    <td style={tdStyle}>
+                      <span
+                        style={{
+                          fontSize: "11px",
+                          padding: "2px 6px",
+                          borderRadius: "4px",
+                          border: `1px solid ${getResponseTypeColor(it.response_type || "text")}40`,
+                          color: getResponseTypeColor(it.response_type || "text"),
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {RESPONSE_TYPE_LABELS[it.response_type] || it.response_type || "文本"}
+                      </span>
+                    </td>
+                    <td style={{ ...tdStyle, maxWidth: "400px" }}>
+                      <div>
+                        <div
+                          style={{
+                            color: "#e5e7eb",
+                            lineHeight: "1.4",
+                            display: expandedRows.has(it.id) ? "block" : "-webkit-box",
+                            WebkitLineClamp: expandedRows.has(it.id) ? "unset" : 3,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "pre-wrap",
+                          }}
+                        >
+                          {it.response_text || "-"}
+                        </div>
+                        {it.response_text && it.response_text.length > 150 && (
+                          <button
+                            onClick={() => toggleExpand(it.id)}
+                            className="link-button"
+                            style={{ fontSize: "11px", marginTop: "4px", color: "#60a5fa" }}
+                          >
+                            {expandedRows.has(it.id) ? "收起" : "展开"}
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                    <td style={tdStyle}>
+                      {it.evidence_chunk_ids?.length > 0 ? (
+                        <button
+                          onClick={() => onOpenEvidence(it.evidence_chunk_ids)}
+                          className="link-button"
+                          style={{
+                            fontSize: "11px",
+                            padding: "3px 6px",
+                            border: "1px solid rgba(148, 163, 184, 0.3)",
+                            borderRadius: "4px",
+                          }}
+                        >
+                          证据({it.evidence_chunk_ids.length})
+                        </button>
+                      ) : (
+                        <span style={{ color: "#94a3b8", fontSize: "11px" }}>-</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
+// 统计卡片子组件
+function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div
+      className="source-card"
+      style={{
+        padding: "12px 16px",
+        display: "flex",
+        flexDirection: "column",
+        gap: "4px",
+      }}
+    >
+      <div style={{ fontSize: "12px", color: "#94a3b8" }}>{label}</div>
+      <div style={{ fontSize: "24px", fontWeight: 600, color }}>{value}</div>
+    </div>
+  );
+}
+
+// 表头样式
+const thStyle: React.CSSProperties = {
+  padding: "10px 12px",
+  textAlign: "left",
+  fontSize: "12px",
+  fontWeight: 600,
+  color: "#94a3b8",
+  borderBottom: "1px solid rgba(148, 163, 184, 0.2)",
+  whiteSpace: "nowrap",
+};
+
+// 表格单元格样式
+const tdStyle: React.CSSProperties = {
+  padding: "10px 12px",
+  verticalAlign: "top",
+};
 
