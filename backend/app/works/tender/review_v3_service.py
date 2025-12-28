@@ -7,6 +7,8 @@
 3. 应用确定性规则引擎
 4. 应用语义LLM规则引擎
 5. 生成 tender_review_items
+
+Step 5: 新增固定流水线模式
 """
 import logging
 import uuid
@@ -18,6 +20,7 @@ from app.works.tender.rules.deterministic_engine import DeterministicRuleEngine
 from app.works.tender.rules.semantic_llm_engine import SemanticLLMRuleEngine
 from app.works.tender.rules.basic_requirement_evaluator import BasicRequirementEvaluator
 from app.works.tender.rules.dimension_batch_llm_reviewer import DimensionBatchLLMReviewer
+from app.works.tender.review_pipeline_v3 import ReviewPipelineV3  # Step 5: 新增
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,9 @@ class ReviewV3Service:
         self.semantic_engine = SemanticLLMRuleEngine(llm_orchestrator)
         self.basic_evaluator = BasicRequirementEvaluator()  # 基础要求评估器
         self.llm_semantic_reviewer = DimensionBatchLLMReviewer(llm_orchestrator)  # LLM语义审核器
+        
+        # Step 5: 新增固定流水线
+        self.pipeline = ReviewPipelineV3(pool, llm_orchestrator)
     
     async def run_review_v3(
         self,
@@ -45,6 +51,7 @@ class ReviewV3Service:
         custom_rule_pack_ids: Optional[List[str]] = None,
         run_id: Optional[str] = None,
         use_llm_semantic: bool = False,  # 新增：是否使用LLM语义审核
+        use_fixed_pipeline: bool = True,  # Step 5: 是否使用固定流水线（默认开启）
     ) -> Dict[str, Any]:
         """
         运行审核 V3
@@ -56,6 +63,7 @@ class ReviewV3Service:
             custom_rule_pack_ids: 自定义规则包ID列表（可选）
             run_id: 运行ID（可选）
             use_llm_semantic: 是否使用LLM语义审核（可选，默认False）
+            use_fixed_pipeline: 是否使用固定流水线（Step 5新增，默认True）
         
         Returns:
             {
@@ -63,12 +71,30 @@ class ReviewV3Service:
                 "pass_count": 30,
                 "fail_count": 15,
                 "warn_count": 5,
-                "review_mode": "LLM_SEMANTIC" | "CUSTOM_RULES" | "BASIC_REQUIREMENTS_ONLY",
+                "pending_count": 3,
+                "review_mode": "FIXED_PIPELINE" | "LLM_SEMANTIC" | "CUSTOM_RULES" | "BASIC_REQUIREMENTS_ONLY",
                 "items": [...]
             }
         """
         logger.info(f"ReviewV3: run_review start project_id={project_id}, bidder={bidder_name}")
         
+        # Step 5: 如果启用固定流水线，使用新逻辑
+        if use_fixed_pipeline:
+            logger.info("ReviewV3: Using FIXED_PIPELINE mode")
+            result = await self.pipeline.run_pipeline(
+                project_id=project_id,
+                bidder_name=bidder_name,
+                model_id=model_id,
+                use_llm_semantic=use_llm_semantic
+            )
+            
+            return {
+                "review_mode": "FIXED_PIPELINE",
+                **result["stats"],
+                "items": result["review_items"]
+            }
+        
+        # 以下是旧逻辑（保留兼容性）
         # 1. 读取招标要求
         requirements = self._get_requirements(project_id)
         logger.info(f"ReviewV3: Loaded {len(requirements)} requirements")
