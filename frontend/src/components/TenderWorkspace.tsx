@@ -19,7 +19,7 @@ import { templateSpecToTemplateStyle, templateSpecToTocItems } from './template/
 import FormatTemplatesPage from './FormatTemplatesPage';
 import CustomRulesPage from './CustomRulesPage';
 import UserDocumentsPage from './UserDocumentsPage';
-import type { SampleFragment, SampleFragmentPreview } from '../types/tender';
+import type { SampleFragment, SampleFragmentPreview, TenderReviewItem } from '../types/tender';
 import type { RiskAnalysisData } from '../types/riskAnalysis';
 import { countByStatus } from '../types/reviewUtils';
 
@@ -90,18 +90,9 @@ interface DirectoryNode {
 
 // RuleSet interface removed - 规则文件现在直接作为资产使用
 
-interface ReviewItem {
-  id: string;
-  project_id: string;
-  dimension: string;
-  requirement_text?: string;
-  response_text?: string;
-  result: 'pass' | 'risk' | 'fail';
-  remark?: string;
-  rigid: boolean;
-  tender_evidence_chunk_ids: string[];
-  bid_evidence_chunk_ids: string[];
-}
+// 使用统一的 TenderReviewItem 类型（从 types/tender.ts 导入）
+// 保留向后兼容的别名
+type ReviewItem = TenderReviewItem;
 
 interface Chunk {
   chunk_id: string;
@@ -109,6 +100,7 @@ interface Chunk {
   title: string;
   content: string;
   position?: number;
+  highlightText?: string; // 高亮文本（可选）
 }
 
 type FormatTemplateOption = { id: string; name: string };
