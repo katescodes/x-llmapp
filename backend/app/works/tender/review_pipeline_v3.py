@@ -358,7 +358,8 @@ class ReviewPipelineV3:
         semantic_results = []
         if use_llm_semantic:
             semantic_results = await self._semantic_escalate(
-                candidates, hard_gate_results, quant_results, model_id, seg_map
+                candidates, hard_gate_results, quant_results, model_id, seg_map,
+                project_id, bidder_name  # ✅ 传入project_id和bidder_name用于QA验证
             )
             logger.info(f"ReviewPipeline: Semantic escalation produced {len(semantic_results)} results")
         
@@ -1294,10 +1295,12 @@ class ReviewPipelineV3:
         hard_gate_results: List[Dict],
         quant_results: List[Dict],
         model_id: Optional[str],
-        seg_map: Dict[str, Dict]
+        seg_map: Dict[str, Dict],
+        project_id: str,  # ✅ 新增：用于QA验证
+        bidder_name: str  # ✅ 新增：用于QA验证
     ) -> List[Dict[str, Any]]:
         """
-        Step 4: Semantic Escalation (Step C: 改进版, Step F: 统一 evidence)
+        Step 4: Semantic Escalation (Step C: 改进版, Step F: 统一 evidence, QA验证)
         只处理 PENDING 或 eval_method=SEMANTIC 的条款
         
         改进点（Step C）：
@@ -1305,6 +1308,11 @@ class ReviewPipelineV3:
         2. 禁止假 PASS
         
         Step F: 使用统一 evidence_json 结构
+        
+        QA验证：
+        1. 使用_qa_based_verification进行问答式验证
+        2. 检索相关投标文档段落
+        3. LLM基于上下文判断符合性
         """
         results = []
         
@@ -1369,16 +1377,19 @@ class ReviewPipelineV3:
             
             return results
         
-        # 如果有 LLM，批量调用
+        # 如果有 LLM，使用QA验证
         if semantic_candidates:
-            # 简化：每个候选都调用 LLM（实际应批量）
+            # 使用QA验证进行语义审核
             for candidate in semantic_candidates[:10]:  # 限制数量避免超时
                 req = candidate["requirement"]
                 resp = candidate.get("best_response")  # ✅ 统一使用best_response
                 
-                # 调用 LLM 进行语义审核（简化版）
-                status, remark, confidence = await self._llm_semantic_review(
-                    req, resp, model_id
+                # ✅ 使用QA验证（问答式验证）
+                status, remark, confidence, qa_evidence = await self._qa_based_verification(
+                    req=req,
+                    project_id=project_id,
+                    bidder_name=bidder_name,
+                    model_id=model_id
                 )
                 
                 # 低置信度转 PENDING
@@ -1387,7 +1398,14 @@ class ReviewPipelineV3:
                     remark = f"{remark} (置信度:{confidence:.2f}, 需人工复核)"
                 
                 # Step F: 统一 evidence_json 结构
-                evidence_json, tender_ids, bid_ids = self._merge_tender_bid_evidence(req, resp, seg_map)
+                # 如果QA验证返回了evidence，优先使用；否则从resp中提取
+                if qa_evidence:
+                    evidence_json = qa_evidence
+                    # 分离tender和bid evidence（QA evidence都是bid类型）
+                    tender_ids = []
+                    bid_ids = [e.get("segment_id") for e in qa_evidence if e.get("segment_id")]
+                else:
+                    evidence_json, tender_ids, bid_ids = self._merge_tender_bid_evidence(req, resp, seg_map)
                 
                 result = {
                     "requirement_id": req.get("requirement_id"),
