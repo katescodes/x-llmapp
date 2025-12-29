@@ -1544,10 +1544,107 @@ class ReviewPipelineV3:
             logger.error(f"QA Verification: Retrieval failed for req_id={req.get('requirement_id')}: {e}")
             return "PENDING", f"检索失败: {str(e)}", 0.0, []
         
-        # Step 3: LLM判断（下一步实现）
-        logger.warning(f"QA Verification: LLM judgment not implemented, returning PENDING")
+        # Step 3: LLM判断
+        if not self.llm:
+            logger.warning(f"QA Verification: LLM not configured, returning PENDING")
+            return "PENDING", f"QA验证-已检索到{len(contexts)}个相关段落，LLM未配置", 0.0, evidence_list
         
-        return "PENDING", f"QA验证-已检索到{len(contexts)}个相关段落，LLM判断功能开发中", 0.0, evidence_list
+        try:
+            # 构造prompt
+            req_text = req.get("requirement_text", "")
+            eval_method = req.get("eval_method", "")
+            is_hard = req.get("is_hard", False)
+            
+            # 构造上下文
+            context_str = "\n\n---\n\n".join(contexts)
+            
+            prompt = f"""你是一个专业的招投标审核专家。请基于提供的投标文档内容，判断投标人是否满足以下招标要求。
+
+**招标要求**：
+{req_text}
+
+**投标文档相关内容**：
+{context_str}
+
+**判断标准**：
+- 如果投标文档明确满足要求：回答"满足"
+- 如果投标文档明确不满足要求：回答"不满足"
+- 如果投标文档信息不足或模糊：回答"不确定"
+
+**回答要求**：
+1. 判断结果：[满足/不满足/不确定]
+2. 理由：简要说明判断依据（1-2句话）
+3. 置信度：[高/中/低]
+
+请严格按照以下JSON格式输出：
+{{
+  "result": "满足|不满足|不确定",
+  "reason": "判断理由",
+  "confidence": "高|中|低"
+}}
+"""
+            
+            messages = [{"role": "user", "content": prompt}]
+            
+            # 调用LLM
+            llm_response = self.llm.chat(
+                messages=messages,
+                model_id=model_id,
+                temperature=0.3,  # 低温度，提高一致性
+                max_tokens=500,    # 限制输出长度
+            )
+            
+            # 解析LLM响应
+            content = llm_response["choices"][0]["message"]["content"].strip()
+            
+            # 尝试解析JSON
+            import json
+            try:
+                # 提取JSON部分（可能包含markdown代码块）
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content:
+                    content = content.split("```")[1].split("```")[0].strip()
+                
+                parsed = json.loads(content)
+                result = parsed.get("result", "不确定")
+                reason = parsed.get("reason", "LLM未返回原因")
+                confidence_str = parsed.get("confidence", "中")
+                
+            except Exception as e:
+                logger.warning(f"QA Verification: Failed to parse LLM JSON response: {e}, content: {content[:200]}")
+                # 回退：简单文本解析
+                if "满足" in content and "不满足" not in content:
+                    result = "满足"
+                elif "不满足" in content:
+                    result = "不满足"
+                else:
+                    result = "不确定"
+                reason = content[:200]  # 限制长度
+                confidence_str = "中"
+            
+            # 映射到status
+            if result == "满足":
+                status = "PASS"
+                confidence = 0.9 if confidence_str == "高" else (0.7 if confidence_str == "中" else 0.5)
+            elif result == "不满足":
+                status = "FAIL" if is_hard else "WARN"
+                confidence = 0.9 if confidence_str == "高" else (0.7 if confidence_str == "中" else 0.5)
+            else:  # 不确定
+                status = "PENDING"
+                confidence = 0.0
+            
+            remark = f"QA验证：{result}。{reason}"
+            
+            logger.info(f"QA Verification: req_id={req.get('requirement_id')}, status={status}, confidence={confidence}")
+            
+            return status, remark, confidence, evidence_list
+            
+        except Exception as e:
+            logger.error(f"QA Verification: LLM judgment failed for req_id={req.get('requirement_id')}: {e}")
+            import traceback
+            traceback.print_exc()
+            return "PENDING", f"LLM判断失败: {str(e)}", 0.0, evidence_list
     
     async def _llm_semantic_review(
         self,
