@@ -727,13 +727,16 @@ class ReviewPipelineV3:
         keyword_threshold: int = 1  # 目标B: 关键词打分阈值
     ) -> List[Dict[str, Any]]:
         """
-        Step 1: Mapping (目标B: 改进版 - 轻量打分 + 阈值拒配)
-        为每个 requirement 找候选 response（基于 dimension + 相似度 + 关键词打分）
+        Step 1: Mapping (Step 4: norm_key 优先 + 轻量打分 + 阈值拒配)
+        为每个 requirement 找候选 response
         
-        改进点（目标B）：
-        1. 在同维度里，用轻量的关键词匹配打分选候选 response
-        2. 若最佳分数 < 阈值 → response=None（不要硬配）
-        3. 这样能让"售后承诺"不再莫名其妙匹配"保证金/授权书/开标签到"
+        优先级（Step 4）：
+        1. **norm_key 精确匹配优先**：
+           - 若 requirement.value_schema_json.norm_key 存在
+           - 在 responses 中找 normalized_fields_json._norm_key == norm_key 的候选
+           - 若找不到，response=None（不要乱配）
+        2. 否则：轻量打分（dimension + 关键词 + Jaccard相似度）
+        3. 若最佳分数 < 阈值 → response=None
         """
         candidates = []
         
@@ -741,6 +744,68 @@ class ReviewPipelineV3:
             req_dimension = req.get("dimension", "")
             req_text = req.get("requirement_text", "")
             
+            # ✅ Step 4: norm_key 精确匹配优先
+            value_schema = req.get("value_schema_json")
+            req_norm_key = None
+            if isinstance(value_schema, dict):
+                req_norm_key = value_schema.get("norm_key")
+            
+            # 如果requirement有norm_key，尝试精确匹配
+            if req_norm_key:
+                norm_key_candidates = [
+                    resp for resp in responses
+                    if resp.get("dimension") == req_dimension
+                    and isinstance(resp.get("normalized_fields_json"), dict)
+                    and resp["normalized_fields_json"].get("_norm_key") == req_norm_key
+                ]
+                
+                if norm_key_candidates:
+                    # 找到norm_key匹配的候选，直接使用（优先级最高）
+                    logger.info(
+                        f"ReviewPipeline: Requirement {req.get('requirement_id')} matched by norm_key={req_norm_key}, "
+                        f"found {len(norm_key_candidates)} candidate(s)"
+                    )
+                    # 即使找到多个，也用简单的分数排序
+                    scored_responses = []
+                    for resp in norm_key_candidates:
+                        # 给norm_key匹配的候选一个基础高分
+                        base_score = 1000
+                        # 加上文本相似度作为次要排序
+                        resp_text = resp.get("response_text", "")
+                        jaccard_score = _jaccard_similarity(req_text, resp_text)
+                        combined_score = base_score + jaccard_score
+                        
+                        scored_responses.append({
+                            "response": resp,
+                            "score": combined_score,
+                            "keyword_score": 0,
+                            "jaccard_score": jaccard_score,
+                            "method": "norm_key_exact"
+                        })
+                    
+                    scored_responses.sort(key=lambda x: x["score"], reverse=True)
+                    best_resp = scored_responses[0]["response"] if scored_responses else None
+                    
+                    candidates.append({
+                        "requirement": req,
+                        "candidates": scored_responses[:top_k],
+                        "best_response": best_resp
+                    })
+                    continue
+                else:
+                    # 找不到norm_key匹配的候选，标记为None（不要乱配）
+                    logger.warning(
+                        f"ReviewPipeline: Requirement {req.get('requirement_id')} expects norm_key={req_norm_key}, "
+                        f"but no matching response found. Setting response=None."
+                    )
+                    candidates.append({
+                        "requirement": req,
+                        "candidates": [],
+                        "best_response": None
+                    })
+                    continue
+            
+            # 没有norm_key，使用传统匹配（轻量打分）
             # 找同维度的 responses
             matched_responses = [
                 resp for resp in responses 
@@ -813,33 +878,68 @@ class ReviewPipelineV3:
     
     def _hard_gate(self, candidates: List[Dict], seg_map: Dict[str, Dict]) -> List[Dict[str, Any]]:
         """
-        Step 2: Hard Gate (Step B: 改进版, Step F: 统一 evidence)
+        Step 2: Hard Gate (Step 5: 基于可验证键 + Step F: 统一 evidence)
         处理 must_reject=true 或硬性要求，使用确定性规则
         
-        改进点：
-        1. 添加兜底逻辑：is_hard=true 的条款即使没有 eval_method 也会处理
-        2. 记录候选信息到 rule_trace_json
+        改进点（Step 5）：
+        1. PRESENCE 仅用于 doc_*_present 这类 norm_key
+        2. 找不到响应：
+           - is_hard=true → PENDING（先别直接FAIL，避免抽取失败导致误杀）
+           - is_hard=false → PENDING
         3. Step F: 使用统一 evidence_json 结构（role=tender/bid）
         """
         results = []
         
         for candidate in candidates:
             req = candidate["requirement"]
-            resp = candidate["response"]
+            resp = candidate.get("best_response")  # 注意：可能为None
             
             eval_method = req.get("eval_method")
             must_reject = req.get("must_reject", False)
             is_hard = req.get("is_hard", False)
             
-            # Step B: 兜底逻辑 - is_hard=true 的条款必须处理
+            # Step 5: 只处理硬性条款
             if not (must_reject or is_hard):
                 continue
             
-            # Step B: 如果没有 eval_method，默认使用 PRESENCE
+            # Step 5: 如果找不到响应，标记为PENDING（不要直接FAIL）
+            if not resp:
+                status = "PENDING"
+                remark = "未找到可比对响应（可能是抽取失败或norm_key不匹配），需人工复核"
+                rule_trace = {
+                    "eval_method": eval_method or "UNKNOWN",
+                    "reason": "no_response_found",
+                    "is_hard": is_hard,
+                    "must_reject": must_reject
+                }
+                
+                evidence_json, tender_ids, bid_ids = self._merge_tender_bid_evidence(req, None, seg_map)
+                
+                result = {
+                    "requirement_id": req.get("requirement_id"),
+                    "matched_response_id": None,
+                    "dimension": req.get("dimension"),
+                    "clause_title": req.get("requirement_text")[:50],
+                    "tender_requirement": req.get("requirement_text"),
+                    "bid_response": "[缺失]",
+                    "status": status,
+                    "result": self._status_to_result(status),
+                    "is_hard": is_hard,
+                    "remark": remark,
+                    "evaluator": "hard_gate",
+                    "rule_trace_json": rule_trace,
+                    "evidence_json": evidence_json,
+                    "tender_evidence_chunk_ids": tender_ids,
+                    "bid_evidence_chunk_ids": bid_ids,
+                }
+                results.append(result)
+                continue
+            
+            # Step 5: 如果没有 eval_method，默认使用 PRESENCE
             if not eval_method:
                 eval_method = "PRESENCE"
             
-            # 只处理确定性评估方法
+            # Step 5: 只处理确定性评估方法（PRESENCE仅用于doc_*_present）
             if eval_method not in ("PRESENCE", "VALIDITY", "EXACT_MATCH"):
                 continue
             
@@ -1051,29 +1151,33 @@ class ReviewPipelineV3:
         eval_method: str
     ) -> Tuple[str, str, Dict]:
         """
-        执行数值/表格评估（Step D: 改进版）
+        执行数值/表格评估（Step 5: 基于norm_key的精确比对）
         
-        改进点：
-        1. 从 value_schema_json 读取阈值
-        2. 从 requirement_text 解析阈值（兜底）
-        3. 从 extracted_value_json 取数值
-        4. 真实比较并记录完整过程
-        5. 无法解析 → PENDING（不要假 PASS）
+        改进点（Step 5）：
+        1. 若 requirement.value_schema_json.norm_key 存在 且 response.normalized_fields_json._norm_key 匹配
+           → 直接从 normalized_fields_json[对应字段] 取值（最可靠）
+        2. 否则从 extracted_value_json 取数值（兜底）
+        3. 从 value_schema_json 读取阈值
+        4. 从 requirement_text 解析阈值（兜底）
+        5. 真实比较并记录完整过程
+        6. 无法解析 → PENDING（不要假 PASS）
         """
         
         if not resp:
-            return "FAIL", "未提供响应", {"method": eval_method, "reason": "no_response"}
+            return "PENDING", "未提供响应，需人工复核", {"method": eval_method, "reason": "no_response"}
         
         if eval_method == "NUMERIC":
-            # Step D: 真实数值比较
+            # Step 5: 真实数值比较（基于norm_key）
             value_schema = req.get("value_schema_json", {})
             extracted_value = resp.get("extracted_value_json", {})
+            normalized_fields = resp.get("normalized_fields_json", {})
             requirement_text = req.get("requirement_text", "")
             
-            # 1. 从 schema 获取阈值
-            required_min = value_schema.get("minimum") if isinstance(value_schema, dict) else None
-            required_max = value_schema.get("maximum") if isinstance(value_schema, dict) else None
+            # 1. 从 schema 获取阈值和norm_key
+            required_min = value_schema.get("minimum") or value_schema.get("min") if isinstance(value_schema, dict) else None
+            required_max = value_schema.get("maximum") or value_schema.get("max") if isinstance(value_schema, dict) else None
             required_const = value_schema.get("const") if isinstance(value_schema, dict) else None
+            req_norm_key = value_schema.get("norm_key") if isinstance(value_schema, dict) else None
             
             # 2. 如果 schema 没有阈值，从 requirement_text 解析
             if required_min is None and required_max is None and required_const is None:
@@ -1082,29 +1186,58 @@ class ReviewPipelineV3:
                 required_max = thresholds.get("max")
                 required_const = thresholds.get("exact")
             
-            # 3. 从 extracted_value 获取实际值
+            # 3. Step 5: 从 normalized_fields_json 优先获取实际值（通过norm_key）
             actual_value = None
-            if isinstance(extracted_value, dict):
+            value_source = "unknown"
+            
+            if req_norm_key and isinstance(normalized_fields, dict):
+                # 优先：通过norm_key直接获取（去掉_norm_key后缀，获取实际字段）
+                # 例如：norm_key="price_upper_limit_cny"，实际字段可能是"total_price_cny"
+                # 或者直接用norm_key作为字段名
+                norm_key_map = {
+                    "price_upper_limit_cny": "total_price_cny",
+                    "duration_days": "duration_days",
+                    "warranty_months": "warranty_months",
+                    "bid_security_amount_cny": "bid_security_amount_cny",
+                }
+                
+                # 尝试从映射表获取对应的response字段
+                resp_field = norm_key_map.get(req_norm_key, req_norm_key)
+                if resp_field in normalized_fields and normalized_fields[resp_field] is not None:
+                    actual_value = normalized_fields[resp_field]
+                    value_source = f"normalized_fields.{resp_field}"
+                    logger.debug(
+                        f"ReviewPipeline: Quantitative check using norm_key={req_norm_key}, "
+                        f"got value={actual_value} from {value_source}"
+                    )
+            
+            # 兜底：从 extracted_value 获取实际值
+            if actual_value is None and isinstance(extracted_value, dict):
                 # 尝试多个可能的键
                 for key in ["value", "number", "amount", "days", "months", "duration"]:
                     if key in extracted_value:
                         actual_value = _extract_number(str(extracted_value[key]))
                         if actual_value is not None:
+                            value_source = f"extracted_value.{key}"
                             break
             
-            # 如果还是拿不到，从 response_text 提取
+            # 最后兜底：从 response_text 提取
             if actual_value is None:
                 response_text = resp.get("response_text", "")
                 actual_value = _extract_number(response_text)
+                if actual_value is not None:
+                    value_source = "response_text_parsed"
             
-            # 4. 构建 trace
+            # 4. 构建 trace (Step 5: 增加norm_key和value_source)
             computed_trace = {
                 "method": "NUMERIC",
+                "req_norm_key": req_norm_key,
                 "required_min": required_min,
                 "required_max": required_max,
                 "required_const": required_const,
                 "extracted_value": actual_value,
-                "source": "schema" if value_schema else "text_parse",
+                "value_source": value_source,
+                "threshold_source": "schema" if value_schema else "text_parse",
             }
             
             # 5. 判断逻辑
