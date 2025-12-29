@@ -867,7 +867,7 @@ class ReviewPipelineV3:
             
             candidates.append({
                 "requirement": req,
-                "response": best_response,  # 最佳匹配（可能为 None）
+                "best_response": best_response,  # ✅ 统一使用best_response
                 "candidates": top_candidates,  # 全部候选
                 "candidates_info": candidates_info,  # 用于 trace
                 "requirement_id": req.get("requirement_id"),
@@ -1099,7 +1099,7 @@ class ReviewPipelineV3:
         
         for candidate in candidates:
             req = candidate["requirement"]
-            resp = candidate["response"]
+            resp = candidate.get("best_response")  # ✅ 统一使用best_response
             req_id = req.get("requirement_id")
             
             # 跳过已处理的
@@ -1338,7 +1338,7 @@ class ReviewPipelineV3:
             logger.warning("ReviewPipeline: LLM not configured, all semantic items will be PENDING")
             for candidate in semantic_candidates[:20]:  # 限制数量
                 req = candidate["requirement"]
-                resp = candidate["response"]
+                resp = candidate.get("best_response")  # ✅ 统一使用best_response
                 
                 # Step F: 统一 evidence_json 结构
                 evidence_json, tender_ids, bid_ids = self._merge_tender_bid_evidence(req, resp, seg_map)
@@ -1374,7 +1374,7 @@ class ReviewPipelineV3:
             # 简化：每个候选都调用 LLM（实际应批量）
             for candidate in semantic_candidates[:10]:  # 限制数量避免超时
                 req = candidate["requirement"]
-                resp = candidate["response"]
+                resp = candidate.get("best_response")  # ✅ 统一使用best_response
                 
                 # 调用 LLM 进行语义审核（简化版）
                 status, remark, confidence = await self._llm_semantic_review(
