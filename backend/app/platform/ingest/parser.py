@@ -82,7 +82,7 @@ def _parse_pdf(data: bytes) -> Tuple[str, dict, list]:
 
 def _parse_docx(data: bytes) -> Tuple[str, dict, list]:
     """
-    解析 DOCX 文件
+    解析 DOCX 文件（包含段落和表格）
     
     Args:
         data: DOCX 文件二进制数据
@@ -98,6 +98,7 @@ def _parse_docx(data: bytes) -> Tuple[str, dict, list]:
         paragraphs = []
         paragraph_infos = []
         
+        # 提取段落
         for idx, para in enumerate(doc.paragraphs):
             if para.text:
                 paragraphs.append(para.text)
@@ -113,8 +114,39 @@ def _parse_docx(data: bytes) -> Tuple[str, dict, list]:
                     "char_count": len(para.text)
                 })
         
+        # 提取表格
+        table_count = 0
+        for table in doc.tables:
+            table_text_parts = []
+            for row in table.rows:
+                row_text = []
+                for cell in row.cells:
+                    cell_text = cell.text.strip()
+                    if cell_text:
+                        row_text.append(cell_text)
+                if row_text:
+                    table_text_parts.append(" | ".join(row_text))
+            
+            if table_text_parts:
+                table_text = "\n".join(table_text_parts)
+                paragraphs.append(f"[表格 {table_count + 1}]\n{table_text}")
+                paragraph_infos.append({
+                    "index": len(paragraph_infos),
+                    "text": table_text,
+                    "style": "Table",
+                    "is_heading": False,
+                    "char_count": len(table_text),
+                    "is_table": True
+                })
+                table_count += 1
+        
         text = "\n".join(paragraphs)
-        return text, {"paragraphs": len(paragraphs), "chars": len(text)}, paragraph_infos
+        metadata = {
+            "paragraphs": len(paragraph_infos),
+            "chars": len(text),
+            "tables": table_count
+        }
+        return text, metadata, paragraph_infos
         
     except zipfile.BadZipFile as e:
         # ZIP 文件损坏，尝试使用容错模式

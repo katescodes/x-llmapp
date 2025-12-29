@@ -46,7 +46,7 @@ async def main():
     
     # 执行抽取
     try:
-        result = await service.extract_bid_response_v1(
+        result = await service.extract_bid_response(
             project_id=project_id,
             bidder_name=bidder_name,
             model_id=None,  # 使用默认模型
@@ -55,7 +55,8 @@ async def main():
         
         print(f"\n抽取完成!")
         print(f"  投标人: {result.get('bidder_name', bidder_name)}")
-        print(f"  响应条目数: {result.get('total_responses', 0)}")
+        print(f"  响应条目数: {result.get('added_count', 0)}")
+        print(f"  Schema版本: {result.get('schema_version', 'v2')}")
         
         # 显示前几条
         responses = result.get('responses', [])

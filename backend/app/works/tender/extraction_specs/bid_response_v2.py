@@ -21,7 +21,7 @@ async def build_bid_response_spec_v2_async(pool=None) -> ExtractionSpec:
     构建投标响应要素抽取规格 v2（异步版本，从数据库加载）
     
     v2 变更:
-    - prompt 使用 bid_response v2 版本（schema_version: bid_response_v2）
+    - prompt 从数据库 prompt_templates 表加载（不使用文件）
     - 输出包含 normalized_fields_json（标准化字段）
     - 输出包含 evidence_segment_ids（文档片段ID）
     
@@ -32,6 +32,7 @@ async def build_bid_response_spec_v2_async(pool=None) -> ExtractionSpec:
         ExtractionSpec: 包含 queries、prompt、topk 等配置
         
     Raises:
+        ValueError: pool参数未提供
         PromptNotFoundError: 数据库中未找到活跃的prompt模板
     """
     if not pool:
@@ -42,30 +43,36 @@ async def build_bid_response_spec_v2_async(pool=None) -> ExtractionSpec:
         from app.services.prompt_loader import PromptLoaderService
         loader = PromptLoaderService(pool)
         
-        # 优先加载 v2 prompt（通过 version=2 或直接指定 ID）
         prompt = None
         
         # 方法1: 直接通过ID加载v2
         try:
             prompt = await loader.get_prompt_by_id("prompt_bid_response_v2_001")
             if prompt:
-                logger.info(f"✅ [Prompt] Loaded BID_RESPONSE_V2 from DATABASE by ID, length={len(prompt)}")
+                logger.info(f"✅ [BidResponse] Loaded V2 prompt from DATABASE by ID, length={len(prompt)} chars")
         except Exception as e:
-            logger.warning(f"Failed to load v2 by ID: {e}")
+            logger.debug(f"[BidResponse] Failed to load v2 by ID: {e}")
         
         # 方法2: 如果没有v2，尝试加载 module=bid_response 的最新活跃版本
         if not prompt:
             prompt = await loader.get_active_prompt("bid_response")
             if prompt:
-                logger.info(f"✅ [Prompt] Loaded BID_RESPONSE (active) from DATABASE, length={len(prompt)}")
+                logger.info(f"✅ [BidResponse] Loaded active prompt from DATABASE, length={len(prompt)} chars")
         
         if not prompt:
-            raise PromptNotFoundError("bid_response (v2 或活跃版本)")
+            error_msg = (
+                "未找到投标响应抽取的prompt模板！\n"
+                "请确保数据库 prompt_templates 表中存在以下记录之一：\n"
+                "  1. id='prompt_bid_response_v2_001' 且 is_active=true\n"
+                "  2. module='bid_response' 且 is_active=true\n"
+                "\n解决方案：运行 'python backend/scripts/init_prompts.py' 初始化prompt"
+            )
+            raise PromptNotFoundError(error_msg)
         
     except PromptNotFoundError:
         raise
     except Exception as e:
-        logger.error(f"❌ [Prompt] Failed to load from database: {e}")
+        logger.error(f"❌ [BidResponse] Failed to load prompt from database: {e}")
         raise RuntimeError(f"加载prompt失败: {e}") from e
 
     # Queries 定义（与 v1 相同，检索策略不变）

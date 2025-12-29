@@ -1025,8 +1025,8 @@ async def extract_bid_responses(
     )
     
     try:
-        # 使用 v2 方法
-        result = await service.extract_bid_response_v2(
+        # 调用抽取服务 (使用当前方法名)
+        result = await service.extract_bid_response(
             project_id=project_id,
             bidder_name=bidder_name,
             model_id=None,
@@ -1034,7 +1034,7 @@ async def extract_bid_responses(
         )
         return {
             "success": True,
-            "message": f"成功抽取{result.get('added_count', 0)}条响应数据 (v2)",
+            "message": f"成功抽取{result.get('added_count', 0)}条响应数据",
             "data": {
                 "bidder_name": result["bidder_name"],
                 "total_responses": result.get("added_count", 0),

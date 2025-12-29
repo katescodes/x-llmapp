@@ -129,7 +129,6 @@ class SimpleLLMOrchestrator:
                 },
                 "evidence_chunk_ids": ["CHUNK_001", "CHUNK_002", "CHUNK_003"]
             }
-            import json
             return {"choices": [{"message": {"content": json.dumps(mock_response, ensure_ascii=False)}}]}
         
         # REAL 模式：调用真实 LLM
@@ -200,13 +199,30 @@ class SimpleLLMOrchestrator:
             
             # 发送同步请求（增加超时时间到600秒，用于处理大文本和16K tokens输出）
             # 注意：verify=False 用于跳过SSL证书验证（自签名证书）
-            logger.info(f"[SimpleLLMOrchestrator] Calling REAL LLM: endpoint={endpoint} model={model.model} max_tokens={kwargs.get('max_tokens', 'default')}")
+            actual_max_tokens = kwargs.get('max_tokens', 'default')
+            logger.info(f"[SimpleLLMOrchestrator] Calling REAL LLM: endpoint={endpoint} model={model.model} max_tokens={actual_max_tokens}")
+            print(f"[DEBUG] 完整 payload: {json.dumps({'model': payload['model'], 'max_tokens': payload.get('max_tokens', 'not set'), 'temperature': payload.get('temperature')}, ensure_ascii=False)}")
             with httpx.Client(timeout=600.0, verify=False) as client:
                 response = client.post(endpoint, json=payload, headers=headers)
                 response.raise_for_status()
                 result = response.json()
             logger.info(f"[SimpleLLMOrchestrator] REAL LLM returned: status={response.status_code} content_length={len(response.text)}")
+            print(f"[DEBUG] LLM响应长度: {len(response.text)} 字符")
             
+            # 检查返回的 usage 和 finish_reason
+            if "usage" in result:
+                print(f"[DEBUG] LLM usage: {json.dumps(result['usage'], ensure_ascii=False)}")
+            
+            if "choices" in result and result["choices"]:
+                first_choice = result["choices"][0]
+                finish_reason = first_choice.get("finish_reason", "unknown")
+                print(f"[DEBUG] LLM finish_reason: {finish_reason}")
+                
+                if finish_reason == "length":
+                    print(f"[WARNING] LLM stopped due to LENGTH limit!")
+                elif finish_reason == "stop":
+                    print(f"[INFO] LLM stopped naturally (stop sequence)")
+                    
             # 返回统一格式
             if "choices" in result:
                 return result

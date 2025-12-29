@@ -268,6 +268,11 @@ class IngestV2Service:
                 logger.error(f"Embedding mismatch: expected {len(texts)}, got {len(vectors)}")
                 return 0
             
+            # 映射 doc_type 为统一类型（tender/bid）
+            # documents 表的 doc_type -> Milvus 统一类型
+            normalized_doc_type = self._normalize_doc_type(doc_type)
+            logger.info(f"IngestV2 Milvus: doc_type={doc_type} -> normalized={normalized_doc_type}")
+            
             # 准备 Milvus 数据
             milvus_data = []
             for segment_id, chunk, vec in zip(segment_ids, chunks, vectors):
@@ -279,7 +284,7 @@ class IngestV2Service:
                     "segment_id": segment_id,
                     "doc_version_id": doc_version_id,
                     "project_id": project_id,
-                    "doc_type": doc_type,
+                    "doc_type": normalized_doc_type,
                     "dense": dense,
                 })
             
@@ -296,4 +301,32 @@ class IngestV2Service:
         except Exception as e:
             logger.error(f"Failed to write Milvus: {e}", exc_info=True)
             return 0
+    
+    def _normalize_doc_type(self, doc_type: str) -> str:
+        """
+        将 documents 表的 doc_type 映射为统一类型
+        
+        映射规则:
+        - tender_notice, tender_doc, tender_attachment -> tender
+        - bid_document, bid_attachment -> bid
+        - declare_notice, declare_company, declare_tech -> declare
+        - 其他 -> other
+        """
+        doc_type_lower = doc_type.lower()
+        
+        # 招标类
+        if any(kw in doc_type_lower for kw in ["tender", "招标"]):
+            return "tender"
+        
+        # 投标类
+        if any(kw in doc_type_lower for kw in ["bid", "投标"]):
+            return "bid"
+        
+        # 申报类
+        if any(kw in doc_type_lower for kw in ["declare", "申报"]):
+            return "declare"
+        
+        # 默认
+        logger.warning(f"Unknown doc_type: {doc_type}, defaulting to 'other'")
+        return "other"
 

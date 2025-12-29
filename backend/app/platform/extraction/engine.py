@@ -108,6 +108,9 @@ class ExtractionEngine:
         ctx = build_marked_context(chunk_dicts)
         ctx_ms = int((time.time() - ctx_start) * 1000)
         
+        print(f"[DEBUG ExtractionEngine] Retrieved {len(all_chunks)} chunks for context")
+        print(f"[DEBUG ExtractionEngine] Context length: {len(ctx)} characters")
+        
         # 3. 构建 Prompt（支持 Stage 变量注入）
         final_prompt = spec.prompt.strip()
         
@@ -125,6 +128,7 @@ class ExtractionEngine:
         
         prompt_len = len(final_prompt)
         ctx_len = len(ctx)
+        print(f"[DEBUG ExtractionEngine] Prompt length: {prompt_len}, Context length: {ctx_len}")
         logger.info(f"[ExtractionEngine] BEFORE_LLM project_id={project_id} run_id={run_id} stage={stage} prompt_len={prompt_len} ctx_len={ctx_len}")
         
         llm_start = time.time()
@@ -136,13 +140,16 @@ class ExtractionEngine:
             # 动态设置max_tokens：评分标准和招标要求需要更大的输出空间
             # 使用传入的stage_name参数而非spec.stage_name（spec中不存在此字段）
             if stage_name == "评分规则":
-                max_tokens = 16384  # 评分表可能有20-30个评分项，需要更大的输出空间
+                max_tokens = 32000  # 评分表可能有20-30个评分项，需要更大的输出空间
             elif module_name and module_name.startswith("requirements"):
-                max_tokens = 16384  # 招标要求可能有几十条，需要更大的输出空间
+                max_tokens = 32000  # 招标要求可能有几十条，需要更大的输出空间
+            elif module_name and "bid_response" in module_name:
+                max_tokens = 64000  # 投标响应可能有几十条，需要最大的输出空间
             else:
-                max_tokens = 8192  # 其他Stage使用默认值
+                max_tokens = 16000  # 其他Stage使用默认值
             
-            logger.info(f"[ExtractionEngine] LLM_CALL stage_name={stage_name} max_tokens={max_tokens}")
+            print(f"[DEBUG] max_tokens决策: stage_name={stage_name}, module_name={module_name}, max_tokens={max_tokens}")
+            logger.info(f"[ExtractionEngine] LLM_CALL stage_name={stage_name} module_name={module_name} max_tokens={max_tokens}")
             
             out_text = await call_llm(
                 messages,

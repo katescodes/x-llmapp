@@ -29,11 +29,11 @@ async def init_prompts():
             "file_path": "backend/app/works/tender/prompts/requirements_v1.md"
         },
         {
-            "id": "prompt_bid_response_v1",
-            "module": "bid_response_v1",
-            "name": "投标响应要素抽取 V1",
-            "description": "从投标文件中抽取结构化的响应要素，包括资格响应、技术响应、商务响应等7个维度",
-            "file_path": "backend/app/works/tender/prompts/bid_response_v1.md"
+            "id": "prompt_bid_response_v2_001",
+            "module": "bid_response",
+            "name": "投标响应要素抽取 V2",
+            "description": "从投标文件中抽取结构化的响应要素（V2增强版），包括normalized_fields_json和evidence_json",
+            "file_path": "backend/app/prompts/bid_response_extraction_v2.md"
         },
         {
             "id": "prompt_risks_v2",
