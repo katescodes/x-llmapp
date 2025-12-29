@@ -20,34 +20,54 @@ logger = logging.getLogger(__name__)
 
 def normalize_and_fix_response(resp: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    抽取后矫正器：修正明显错误的维度分类，并拆分复合事实
+    抽取后矫正器（Step2）：修正明显错误的维度分类，并拆分复合事实
     
     规则：
-    1. dimension=="price" 且包含业绩关键词 → 强制改为 qualification
-    2. dimension=="doc_structure" 且包含证书关键词 → 强制改为 qualification
-    3. business 文本同时含质保和工期 → 拆成两条
+    1. 统一维度枚举（中文→英文）
+    2. dimension=="price" 且包含业绩关键词 OR 不满足price锚点 → 强制改为 qualification
+    3. dimension=="doc_structure" 且包含证书关键词 → 强制改为 qualification
+    4. business 文本同时含质保和工期 → 拆成两条
+    5. 验证_norm_key存在且有效
     
     Returns:
         修正后的 responses 列表（可能是1条或2条）
     """
     import re
     import copy
+    from app.works.tender.review.audit_keys import (
+        normalize_dimension, 
+        is_price_anchor, 
+        is_valid_norm_key,
+        validate_normalized_fields
+    )
     
     response_text = resp.get("response_text", "")
     dimension = resp.get("dimension", "other")
     
-    # 规则1: price 中的业绩金额 → qualification
+    # Step 2.1: 统一维度枚举（中文→英文）
+    dimension = normalize_dimension(dimension)
+    resp["dimension"] = dimension
+    
+    # Step 2.2: price 维度严格验证
     if dimension == "price":
+        # 检查是否包含业绩关键词（强制排除）
         performance_keywords = r'(合同金额|项目业绩|中标金额|类似项目|历史业绩|业绩合同|已完成项目|完工项目金额|近\S*年\S*完成|业绩证明)'
-        if re.search(performance_keywords, response_text):
-            logger.warning(f"[Corrector] price→qualification: {response_text[:50]}...")
+        has_performance = re.search(performance_keywords, response_text)
+        
+        # 检查是否满足price锚点
+        is_valid_price = is_price_anchor(response_text)
+        
+        if has_performance or not is_valid_price:
+            logger.warning(f"[Corrector] price→qualification (performance={has_performance}, valid_price={is_valid_price}): {response_text[:50]}...")
             resp["dimension"] = "qualification"
             resp["response_type"] = "document_ref"
-            # 标记为业绩证明
+            
+            # 标记为业绩证明（如果是业绩关键词）
             extracted_value = resp.get("extracted_value_json", {})
             if not isinstance(extracted_value, dict):
                 extracted_value = {}
-            extracted_value["type"] = "past_performance"
+            if has_performance:
+                extracted_value["type"] = "past_performance"
             resp["extracted_value_json"] = extracted_value
             return [resp]
     
@@ -88,6 +108,20 @@ def normalize_and_fix_response(resp: Dict[str, Any]) -> List[Dict[str, Any]]:
                 duration_resp["response_text"] = duration_match.group(0)
             
             return [warranty_resp, duration_resp]
+    
+    # Step 2.3: 验证并清理 normalized_fields_json
+    normalized_fields = resp.get("normalized_fields_json", {})
+    if isinstance(normalized_fields, dict):
+        # 清理不在允许列表中的字段
+        cleaned = validate_normalized_fields(normalized_fields)
+        resp["normalized_fields_json"] = cleaned
+        
+        # 检查 _norm_key 是否存在且有效
+        norm_key = cleaned.get("_norm_key")
+        if not norm_key:
+            logger.warning(f"[Corrector] Missing _norm_key for {resp.get('dimension')}: {response_text[:50]}...")
+        elif not is_valid_norm_key(norm_key):
+            logger.warning(f"[Corrector] Invalid _norm_key '{norm_key}' for {resp.get('dimension')}: {response_text[:50]}...")
     
     # 无需修正，返回原样
     return [resp]
