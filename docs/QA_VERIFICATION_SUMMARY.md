@@ -58,12 +58,20 @@
 
 ## 🎯 使用方法
 
-### 1. 在审核时启用QA验证
+### 1. QA验证自动启用（无需配置）✅
 ```python
+# QA验证已默认启用，无需额外配置
 await review_service.run_review_v3(
     project_id=project_id,
     bidder_name=bidder_name,
-    use_llm_semantic=True,  # ✅ 启用QA验证
+    # use_llm_semantic=True  # ✅ 默认值，可省略
+)
+
+# 如需禁用（不推荐）：
+await review_service.run_review_v3(
+    project_id=project_id,
+    bidder_name=bidder_name,
+    use_llm_semantic=False,  # 显式禁用
 )
 ```
 
@@ -215,6 +223,13 @@ requirement → 分类
 - `1fd3f92` - Step 3: LLM判断逻辑
 - `d6364be` - Step 4: 集成到pipeline
 - `92a451e` - 端到端测试
+- `eb86690` - docs: QA验证实现总结与测试文件
+- `7bd7679` - **默认启用QA验证（use_llm_semantic=True）** ⭐
 
 **测试覆盖**: 单元测试 + 集成测试 + 端到端测试 ✅
+
+**当前状态**: 
+- ✅ QA验证已完全集成
+- ✅ 默认自动启用（前端无需改动）
+- ✅ 生产环境可用
 
