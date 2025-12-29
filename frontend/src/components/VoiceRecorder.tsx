@@ -27,6 +27,8 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onComplete, onCancel }) =
   const [status, setStatus] = useState('');
   const [audioLevel, setAudioLevel] = useState(0);
   const [error, setError] = useState('');
+  const [realtimeEnabled, setRealtimeEnabled] = useState(false); // 即录即转开关
+  const [realtimeTranscripts, setRealtimeTranscripts] = useState<string[]>([]); // 实时转录片段
 
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -123,6 +125,11 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onComplete, onCancel }) =
             config: {
               language: 'zh',
               enable_timestamps: false,
+              realtime: realtimeEnabled,     // 是否启用即录即转
+              chunk_duration_ms: 3000,       // 每3秒转录一次
+              min_chunk_size_bytes: 50000,   // 最小50KB触发转录
+              overlap_duration_ms: 500,      // 音频重叠500ms（上下文）
+              context_window: 3,             // 保留最近3段作为上下文
             },
           })
         );
@@ -176,11 +183,20 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onComplete, onCancel }) =
               word_count: data.word_count,
             });
             cleanup();
+          } else if (data.type === 'transcript') {
+            // 实时转录片段
+            if (realtimeEnabled) {
+              setRealtimeTranscripts(prev => [...prev, data.text]);
+              // 显示最新的转录文本
+              setTranscript(prev => prev + (prev ? ' ' : '') + data.text);
+            }
           } else if (data.type === 'error') {
             setError(data.message);
           } else if (data.type === 'status') {
             if (data.message.includes('Processing')) {
               setStatus('正在转写音频...');
+            } else if (data.message.includes('实时转录')) {
+              setStatus('实时转录中...');
             }
           }
         } catch (err) {
@@ -280,6 +296,23 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onComplete, onCancel }) =
     <div className="voice-recorder">
       {!isRecording ? (
         <div className="recorder-idle">
+          {/* 即录即转开关 */}
+          <div className="realtime-toggle">
+            <label>
+              <input
+                type="checkbox"
+                checked={realtimeEnabled}
+                onChange={(e) => setRealtimeEnabled(e.target.checked)}
+              />
+              <span>即录即转（实时显示转录文本）</span>
+            </label>
+            <div className="realtime-hint">
+              {realtimeEnabled 
+                ? '✓ 启用后会在录音过程中实时显示转录结果，但可能消耗更多资源' 
+                : 'ℹ️ 录音完成后统一转录，速度更快'}
+            </div>
+          </div>
+          
           <button className="record-btn" onClick={startRecording} disabled={!!error}>
             <span className="record-icon">🎤</span>
             <span>开始录音</span>
@@ -308,7 +341,16 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onComplete, onCancel }) =
               {isPaused ? '⏸️' : '🔴'}
             </span>
             {formatTime(duration)}
+            {realtimeEnabled && <span className="realtime-badge">实时转录中</span>}
           </div>
+
+          {/* 实时转录文本显示 */}
+          {realtimeEnabled && transcript && (
+            <div className="realtime-transcript">
+              <div className="transcript-label">实时转录：</div>
+              <div className="transcript-text">{transcript}</div>
+            </div>
+          )}
 
           {/* 状态提示 */}
           {status && <div className="recorder-status">{status}</div>}

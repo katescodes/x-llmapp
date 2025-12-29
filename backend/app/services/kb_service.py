@@ -128,16 +128,26 @@ def list_documents(kb_id: str):
     documents = []
     
     # 查找所有使用此知识库的项目（支持多个应用）
+    projects = []
     with pool.connection() as conn:
         with conn.cursor() as cur:
             # 1. 查找招投标项目
             cur.execute(
-                "SELECT 'tender' as app_type, id as project_id FROM tender_projects WHERE kb_id=%s "
-                "UNION ALL "
-                "SELECT 'declare' as app_type, project_id FROM declare_projects WHERE kb_id=%s",
-                (kb_id, kb_id)
+                "SELECT id FROM tender_projects WHERE kb_id=%s",
+                (kb_id,)
             )
-            projects = cur.fetchall()
+            tender_rows = cur.fetchall()
+            for row in tender_rows:
+                projects.append(('tender', row['id']))
+            
+            # 2. 查找申报项目
+            cur.execute(
+                "SELECT project_id FROM declare_projects WHERE kb_id=%s",
+                (kb_id,)
+            )
+            declare_rows = cur.fetchall()
+            for row in declare_rows:
+                projects.append(('declare', row['project_id']))
     
     # 遍历所有项目，读取资产
     for app_type, project_id in projects:
@@ -154,7 +164,16 @@ def list_documents(kb_id: str):
             
             for asset in assets:
                 asset_id, proj_id, kind, filename, size_bytes, bidder_name, meta_json, created_at = asset
-                meta = meta_json or {}
+                # meta_json 从数据库读取时可能是dict或str，需要统一处理
+                if isinstance(meta_json, str):
+                    import json
+                    try:
+                        meta = json.loads(meta_json)
+                    except:
+                        meta = {}
+                else:
+                    meta = meta_json or {}
+                
                 doc_version_id = meta.get("doc_version_id")
                 
                 if not doc_version_id:
@@ -164,6 +183,9 @@ def list_documents(kb_id: str):
                 version_info = docstore.get_document_version(doc_version_id)
                 if not version_info:
                     continue
+                
+                # 获取document_id (用于前端引用)
+                document_id = version_info.get("document_id")
                 
                 # 获取分片数量
                 segment_count = docstore.count_segments_by_version(doc_version_id)
@@ -179,7 +201,7 @@ def list_documents(kb_id: str):
                     kb_category = "general_doc"
                 
                 documents.append({
-                    "id": doc_version_id,
+                    "id": document_id or doc_version_id,  # 优先使用document_id
                     "filename": filename or "未命名",
                     "source": f"{app_type}_upload",
                     "status": "ready",
@@ -189,6 +211,7 @@ def list_documents(kb_id: str):
                         "size": size_bytes,
                         "chunks": segment_count,
                         "doc_version_id": doc_version_id,
+                        "document_id": document_id,
                         "kind": kind,
                         "bidder_name": bidder_name,
                         "project_id": proj_id,

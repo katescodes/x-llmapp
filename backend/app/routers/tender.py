@@ -363,7 +363,7 @@ def get_project_info(project_id: str, request: Request):
     return result
 
 
-# ==================== 风险识别 ====================
+# ==================== 招标要求提取 ====================
 
 @router.post("/projects/{project_id}/extract/risks")
 def extract_risks(
@@ -374,7 +374,7 @@ def extract_risks(
     sync: int = 0,
     user=Depends(get_current_user_sync),
 ):
-    """识别风险（V3版本：提取 requirements 作为风险分析基础）
+    """提取招标要求（V3版本）
     
     新流程：
     1. 提取 tender_requirements（调用 LLM）
@@ -996,10 +996,12 @@ def apply_template_directory(project_id: str, req: TemplateDirReq, request: Requ
 # ==================== 投标响应抽取 ====================
 
 @router.post("/projects/{project_id}/extract-bid-responses")
-async def extract_bid_responses(
+def extract_bid_responses(
     project_id: str,
     bidder_name: str,
     request: Request,
+    bg: BackgroundTasks,
+    sync: int = 0,
     user=Depends(get_current_user_sync),
 ):
     """
@@ -1007,44 +1009,74 @@ async def extract_bid_responses(
     
     Args:
         bidder_name: 投标人名称
+        sync: 同步执行模式，1=同步返回结果，0=后台任务（默认）
     """
-    from app.platform.extraction.engine import ExtractionEngine
-    from app.platform.retrieval.facade import RetrievalFacade
-    from app.works.tender.bid_response_service import BidResponseService
+    dao = TenderDAO(_get_pool(request))
+    run_id = dao.create_run(project_id, "extract_bid_responses")
+    dao.update_run(run_id, "running", progress=0.01, message=f"开始抽取投标人：{bidder_name}")
     
-    pool = _get_pool(request)
-    llm = _get_llm(request)
-    engine = ExtractionEngine()
-    retriever = RetrievalFacade(pool)
+    # 检查是否同步执行
+    run_sync = sync == 1 or request.headers.get("X-Run-Sync") == "1"
     
-    service = BidResponseService(
-        pool=pool,
-        engine=engine,
-        retriever=retriever,
-        llm=llm
-    )
+    def job():
+        import asyncio
+        from app.platform.extraction.engine import ExtractionEngine
+        from app.platform.retrieval.facade import RetrievalFacade
+        from app.works.tender.bid_response_service import BidResponseService
+        
+        try:
+            pool = _get_pool(request)
+            llm = _get_llm(request)
+            engine = ExtractionEngine()
+            retriever = RetrievalFacade(pool)
+            
+            service = BidResponseService(
+                pool=pool,
+                engine=engine,
+                retriever=retriever,
+                llm=llm
+            )
+            
+            # 调用抽取服务
+            result = asyncio.run(service.extract_bid_response(
+                project_id=project_id,
+                bidder_name=bidder_name,
+                model_id=None,
+                run_id=run_id
+            ))
+            
+            # 更新运行状态
+            dao.update_run(
+                run_id, 
+                "success", 
+                progress=1.0,
+                message=f"成功抽取{result.get('added_count', 0)}条响应",
+                result_json={
+                    "bidder_name": result["bidder_name"],
+                    "total_responses": result.get("added_count", 0),
+                    "schema_version": result.get("schema_version", "v2")
+                }
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception(f"Extract bid responses failed: {e}")
+            dao.update_run(run_id, "failed", message=str(e))
     
-    try:
-        # 调用抽取服务 (使用当前方法名)
-        result = await service.extract_bid_response(
-            project_id=project_id,
-            bidder_name=bidder_name,
-            model_id=None,
-            run_id=None
-        )
+    if run_sync:
+        # 同步执行
+        job()
+        # 返回最新状态
+        run = dao.get_run(run_id)
         return {
-            "success": True,
-            "message": f"成功抽取{result.get('added_count', 0)}条响应数据",
-            "data": {
-                "bidder_name": result["bidder_name"],
-                "total_responses": result.get("added_count", 0),
-                "schema_version": result.get("schema_version", "v2")
-            }
+            "run_id": run_id,
+            "status": run.get("status") if run else "unknown",
+            "progress": run.get("progress") if run else 0,
+            "message": run.get("message") if run else "",
         }
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).exception(f"Extract bid responses failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    else:
+        # 异步执行
+        bg.add_task(job)
+        return {"run_id": run_id, "bidder_name": bidder_name}
 
 
 @router.get("/projects/{project_id}/bid-responses")
@@ -1214,27 +1246,39 @@ def run_review(
 
 @router.get("/projects/{project_id}/review", response_model=List[ReviewItemOut])
 def get_review(project_id: str, request: Request):
-    """获取审核结果（包含对比审核和规则审核）"""
+    """获取审核结果（V3流水线）"""
     dao = TenderDAO(_get_pool(request))
     rows = dao.list_review_items(project_id)
     flags = get_feature_flags()
     
     out = []
-    # 1. 从旧表读取对比审核结果
+    # 从 tender_review_items 读取 V3 审核结果
     for r in rows:
+        # 转换UUID为字符串
+        matched_response_id = r.get("matched_response_id")
+        if matched_response_id is not None:
+            matched_response_id = str(matched_response_id)
+        
         review_item = {
             "id": r["id"],
             "project_id": r["project_id"],
-            "source": "compare",  # 对比审核
+            "source": "v3",  # V3流水线
             "dimension": r.get("dimension") or "其他",
-            "requirement_text": r.get("requirement_text"),
-            "response_text": r.get("response_text"),
-            "result": r.get("result") or "risk",
-            "remark": r.get("remark"),
+            "requirement_text": r.get("requirement_text") or "",
+            "response_text": r.get("response_text") or "",
+            "result": r.get("result") or r.get("status") or "risk",  # 兼容：优先status，回退result
+            "remark": r.get("remark") or "",
             "rigid": bool(r.get("rigid", False)),
-            "rule_id": None,  # 对比审核没有 rule_id
-            "tender_evidence_chunk_ids": r.get("tender_evidence_chunk_ids_json") or [],
-            "bid_evidence_chunk_ids": r.get("bid_evidence_chunk_ids_json") or [],
+            "rule_id": None,
+            "evaluator": r.get("evaluator"),  # V3新增字段
+            "status": r.get("status"),  # V3新增字段
+            "requirement_id": r.get("requirement_id"),  # V3新增字段
+            "matched_response_id": matched_response_id,  # V3新增字段（UUID转字符串）
+            "tender_evidence_chunk_ids": r.get("tender_evidence_chunk_ids") or [],
+            "bid_evidence_chunk_ids": r.get("bid_evidence_chunk_ids") or [],
+            "evidence_json": r.get("evidence_json"),  # V3证据结构
+            "rule_trace_json": r.get("rule_trace_json"),  # V3规则追踪
+            "computed_trace_json": r.get("computed_trace_json"),  # V3计算追踪
         }
         
         # 如果启用 EVIDENCE_SPANS_ENABLED，生成 evidence_spans
@@ -1248,45 +1292,6 @@ def get_review(project_id: str, request: Request):
                 review_item["bid_evidence_spans"] = chunks_to_span_refs(bid_chunk_ids)
         
         out.append(review_item)
-    
-    # 2. 如果启用规则评估器和 ReviewCase，从 review_findings 读取规则审核结果
-    if flags.RULES_EVALUATOR_ENABLED and flags.REVIEWCASE_DUALWRITE:
-        try:
-            from app.services.platform.reviewcase_service import ReviewCaseService
-            reviewcase_service = ReviewCaseService(_get_pool(request))
-            
-            # 获取项目的最新 review case
-            cases = reviewcase_service.list_cases_by_project(project_id, limit=1)
-            if cases:
-                latest_case = cases[0]
-                # 获取最新 run
-                runs = reviewcase_service.list_runs_by_case(latest_case["id"], limit=1)
-                if runs:
-                    latest_run = runs[0]
-                    # 获取规则审核 findings
-                    findings = reviewcase_service.list_findings_by_run(latest_run["id"])
-                    
-                    for finding in findings:
-                        if finding.get("source") == "rule":
-                            evidence_jsonb = finding.get("evidence_jsonb") or {}
-                            rule_item = {
-                                "id": finding["id"],
-                                "project_id": project_id,
-                                "source": "rule",
-                                "dimension": finding.get("dimension") or "其他",
-                                "requirement_text": finding.get("requirement_text"),
-                                "response_text": finding.get("response_text"),
-                                "result": finding.get("result") or "risk",
-                                "remark": finding.get("remark"),
-                                "rigid": bool(finding.get("rigid", False)),
-                                "rule_id": evidence_jsonb.get("rule_id"),
-                                "tender_evidence_chunk_ids": evidence_jsonb.get("tender_chunk_ids", []),
-                                "bid_evidence_chunk_ids": evidence_jsonb.get("bid_chunk_ids", []),
-                            }
-                            out.append(rule_item)
-        except Exception as e:
-            # 降级：读取规则审核失败不影响对比审核结果
-            print(f"[WARN] Failed to load rule findings: {e}")
     
     return out
 

@@ -182,12 +182,20 @@ async def import_recording_to_kb(
             
             row = cur.fetchone()
             if not row:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Recording not found"
-                )
+                raise ValueError("Recording not found")
             
-            rec_id, rec_user_id, rec_title, transcript, rec_category, rec_tags, rec_notes = row
+            # 使用字典访问
+            rec_id = row['id']
+            rec_user_id = row['user_id']
+            rec_title = row['title']
+            transcript = row['transcript']
+            rec_category = row['category']
+            rec_tags = row['tags']
+            rec_notes = row['notes']
+            
+            # 验证转写内容
+            if not transcript or len(transcript.strip()) == 0:
+                raise ValueError("录音尚未转写或转写内容为空，无法导入知识库")
             
             # 确定目标知识库
             target_kb_id = kb_id
@@ -199,10 +207,7 @@ async def import_recording_to_kb(
                 target_kb_id = new_kb["id"]
             
             if not target_kb_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Either kb_id or new_kb_name must be provided"
-                )
+                raise ValueError("必须提供知识库ID或新知识库名称")
             
             # 更新录音状态为"导入中"
             cur.execute("""
@@ -269,10 +274,13 @@ async def import_recording_to_kb(
                 """, (recording_id,))
                 conn.commit()
                 
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to import recording: {str(e)}"
-                )
+                # 记录错误日志
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to import recording {recording_id}: {str(e)}", exc_info=True)
+                
+                # 抛出错误供上层处理
+                raise
 
 def update_recording_metadata(
     recording_id: str,

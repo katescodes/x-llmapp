@@ -841,13 +841,8 @@ export default function TenderWorkspace() {
     const projectId = currentProject.id;
     const bidderName = state.selectedBidder;
     
-    setBidResponseRun({
-      id: 'temp',
-      status: 'running',
-      progress: 0,
-      message: '开始抽取投标响应数据...',
-      kind: 'extract_bid_responses',
-    } as TenderRun);
+    // 清空旧的投标响应数据
+    setBidResponseItems([]);
     
     try {
       const res = await api.post(
@@ -855,51 +850,23 @@ export default function TenderWorkspace() {
         {}
       );
       
-      // 验证项目是否切换
-      if (currentProject && currentProject.id !== projectId) {
-        console.log('[extractBidResponses] 完成时项目已切换，丢弃结果');
-        return;
-      }
+      // 设置新的run状态
+      const newRun: TenderRun = { 
+        id: res.run_id, 
+        status: 'running', 
+        progress: 0, 
+        message: `开始抽取投标人：${bidderName}...`, 
+        kind: 'extract_bid_responses' 
+      } as TenderRun;
+      setBidResponseRun(newRun);
       
-      if (res.success) {
-        setBidResponseRun({
-          id: 'temp',
-          status: 'success',
-          progress: 1.0,
-          message: `抽取完成！共抽取 ${res.data?.total_responses || 0} 条投标响应数据`,
-          kind: 'extract_bid_responses',
-        } as TenderRun);
-        
-        // 重新加载投标响应数据
-        await loadBidResponses(projectId);
-        
-        showToast('success', `抽取完成！共抽取 ${res.data?.total_responses || 0} 条投标响应数据`);
-      } else {
-        setBidResponseRun({
-          id: 'temp',
-          status: 'failed',
-          progress: 0,
-          message: res.message || '抽取失败',
-          kind: 'extract_bid_responses',
-        } as TenderRun);
-        showToast('error', `抽取失败: ${res.message || '未知错误'}`);
-      }
-    } catch (err: any) {
-      if (currentProject && currentProject.id !== projectId) {
-        console.log('[extractBidResponses] 错误时项目已切换，丢弃错误');
-        return;
-      }
-      
-      setBidResponseRun({
-        id: 'temp',
-        status: 'failed',
-        progress: 0,
-        message: err.message || '抽取失败',
-        kind: 'extract_bid_responses',
-      } as TenderRun);
-      showToast('error', `抽取失败: ${err.message || err}`);
+      // 启动轮询
+      startPolling(projectId, 'bidResponse', res.run_id, () => loadBidResponses(projectId));
+    } catch (err) {
+      alert(`抽取失败: ${err}`);
+      setBidResponseRun(null);
     }
-  }, [currentProject, state.selectedBidder, loadBidResponses]);
+  }, [currentProject, state.selectedBidder, startPolling, loadBidResponses]);
 
   const loadFormatTemplates = useCallback(async () => {
     try {
@@ -1297,7 +1264,7 @@ export default function TenderWorkspace() {
         id: res.run_id, 
         status: 'running', 
         progress: 0, 
-        message: '开始识别...', 
+        message: '开始提取...', 
         kind: 'extract_risks' 
       } as TenderRun;
       setRiskRun(newRun);
@@ -1607,7 +1574,7 @@ export default function TenderWorkspace() {
           startPolling(projectId, 'info', infoRunData.id, () => loadProjectInfo(projectId));
         }
         if (riskRunData?.status === 'running') {
-          console.log('[loadAndRestoreRuns] 恢复风险识别轮询:', riskRunData.id);
+          console.log('[loadAndRestoreRuns] 恢复招标要求提取轮询:', riskRunData.id);
           startPolling(projectId, 'risk', riskRunData.id, () => loadRisks(projectId));
         }
         if (dirRunData?.status === 'running') {
@@ -1717,7 +1684,7 @@ export default function TenderWorkspace() {
       {/* 左侧边栏：项目列表 */}
       <div className="sidebar">
         <div className="sidebar-title">招投标工作台</div>
-        <div className="sidebar-subtitle">项目管理 + 风险识别 + 文档生成</div>
+        <div className="sidebar-subtitle">项目管理 + 招标要求提取 + 文档生成</div>
         
         <div style={{ flex: 1, overflow: 'auto' }}>
           {/* 模板管理和自定义规则入口 */}
@@ -2082,7 +2049,7 @@ export default function TenderWorkspace() {
               <div style={{ display: 'flex', gap: '8px', marginTop: '24px', marginBottom: '16px', flexWrap: 'wrap' }}>
                 {[
                   { id: 1, label: 'Step 1: 项目信息' },
-                  { id: 2, label: 'Step 2: 风险识别' },
+                  { id: 2, label: 'Step 2: 招标要求提取' },
                   { id: 3, label: '③ 目录生成' },
                   { id: 4, label: '④ AI生成全文（预留）' },
                   { id: 5, label: '⑤ 投标响应抽取' },
@@ -2157,18 +2124,19 @@ export default function TenderWorkspace() {
                 </section>
               )}
 
-              {/* Step 2: 风险识别 */}
+              {/* Step 2: 招标要求提取 */}
+              {/* Step 2: 招标要求提取 */}
               {activeTab === 2 && (
                 <section className="kb-upload-section">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                    <h4>风险识别</h4>
+                    <h4>招标要求提取</h4>
                     <button 
                       onClick={extractRisks} 
                       className="kb-create-form"
                       style={{ width: 'auto', marginBottom: 0 }}
                       disabled={riskRun?.status === 'running'}
                     >
-                      {riskRun?.status === 'running' ? '识别中...' : '开始识别'}
+                      {riskRun?.status === 'running' ? '提取中...' : '开始提取'}
                     </button>
                   </div>
                   

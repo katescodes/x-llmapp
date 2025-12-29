@@ -213,72 +213,7 @@ def async_extract_risks_v2(
 
 # ==================== Review v2 异步任务 ====================
 
-def async_review_run_v2(
-    project_id: str,
-    model_id: Optional[str],
-    bidder_name: Optional[str],
-    bid_asset_ids: list,
-    run_id: Optional[str] = None,
-    owner_id: Optional[str] = None,
-) -> list:
-    """
-    异步执行审核 v2
-    
-    Args:
-        project_id: 项目ID
-        model_id: 模型ID
-        bidder_name: 投标人名称
-        bid_asset_ids: 投标资产ID列表
-        run_id: tender_runs.id
-        owner_id: 用户ID
-        
-    Returns:
-        审核结果列表
-    """
-    from app.services.db.postgres import _get_pool
-    from app.works.tender.review_v2_service import ReviewV2Service
-    from app.services.llm.llm_client import LLMClient
-    from app.services.dao.tender_dao import TenderDAO
-    
-    logger.info(f"[Worker] async_review_run_v2 start: project={project_id}")
-    
-    pool = _get_pool()
-    dao = TenderDAO(pool)
-    
-    # 更新 run 状态
-    if run_id:
-        dao.update_run(run_id, "running", progress=0.1, message="正在审核...")
-    
-    try:
-        llm_client = LLMClient()
-        review_v2 = ReviewV2Service(pool, llm_client)
-        
-        result = review_v2.run_review_v2(
-            project_id=project_id,
-            model_id=model_id,
-            bidder_name=bidder_name,
-            bid_asset_ids=bid_asset_ids,
-            run_id=run_id,
-            owner_id=owner_id,
-        )
-        
-        # 写入旧表（保证前端兼容）
-        dao.replace_review_items(project_id, result)
-        
-        # 更新 run 状态
-        if run_id:
-            dao.update_run(run_id, "success", progress=1.0, message="ok", result_json={"count": len(result)})
-        
-        logger.info(f"[Worker] async_review_run_v2 done: project={project_id}, count={len(result)}")
-        return result
-        
-    except Exception as e:
-        logger.error(f"[Worker] async_review_run_v2 failed: {e}", exc_info=True)
-        
-        if run_id:
-            dao.update_run(run_id, "failed", progress=0.0, message=str(e))
-        
-        raise
+# async_review_run_v2 已删除，统一使用 V3 审核
 
 
 # ==================== Helper Functions ====================

@@ -324,7 +324,7 @@ class ExtractV2Service:
         run_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        识别风险 (v2) - 使用平台 ExtractionEngine
+        提取招标要求 (v2) - 使用平台 ExtractionEngine
         
         Returns:
             [

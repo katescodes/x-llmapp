@@ -99,18 +99,35 @@ async def import_recording(
     
     需要认证
     """
-    result = await recording_service.import_recording_to_kb(
-        recording_id=recording_id,
-        user_id=current_user.user_id,
-        kb_id=request.kb_id,
-        new_kb_name=request.new_kb_name,
-        title=request.title,
-        category=request.category,
-        tags=request.tags,
-        notes=request.notes
-    )
-    
-    return result
+    try:
+        logger.info(f"Import recording request: recording_id={recording_id}, user={current_user.user_id}, kb_id={request.kb_id}")
+        
+        result = await recording_service.import_recording_to_kb(
+            recording_id=recording_id,
+            user_id=current_user.user_id,
+            kb_id=request.kb_id,
+            new_kb_name=request.new_kb_name,
+            title=request.title,
+            category=request.category,
+            tags=request.tags,
+            notes=request.notes
+        )
+        
+        logger.info(f"Import recording success: recording_id={recording_id}, doc_id={result.get('doc_id')}")
+        return result
+        
+    except ValueError as e:
+        logger.error(f"Import recording validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Import recording failed: recording_id={recording_id}, error={str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"导入失败: {str(e)}"
+        )
 
 @router.patch("/{recording_id}")
 async def update_recording(
@@ -201,11 +218,29 @@ async def get_recording_audio(
             detail="Audio file not found on disk"
         )
     
-    return FileResponse(
+    # 创建响应，避免中文文件名编码问题
+    response = FileResponse(
         path=str(audio_file),
-        media_type=f"audio/{recording['audio_format']}",
-        filename=recording["filename"]
+        media_type=f"audio/{recording['audio_format']}"
     )
+    
+    # 如果有文件名，添加Content-Disposition（用于下载时的文件名）
+    if recording.get("filename"):
+        from urllib.parse import quote
+        import re
+        
+        original_filename = recording["filename"]
+        # 生成ASCII安全的回退文件名
+        ascii_filename = re.sub(r'[^\x00-\x7F]+', '_', original_filename)
+        # URL编码原始文件名
+        encoded_filename = quote(original_filename)
+        
+        response.headers["Content-Disposition"] = (
+            f'inline; filename="{ascii_filename}"; '
+            f"filename*=UTF-8''{encoded_filename}"
+        )
+    
+    return response
 
 @router.post("/upload")
 async def upload_audio_file(
@@ -371,21 +406,31 @@ async def download_recording_audio(
         file_ext = recording.get("audio_format", "webm")
         download_filename = f"{safe_title}.{file_ext}"
         
-        # URL编码文件名
+        # URL编码文件名（用于Content-Disposition）
         from urllib.parse import quote
         encoded_filename = quote(download_filename)
         
+        # 生成ASCII安全的回退文件名（用于不支持RFC 5987的旧浏览器）
+        ascii_filename = re.sub(r'[^\x00-\x7F]+', '_', download_filename)
+        
         logger.info(f"Serving download: file={download_filename}, path={audio_file}, size={audio_file.stat().st_size}")
         
-        return FileResponse(
+        # 创建FileResponse，不使用filename参数（避免latin-1编码错误）
+        response = FileResponse(
             path=str(audio_file),
-            media_type=f"audio/{file_ext}",
-            filename=download_filename,
-            headers={
-                "Content-Disposition": f'attachment; filename="{download_filename}"; filename*=UTF-8\'\'{encoded_filename}',
-                "Access-Control-Expose-Headers": "Content-Disposition"
-            }
+            media_type=f"audio/{file_ext}"
         )
+        
+        # 手动设置Content-Disposition头（RFC 5987标准）
+        # filename: ASCII回退名称
+        # filename*: UTF-8编码的实际名称
+        response.headers["Content-Disposition"] = (
+            f'attachment; filename="{ascii_filename}"; '
+            f"filename*=UTF-8''{encoded_filename}"
+        )
+        response.headers["Access-Control-Expose-Headers"] = "Content-Disposition"
+        
+        return response
     except HTTPException:
         raise
     except Exception as e:
@@ -485,7 +530,7 @@ async def transcribe_recording(
         )
     
     try:
-        # 调用转写服务
+        # 调用转写服务（内部已有并发控制）
         from app.services.asr_service import transcribe_audio
         
         # 读取音频文件
@@ -513,11 +558,16 @@ async def transcribe_recording(
         
         with get_conn() as conn:
             with conn.cursor() as cur:
+                # 转写成功：更新转写内容，并将状态恢复为 pending（如果之前失败了）
                 cur.execute("""
                     UPDATE voice_recordings
                     SET transcript = %s, 
                         word_count = %s,
                         duration = %s,
+                        import_status = CASE 
+                            WHEN import_status = 'failed' THEN 'pending'
+                            ELSE import_status
+                        END,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = %s
                 """, (transcript, word_count, duration_int, recording_id))
@@ -530,9 +580,72 @@ async def transcribe_recording(
             "duration": duration_int
         }
         
+    except HTTPException:
+        # HTTPException 直接传播
+        # 转写失败时更新数据库状态
+        try:
+            from app.services.db.postgres import get_conn
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE voice_recordings
+                        SET import_status = 'failed',
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                    """, (recording_id,))
+                conn.commit()
+        except Exception as db_err:
+            logger.error(f"Failed to update status to failed: {db_err}")
+        raise
     except Exception as e:
+        # 其他异常才包装
+        logger.error(f"Transcription failed: {e}", exc_info=True)
+        
+        # 更新数据库状态为失败
+        try:
+            from app.services.db.postgres import get_conn
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE voice_recordings
+                        SET import_status = 'failed',
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                    """, (recording_id,))
+                conn.commit()
+        except Exception as db_err:
+            logger.error(f"Failed to update status to failed: {db_err}")
+        
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"转写失败: {str(e)}"
+            detail=str(e)  # 直接使用异常消息，不再添加"转写失败"前缀
         )
+
+
+@router.get("/stats/asr-concurrency")
+async def get_asr_concurrency_stats(
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    获取ASR并发控制统计信息
+    
+    需要认证
+    """
+    try:
+        from app.services.asr_concurrency import ASRConcurrencyManager
+        
+        manager = await ASRConcurrencyManager.get_instance()
+        stats = manager.get_stats()
+        
+        return {
+            "status": "success",
+            "stats": stats
+        }
+    except Exception as e:
+        logger.error(f"Failed to get ASR concurrency stats: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "stats": {}
+        }
 

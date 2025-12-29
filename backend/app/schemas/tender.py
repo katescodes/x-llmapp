@@ -176,17 +176,24 @@ class RiskOut(BaseModel):
 # ==================== 审核项相关 ====================
 
 class ReviewItemOut(BaseModel):
-    """审核项输出模型"""
+    """审核项输出模型（V3版本）"""
     id: str
     project_id: str
-    source: str = "compare"  # compare | rule (新字段：来源)
+    source: str = "v3"  # V3流水线
     dimension: str  # 维度：资格审查、报价审查、技术审查等
     requirement_text: Optional[str] = None  # 招标要求（摘要）
     response_text: Optional[str] = None  # 投标响应（摘要）
-    result: str  # pass, risk, fail
+    result: str  # pass, risk, fail (旧字段，兼容)
+    status: Optional[str] = None  # PASS, WARN, FAIL, PENDING (V3新字段)
+    evaluator: Optional[str] = None  # 评估器：deterministic, quant_check, semantic_llm, consistency (V3新字段)
+    requirement_id: Optional[str] = None  # 关联的requirement_id (V3新字段)
+    matched_response_id: Optional[str] = None  # 匹配的response_id (V3新字段)
+    evidence_json: Optional[List[Dict[str, Any]]] = Field(None, description="统一证据结构（V3）")
+    rule_trace_json: Optional[Dict[str, Any]] = Field(None, description="规则追踪（V3）")
+    computed_trace_json: Optional[Dict[str, Any]] = Field(None, description="计算过程追踪（V3）")
     remark: Optional[str] = None  # 原因/建议/缺失点/冲突点
     rigid: bool = False  # 是否刚性要求
-    rule_id: Optional[str] = None  # 规则ID（仅当 source=rule 时有值）
+    rule_id: Optional[str] = None  # 规则ID（保留兼容）
     tender_evidence_chunk_ids: List[str] = Field(default_factory=list)
     bid_evidence_chunk_ids: List[str] = Field(default_factory=list)
     tender_evidence_spans: Optional[List[SpanRef]] = Field(None, description="招标证据片段引用（新字段）")

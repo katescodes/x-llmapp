@@ -479,7 +479,8 @@ async def transcribe_audio(
         
     except Exception as exc:
         logger.error("Audio transcription failed file=%s error=%s", filename, exc)
-        raise RuntimeError(f"音频转录失败: {exc}") from exc
+        # 直接传播异常，不要重复包装
+        raise
         
     finally:
         # 清理临时文件

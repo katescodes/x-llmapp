@@ -20,7 +20,6 @@ export default function ReviewTable({
   onOpenEvidence: (chunkIds: string[]) => void;
 }) {
   const [resultFilter, setResultFilter] = useState<"all" | "pass" | "risk" | "fail" | "pending">("all");
-  const [sourceFilter, setSourceFilter] = useState<"all" | "compare" | "rule" | "v3">("all");
   const [kw, setKw] = useState("");
   
   // Step F-Frontend-4: Drawer state
@@ -41,12 +40,6 @@ export default function ReviewTable({
         if (resultFilter === "risk" && status !== "warn" && legacyResult !== "risk") return false;
       }
       
-      // 来源筛选
-      if (sourceFilter !== "all") {
-        const itemSource = it.source || "v3"; // 默认为 v3
-        if (itemSource !== sourceFilter) return false;
-      }
-      
       // 关键词筛选
       if (!k) return true;
       const reqText = it.requirement_text || it.tender_requirement || "";
@@ -60,7 +53,7 @@ export default function ReviewTable({
         (it.evaluator || "").toLowerCase().includes(k)
       );
     });
-  }, [items, resultFilter, sourceFilter, kw]);
+  }, [items, resultFilter, kw]);
 
   const badge = (item: ReviewItem) => {
     const status = getStatus(item);
@@ -80,7 +73,7 @@ export default function ReviewTable({
   return (
     <div className="source-card">
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <div style={{ fontWeight: 600 }}>审核一览</div>
+        <div style={{ fontWeight: 600 }}>审核一览（V3流水线）</div>
 
         <select className="sidebar-select" style={{ minWidth: 140 }} value={resultFilter} onChange={(e) => setResultFilter(e.target.value as any)}>
           <option value="all">全部结果</option>
@@ -90,15 +83,8 @@ export default function ReviewTable({
           <option value="pass">通过</option>
         </select>
 
-        <select className="sidebar-select" style={{ minWidth: 140 }} value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as any)}>
-          <option value="all">全部来源</option>
-          <option value="v3">V3流水线</option>
-          <option value="compare">对比审核</option>
-          <option value="rule">规则审核</option>
-        </select>
-
         <input
-          placeholder="搜索维度/要求/响应/备注/规则ID"
+          placeholder="搜索维度/要求/响应/备注/评估器"
           value={kw}
           onChange={(e) => setKw(e.target.value)}
           style={{ flex: 1, minWidth: 220 }}
@@ -110,7 +96,6 @@ export default function ReviewTable({
         <table className="tender-table">
           <thead>
             <tr>
-              <th style={{ width: 90 }}>来源</th>
               <th style={{ width: 110 }}>维度</th>
               <th style={{ width: 90 }}>状态</th>
               <th style={{ width: 110 }}>评估器</th>
@@ -122,33 +107,12 @@ export default function ReviewTable({
           </thead>
           <tbody>
             {filtered.map((it) => {
-              const itemSource = it.source || "v3";
               const reqText = it.requirement_text || it.tender_requirement || "-";
               const respText = it.response_text || it.bid_response || "-";
               const isHard = it.rigid !== undefined ? it.rigid : (it.is_hard || false);
               
               return (
                 <tr key={it.id}>
-                  <td>
-                    {itemSource === "rule" ? (
-                      <span className="tender-badge" style={{ background: "#8b5cf6", color: "white", fontSize: "11px" }}>
-                        规则
-                      </span>
-                    ) : itemSource === "v3" ? (
-                      <span className="tender-badge" style={{ background: "#10b981", color: "white", fontSize: "11px" }}>
-                        V3
-                      </span>
-                    ) : (
-                      <span className="tender-badge" style={{ background: "#6366f1", color: "white", fontSize: "11px" }}>
-                        对比
-                      </span>
-                    )}
-                    {it.rule_id && (
-                      <div style={{ fontSize: "10px", color: "#64748b", marginTop: "2px" }}>
-                        {it.rule_id.substring(0, 10)}
-                      </div>
-                    )}
-                  </td>
                   <td>{it.dimension || "其他"}</td>
                   <td>{badge(it)}</td>
                   <td>
@@ -188,7 +152,7 @@ export default function ReviewTable({
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={8} className="kb-empty" style={{ textAlign: "center", padding: 20 }}>
+                <td colSpan={7} className="kb-empty" style={{ textAlign: "center", padding: 20 }}>
                   暂无数据
                 </td>
               </tr>

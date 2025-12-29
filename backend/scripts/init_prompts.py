@@ -38,8 +38,8 @@ async def init_prompts():
         {
             "id": "prompt_risks_v2",
             "module": "risks_v2",
-            "name": "风险识别 V2",
-            "description": "识别招标文件中的法律、技术、商务、合规风险",
+            "name": "招标要求提取 V2",
+            "description": "提取招标文件中的法律、技术、商务、合规要求",
             "file_path": "backend/app/works/tender/prompts/risks_v2.md"
         },
         {

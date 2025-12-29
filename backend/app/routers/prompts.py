@@ -81,9 +81,9 @@ def list_modules(current_user: TokenData = Depends(require_permission("system.pr
             },
             {
                 "id": "risks",
-                "name": "风险识别",
-                "description": "识别招标文件中的法律、技术、商务、合规风险",
-                "icon": "⚠️",
+                "name": "招标要求提取",
+                "description": "提取招标文件中的法律、技术、商务、合规要求",
+                "icon": "📋",
                 "category": "analysis"
             },
             {

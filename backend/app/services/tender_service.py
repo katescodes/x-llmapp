@@ -322,7 +322,7 @@ class TenderService:
 """
 
     RISK_PROMPT = """
-你是招投标助手。请从"招标文件原文片段"中识别风险与注意事项，输出严格 JSON 数组：
+你是招投标助手。请从"招标文件原文片段"中提取招标要求与注意事项，输出严格 JSON 数组：
 [
   {
     "risk_type": "mustReject",  // 或 "other"
@@ -726,6 +726,49 @@ class TenderService:
                 bidder_name=bidder_name,
                 meta_json=tpl_meta,
             )
+            
+            # ✅ 同步创建 kb_documents 记录（让文档在知识库中可见）
+            if kb_doc_id and kind in ("tender", "bid", "custom_rule"):
+                try:
+                    from app.services.dao import kb_dao
+                    
+                    # 计算文件哈希
+                    import hashlib
+                    content_hash = hashlib.sha256(b).hexdigest()
+                    
+                    # 映射文档分类
+                    if kind == "tender":
+                        kb_category = "tender_doc"
+                    elif kind == "bid":
+                        kb_category = "bid_doc"
+                    elif kind == "custom_rule":
+                        kb_category = "custom_rule"
+                    else:
+                        kb_category = "general_doc"
+                    
+                    # 创建 kb_documents 记录（使用已有的 document_id）
+                    kb_dao.create_kb_document_with_id(
+                        kb_id=kb_id,
+                        doc_id=kb_doc_id,  # 使用 documents.id
+                        filename=filename,
+                        source="tender_upload",
+                        content_hash=content_hash,
+                        status="ready",
+                        kb_category=kb_category,
+                        meta={
+                            "project_id": project_id,
+                            "asset_id": asset["id"],
+                            "kind": kind,
+                            "bidder_name": bidder_name,
+                            "doc_version_id": tpl_meta.get("doc_version_id"),
+                            "size": size,
+                        }
+                    )
+                    logger.info(f"Created kb_document: kb_id={kb_id}, doc_id={kb_doc_id}, filename={filename}")
+                except Exception as e:
+                    logger.warning(f"Failed to create kb_document: {e}")
+                    # 不影响主流程，继续执行
+            
             assets_out.append(asset)
 
         return assets_out
@@ -942,7 +985,7 @@ class TenderService:
         run_id: Optional[str] = None,
         owner_id: Optional[str] = None,
     ):
-        """识别风险"""
+        """提取招标要求"""
         # 旁路双写：创建 platform job（如果启用）
         job_id = None
         if self.feature_flags.PLATFORM_JOBS_ENABLED and self.jobs_service and run_id:
@@ -2365,12 +2408,13 @@ class TenderService:
                 ))
                 logger.info(f"run_review_v3 completed")
                 
-                # v3 成功：使用 v3 结果，写入旧表以保证前端兼容
+                # v3 成功：使用 v3 结果
                 arr = v3_results.get("items", [])  # 提取 items 列表
                 logger.info(f"Extracted {len(arr)} review items")
                 
-                # 写入旧表（保证前端兼容）
-                self.dao.replace_review_items(project_id, arr)
+                # ⚠️ 注意：ReviewPipelineV3已经直接保存到tender_review_items表
+                # 不需要再调用replace_review_items，否则会删除已保存的V3数据！
+                # self.dao.replace_review_items(project_id, arr)  # 已废弃
                 
                 # 更新运行状态
                 if run_id:
@@ -2383,7 +2427,8 @@ class TenderService:
                             "review_mode": v3_results.get("review_mode", "UNKNOWN"),
                             "pass_count": v3_results.get("pass_count", 0),
                             "fail_count": v3_results.get("fail_count", 0),
-                            "warn_count": v3_results.get("warn_count", 0)
+                            "warn_count": v3_results.get("warn_count", 0),
+                            "pending_count": v3_results.get("pending_count", 0)
                         }
                     )
                 

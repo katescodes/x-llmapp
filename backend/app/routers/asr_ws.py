@@ -49,11 +49,30 @@ class ASRSession:
         self.start_time = datetime.now()
         self.is_active = True
         self.temp_audio_file: Optional[Path] = None
+        
+        # 实时转录相关
+        self.realtime_enabled = config.get("realtime", False)
+        self.realtime_processor = None
+        
+        if self.realtime_enabled:
+            from app.services.asr_realtime import RealtimeASRProcessor
+            self.realtime_processor = RealtimeASRProcessor(
+                session_id=session_id,
+                language=config.get("language", "zh"),
+                chunk_duration_ms=config.get("chunk_duration_ms", 3000),
+                min_chunk_size_bytes=config.get("min_chunk_size_bytes", 50000),
+                overlap_duration_ms=config.get("overlap_duration_ms", 500),
+                context_window=config.get("context_window", 3),
+                on_transcript=None  # 将在WebSocket中设置
+            )
     
     def add_audio_chunk(self, chunk: bytes):
         """添加音频数据块"""
         if self.is_active:
             self.audio_chunks.append(chunk)
+            # 如果启用实时转录，也添加到实时处理器
+            if self.realtime_enabled and self.realtime_processor:
+                self.realtime_processor.add_audio_chunk(chunk)
     
     def get_duration(self) -> float:
         """获取录音时长（秒）"""
@@ -62,6 +81,18 @@ class ASRSession:
     def get_full_audio(self) -> bytes:
         """获取完整音频数据"""
         return b''.join(self.audio_chunks)
+    
+    async def start_realtime(self):
+        """启动实时转录"""
+        if self.realtime_processor:
+            self.realtime_processor.start()
+    
+    async def stop_realtime(self):
+        """停止实时转录"""
+        if self.realtime_processor:
+            await self.realtime_processor.stop()
+            # 获取实时转录的完整文本
+            self.full_transcript = self.realtime_processor.get_full_transcript()
 
 # 活跃的ASR会话
 active_sessions: Dict[str, ASRSession] = {}
@@ -126,15 +157,41 @@ async def websocket_asr_endpoint(
                         asr_session = ASRSession(session_id, user_id, config)
                         active_sessions[session_id] = asr_session
                         
-                        await manager.send_message(session_id, {
-                            "type": "status",
-                            "message": "Recording started - transcription will be done when you finish",
-                            "session_id": session_id
-                        })
+                        # 如果启用实时转录，设置回调并启动
+                        if asr_session.realtime_enabled and asr_session.realtime_processor:
+                            # 设置实时回调
+                            async def on_transcript_callback(transcript):
+                                await manager.send_message(session_id, {
+                                    "type": "transcript",
+                                    "text": transcript.text,
+                                    "is_final": transcript.is_final,
+                                    "chunk_id": transcript.chunk_id,
+                                    "timestamp": transcript.timestamp
+                                })
+                            
+                            asr_session.realtime_processor.on_transcript = on_transcript_callback
+                            await asr_session.start_realtime()
+                            
+                            await manager.send_message(session_id, {
+                                "type": "status",
+                                "message": "实时转录已启动 - 即录即转模式",
+                                "session_id": session_id,
+                                "realtime": True
+                            })
+                        else:
+                            await manager.send_message(session_id, {
+                                "type": "status",
+                                "message": "Recording started - transcription will be done when you finish",
+                                "session_id": session_id,
+                                "realtime": False
+                            })
                     
                     elif action == "stop":
                         # 停止录音
                         if asr_session:
+                            # 停止实时转录（如果启用）
+                            if asr_session.realtime_enabled:
+                                await asr_session.stop_realtime()
                             await finalize_recording(session_id, asr_session, websocket)
                             asr_session = None
                         break
@@ -147,11 +204,14 @@ async def websocket_asr_endpoint(
                                 "message": "Recording paused"
                             })
                 
-                # 处理音频数据 - 只累积，不实时转写
+                # 处理音频数据
                 elif "bytes" in message:
                     if asr_session and asr_session.is_active:
                         audio_data = message["bytes"]
                         asr_session.add_audio_chunk(audio_data)
+                        
+                        # 实时模式下，音频已经自动添加到realtime_processor
+                        # 无需额外操作
             
             except WebSocketDisconnect:
                 break
@@ -252,6 +312,8 @@ async def transcribe_chunk(audio_data: bytes, config: dict) -> str:
 async def background_transcribe(recording_id: str, audio_path: str, language: str = "zh"):
     """
     后台任务：转写音频并更新数据库
+    
+    注意：并发控制已在 call_remote_asr_api 层面实现，此处无需重复包装
     """
     import subprocess
     import logging
@@ -272,37 +334,39 @@ async def background_transcribe(recording_id: str, audio_path: str, language: st
         
         logger.info(f"Converting audio to WAV: {webm_path} -> {wav_path}")
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, 
-                      check=True, timeout=60)  # 增加超时时间到60秒
+                      check=True, timeout=60)
         
-        # 转写
-        logger.info(f"Calling ASR service for {recording_id}")
-        from app.services.asr_service import transcribe_audio
-        with open(wav_path, 'rb') as f:
-            audio_data = f.read()
-        
-        transcript, _ = await transcribe_audio(
-            audio_data=audio_data,
-            filename="recording.wav",
-            language=language
-        )
-        
-        transcript = transcript.strip()
-        word_count = len(transcript)
-        
-        logger.info(f"Transcription completed for {recording_id}: {word_count} characters")
-        
-        # 更新数据库
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE voice_recordings 
-                    SET transcript = %s, word_count = %s, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = %s
-                """, (transcript, word_count, recording_id))
-            conn.commit()
-        
-        # 清理临时文件
-        Path(wav_path).unlink(missing_ok=True)
+        try:
+            # 转写（内部已有并发控制）
+            logger.info(f"Calling ASR service for {recording_id}")
+            from app.services.asr_service import transcribe_audio
+            with open(wav_path, 'rb') as f:
+                audio_data = f.read()
+            
+            transcript, _ = await transcribe_audio(
+                audio_data=audio_data,
+                filename="recording.wav",
+                language=language
+            )
+            
+            transcript = transcript.strip()
+            word_count = len(transcript)
+            
+            logger.info(f"Transcription completed for {recording_id}: {word_count} characters")
+            
+            # 更新数据库
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE voice_recordings 
+                        SET transcript = %s, word_count = %s, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                    """, (transcript, word_count, recording_id))
+                conn.commit()
+            
+        finally:
+            # 清理临时文件
+            Path(wav_path).unlink(missing_ok=True)
         
         logger.info(f"Background transcription completed for {recording_id}")
         

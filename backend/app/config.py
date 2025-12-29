@@ -138,6 +138,12 @@ class Settings(BaseModel):
     # 时间戳
     ASR_ENABLE_TIMESTAMPS: bool = os.getenv("ASR_ENABLE_TIMESTAMPS", "true").lower() == "true"
     ASR_WORD_TIMESTAMPS: bool = os.getenv("ASR_WORD_TIMESTAMPS", "false").lower() == "true"
+    
+    # ASR并发控制和重试配置
+    ASR_MAX_CONCURRENT: int = int(os.getenv("ASR_MAX_CONCURRENT", "2"))  # 最大并发转录数
+    ASR_MAX_RETRIES: int = int(os.getenv("ASR_MAX_RETRIES", "3"))  # 最大重试次数
+    ASR_RETRY_DELAY: int = int(os.getenv("ASR_RETRY_DELAY", "5"))  # 重试延迟（秒）
+    ASR_REQUEST_TIMEOUT: int = int(os.getenv("ASR_REQUEST_TIMEOUT", "300"))  # 请求超时（秒）
 
     # 模板 LLM 分析配置
     TEMPLATE_LLM_ANALYSIS_ENABLED: bool = os.getenv("TEMPLATE_LLM_ANALYSIS_ENABLED", "true").lower() == "true"

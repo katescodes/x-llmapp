@@ -139,6 +139,69 @@ def create_document(
     return doc_id
 
 
+def create_kb_document_with_id(
+    kb_id: str,
+    doc_id: str,
+    filename: str,
+    source: str,
+    status: str,
+    meta: dict | None,
+    content_hash: str,
+    kb_category: str = "general_doc",
+) -> str:
+    """
+    创建 kb_documents 记录（使用指定的 doc_id）
+    用于将已存在的 documents 记录关联到知识库
+    """
+    kb_category = (kb_category or "general_doc")[:32]
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # 检查是否已存在
+            cur.execute("SELECT id FROM kb_documents WHERE id=%s AND kb_id=%s", (doc_id, kb_id))
+            if cur.fetchone():
+                # 已存在，更新
+                cur.execute(
+                    """
+                    UPDATE kb_documents
+                    SET filename=%s, source=%s, content_hash=%s, status=%s, 
+                        meta_json=%s, kb_category=%s, updated_at=now()
+                    WHERE id=%s AND kb_id=%s
+                    """,
+                    (
+                        filename[:255],
+                        source,
+                        content_hash,
+                        status,
+                        json.dumps(meta or {}),
+                        kb_category,
+                        doc_id,
+                        kb_id,
+                    ),
+                )
+            else:
+                # 不存在，插入
+                cur.execute(
+                    """
+                    INSERT INTO kb_documents(
+                        id, kb_id, filename, source, content_hash, status, meta_json, kb_category
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        doc_id,
+                        kb_id,
+                        filename[:255],
+                        source,
+                        content_hash,
+                        status,
+                        json.dumps(meta or {}),
+                        kb_category,
+                    ),
+                )
+        conn.commit()
+    return doc_id
+
+
 def update_document_status(doc_id: str, status: str, meta: dict | None = None) -> None:
     with get_conn() as conn:
         with conn.cursor() as cur:

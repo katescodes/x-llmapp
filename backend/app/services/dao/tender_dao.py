@@ -724,12 +724,26 @@ class TenderDAO:
             # with transaction() 自动提交或回滚，无需手动 commit
 
     def list_review_items(self, project_id: str) -> List[Dict[str, Any]]:
-        """列出项目的所有审核项"""
+        """列出项目的所有审核项（V3版本：包含status、evaluator等字段）"""
         rows = self._fetchall(
-            """SELECT id, project_id, dimension, tender_requirement as requirement_text, 
-                      bid_response as response_text, result, is_hard as rigid, remark,
-                      tender_evidence_chunk_ids_json as tender_evidence_chunk_ids, 
-                      bid_evidence_chunk_ids_json as bid_evidence_chunk_ids, created_at 
+            """SELECT 
+                   id, project_id, bidder_name, dimension,
+                   tender_requirement as requirement_text, 
+                   bid_response as response_text, 
+                   result, 
+                   status,
+                   evaluator,
+                   is_hard as rigid, 
+                   remark,
+                   requirement_id,
+                   matched_response_id,
+                   review_run_id,
+                   tender_evidence_chunk_ids_json as tender_evidence_chunk_ids, 
+                   bid_evidence_chunk_ids_json as bid_evidence_chunk_ids,
+                   evidence_json,
+                   rule_trace_json,
+                   computed_trace_json,
+                   created_at 
                FROM tender_review_items 
                WHERE project_id=%s 
                ORDER BY created_at ASC""",
