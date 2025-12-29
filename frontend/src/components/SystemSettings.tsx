@@ -14,6 +14,7 @@ import {
 import { API_BASE_URL } from "../config/api";
 import { useAuth } from "../contexts/AuthContext";
 import { useAuthFetch, usePermission } from "../hooks/usePermission";
+import PermissionManagementPage from "./PermissionManagementPage";
 
 // ASR配置类型
 interface ASRConfig {
@@ -199,19 +200,21 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
   const canAccessApp = hasPermission('system.settings');
   const canAccessASR = hasPermission('system.asr');
   const canAccessPrompts = hasPermission('system.prompt');
+  const canAccessPermissions = isAdmin; // 仅管理员可访问权限管理
   
   // 确定第一个可访问的tab
-  const getFirstAccessibleTab = (): 'llm' | 'embedding' | 'app' | 'asr' | 'prompts' => {
+  const getFirstAccessibleTab = (): 'llm' | 'embedding' | 'app' | 'asr' | 'prompts' | 'permissions' => {
     if (canAccessLLM) return 'llm';
     if (canAccessEmbedding) return 'embedding';
     if (canAccessApp) return 'app';
     if (canAccessASR) return 'asr';
     if (canAccessPrompts) return 'prompts';
+    if (canAccessPermissions) return 'permissions';
     return 'llm'; // 默认，实际上如果没有任何权限，整个组件不应该被渲染
   };
   
   // Tab state
-  const [currentTab, setCurrentTab] = useState<'llm' | 'embedding' | 'app' | 'asr' | 'prompts'>(getFirstAccessibleTab());
+  const [currentTab, setCurrentTab] = useState<'llm' | 'embedding' | 'app' | 'asr' | 'prompts' | 'permissions'>(getFirstAccessibleTab());
   
   // LLM states
   const [models, setModels] = useState<LLMModel[]>([]);
@@ -1208,6 +1211,25 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
             }}
           >
             📝 Prompt管理
+          </button>
+        )}
+        {canAccessPermissions && (
+          <button
+            onClick={() => setCurrentTab('permissions')}
+            style={{
+              padding: "10px 20px",
+              background: currentTab === 'permissions' ? "rgba(79, 70, 229, 0.2)" : "transparent",
+              color: currentTab === 'permissions' ? "#22c55e" : "#94a3b8",
+              border: "none",
+              borderBottom: currentTab === 'permissions' ? "2px solid #22c55e" : "none",
+              borderRadius: "6px 6px 0 0",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: currentTab === 'permissions' ? "600" : "normal",
+              transition: "all 0.2s"
+            }}
+          >
+            🔐 权限管理
           </button>
         )}
       </div>
@@ -3046,6 +3068,17 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* 权限管理标签页 */}
+      {currentTab === 'permissions' && (
+        <div style={{ 
+          height: "calc(100vh - 200px)", 
+          overflow: "hidden",
+          margin: "-20px" // 移除padding以让PermissionManagementPage全屏显示
+        }}>
+          <PermissionManagementPage />
         </div>
       )}
 

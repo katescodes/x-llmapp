@@ -733,23 +733,25 @@ export default function TenderWorkspace() {
     }
   }, [currentProject]);
 
-  const loadRisks = useCallback(async (forceProjectId?: string) => {
+  // loadRisks 已重命名为 loadRiskAnalysis
+  // 注：虽然API路径还是/risk-analysis，但数据来源已改为tender_requirements
+  const loadRiskAnalysis = useCallback(async (forceProjectId?: string) => {
     const projectId = forceProjectId || currentProject?.id;
     if (!projectId) return;
     
     // ✅ 加载前验证项目ID
     if (!forceProjectId && currentProject && currentProject.id !== projectId) {
-      console.log('[loadRisks] 项目已切换，跳过加载');
+      console.log('[loadRiskAnalysis] 项目已切换，跳过加载');
       return;
     }
     
     try {
-      // 使用新的 risk-analysis API
+      // 使用新的 risk-analysis API（基于tender_requirements聚合）
       const data = await api.get(`/api/apps/tender/projects/${projectId}/risk-analysis`);
       
       // ✅ 加载后验证项目ID
       if (currentProject && currentProject.id !== projectId) {
-        console.log('[loadRisks] 加载完成时项目已切换，丢弃数据');
+        console.log('[loadRiskAnalysis] 加载完成时项目已切换，丢弃数据');
         return;
       }
       
@@ -842,7 +844,7 @@ export default function TenderWorkspace() {
     const bidderName = state.selectedBidder;
     
     // 清空旧的投标响应数据
-    setBidResponseItems([]);
+    setBidResponses([]);
     
     try {
       const res = await api.post(
@@ -866,7 +868,7 @@ export default function TenderWorkspace() {
       alert(`抽取失败: ${err}`);
       setBidResponseRun(null);
     }
-  }, [currentProject, state.selectedBidder, startPolling, loadBidResponses]);
+  }, [currentProject, state.selectedBidder, setBidResponses, setBidResponseRun, startPolling, loadBidResponses]);
 
   const loadFormatTemplates = useCallback(async () => {
     try {
@@ -1024,8 +1026,11 @@ export default function TenderWorkspace() {
     }
     
     try {
-      const data = await api.get(`/api/apps/tender/projects/${projectId}/review`);
+      // ✅ 如果有选中的投标人，传递bidder_name参数
+      const params = selectedBidder ? `?bidder_name=${encodeURIComponent(selectedBidder)}` : '';
+      const data = await api.get(`/api/apps/tender/projects/${projectId}/review${params}`);
       console.log('[loadReview] 获取到审核数据:', data);
+      console.log('[loadReview] bidder_name过滤:', selectedBidder || '无');
       console.log('[loadReview] 数据类型:', Array.isArray(data) ? 'Array' : typeof data);
       console.log('[loadReview] 数据长度:', data?.length);
       
@@ -1040,7 +1045,7 @@ export default function TenderWorkspace() {
     } catch (err) {
       console.error('Failed to load review:', err);
     }
-  }, [currentProject]);
+  }, [currentProject, selectedBidder]);
   
   // -------------------- 项目操作 --------------------
 
@@ -1249,14 +1254,17 @@ export default function TenderWorkspace() {
     }
   };
 
-  const extractRisks = async () => {
+  // extractRisks 已重命名为 extractRequirements
+  // 注：API路径保持/extract/risks，但后端已改为调用requirements_v1模块
+  const extractRequirements = async () => {
     if (!currentProject) return;
     const projectId = currentProject.id;
     
-    // 清空旧的风险数据
+    // 清空旧的风险分析数据
     setRiskAnalysisData(null);
     
     try {
+      // API路径保持不变，但后端已改为调用requirements_v1
       const res = await api.post(`/api/apps/tender/projects/${projectId}/extract/risks`, { model_id: null });
       
       // 设置新的run状态
@@ -1264,15 +1272,15 @@ export default function TenderWorkspace() {
         id: res.run_id, 
         status: 'running', 
         progress: 0, 
-        message: '开始提取...', 
-        kind: 'extract_risks' 
+        message: '开始提取招标要求...', 
+        kind: 'extract_risks'  // 保持kind名称不变，以兼容现有代码
       } as TenderRun;
       setRiskRun(newRun);
       
-      // 启动轮询
-      startPolling(projectId, 'risk', res.run_id, () => loadRisks(projectId));
+      // 启动轮询（加载风险分析）
+      startPolling(projectId, 'risk', res.run_id, () => loadRiskAnalysis(projectId));
     } catch (err) {
-      alert(`识别失败: ${err}`);
+      alert(`提取失败: ${err}`);
       setRiskRun(null);
     }
   };
@@ -1533,7 +1541,7 @@ export default function TenderWorkspace() {
     // 加载项目数据
     loadAssets(projectId);
     loadProjectInfo(projectId);
-    loadRisks(projectId);
+    loadRiskAnalysis(projectId);  // 已改名
     loadDirectory(projectId);
     loadBidResponses(projectId);
     loadReview(projectId);
@@ -1575,7 +1583,7 @@ export default function TenderWorkspace() {
         }
         if (riskRunData?.status === 'running') {
           console.log('[loadAndRestoreRuns] 恢复招标要求提取轮询:', riskRunData.id);
-          startPolling(projectId, 'risk', riskRunData.id, () => loadRisks(projectId));
+          startPolling(projectId, 'risk', riskRunData.id, () => loadRiskAnalysis(projectId));
         }
         if (dirRunData?.status === 'running') {
           console.log('[loadAndRestoreRuns] 恢复目录生成轮询:', dirRunData.id);
@@ -1603,13 +1611,23 @@ export default function TenderWorkspace() {
     loadAndRestoreRuns();
   }, [currentProject?.id]); // 只监听项目ID变化
 
-  // 切换项目时，恢复上次选择的格式模板（用于“自动套用格式”按钮）
+  // 切换项目时，恢复上次选择的格式模板（用于"自动套用格式"按钮）
   useEffect(() => {
     if (!currentProject) return;
     const key = `tender.formatTemplateId.${currentProject.id}`;
     const saved = localStorage.getItem(key) || "";
     setSelectedFormatTemplateId(saved);
   }, [currentProject]);
+
+  // 监听投标人选择变化，重新加载审核数据
+  useEffect(() => {
+    if (!currentProject?.id) return;
+    if (reviewItems.length > 0) {
+      // 只有当已经有审核数据时才重新加载
+      console.log('[useEffect] 投标人选择变化，重新加载审核数据:', selectedBidder || '全部');
+      loadReview(currentProject.id);
+    }
+  }, [selectedBidder, currentProject?.id, loadReview]);
 
   // 选择模板后，加载 spec 并应用 tocStyleVars（画布原地刷新样式）
   useEffect(() => {
@@ -2130,8 +2148,8 @@ export default function TenderWorkspace() {
                 <section className="kb-upload-section">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                     <h4>招标要求提取</h4>
-                    <button 
-                      onClick={extractRisks} 
+                    <button
+                      onClick={extractRequirements} 
                       className="kb-create-form"
                       style={{ width: 'auto', marginBottom: 0 }}
                       disabled={riskRun?.status === 'running'}

@@ -88,29 +88,37 @@ project_info:
 # ============================================================
 # 能力 2：招标要求提取
 # ============================================================
-risks:
-  description: "招标要求提取"
+# 注：原risks模块已废弃，现统一使用requirements模块
+requirements:
+  description: "招标要求提取（结构化条款库）"
   
   schema:
     type: array
     items:
       required_fields:
-        - risk_type         # 风险类型（legal/technical/business/compliance）
-        - title             # 风险标题
-        - severity          # 严重程度（high/medium/low）
-        - description       # 风险描述
+        - requirement_id    # 要求ID（如：qual_001, tech_001）
+        - dimension         # 维度（qualification/technical/business/price/doc_structure/schedule_quality/evaluation/other）
+        - req_type          # 要求类型（must_provide/must_not_deviate/threshold/format/scoring/other）
+        - requirement_text  # 要求文本
+        - is_hard           # 是否硬性要求
         - evidence_chunk_ids  # 证据片段ID（至少1个）
       optional_fields:
-        - tags              # 风险标签
-        - recommendation    # 建议措施
-        - impact            # 影响分析
+        - allow_deviation   # 是否允许偏离
+        - value_schema_json # 值模式（如果是数值型要求）
+        - eval_method       # 评估方法（PRESENCE/VALIDITY/NUMERIC/TABLE_COMPARE/SEMANTIC/EXACT_MATCH）
+        - must_reject       # 是否必须拒绝
+        - expected_evidence_json  # 期望证据
+        - rubric_json       # 评分细则
+        - weight            # 权重
   
-  min_items: 0              # 允许无风险，但 schema 必须满足
+  min_items: 0              # 允许无要求，但 schema 必须满足
   
   validation_rules:
-    - rule: "每个 risk 必须有 evidence_chunk_ids 且长度 >= 1"
+    - rule: "每个 requirement 必须有 evidence_chunk_ids 且长度 >= 1"
       severity: "HIGH"
-    - rule: "risk_type 必须在枚举范围内"
+    - rule: "dimension 必须在枚举范围内"
+      severity: "MEDIUM"
+    - rule: "req_type 必须在枚举范围内"
       severity: "MEDIUM"
 
 # ============================================================

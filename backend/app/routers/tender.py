@@ -1245,10 +1245,18 @@ def run_review(
 
 
 @router.get("/projects/{project_id}/review", response_model=List[ReviewItemOut])
-def get_review(project_id: str, request: Request):
-    """获取审核结果（V3流水线）"""
+def get_review(
+    project_id: str, 
+    request: Request,
+    bidder_name: Optional[str] = None
+):
+    """获取审核结果（V3流水线）
+    
+    Args:
+        bidder_name: 投标人名称（可选，如果提供则只返回该投标人的审核结果）
+    """
     dao = TenderDAO(_get_pool(request))
-    rows = dao.list_review_items(project_id)
+    rows = dao.list_review_items(project_id, bidder_name=bidder_name)
     flags = get_feature_flags()
     
     out = []

@@ -38,36 +38,26 @@ async def build_bid_response_spec_v2_async(pool=None) -> ExtractionSpec:
     if not pool:
         raise ValueError("pool参数是必需的，无法从数据库加载prompt")
 
-    # 从数据库加载 v2 prompt
+    # 从数据库加载活跃的 bid_response prompt
+    # ⚠️ 统一策略：只通过 module 名称加载活跃版本，不硬编码 ID
+    # 这样用户在系统设置中修改 prompt 后会立即生效
     try:
         from app.services.prompt_loader import PromptLoaderService
         loader = PromptLoaderService(pool)
         
-        prompt = None
-        
-        # 方法1: 直接通过ID加载v2
-        try:
-            prompt = await loader.get_prompt_by_id("prompt_bid_response_v2_001")
-            if prompt:
-                logger.info(f"✅ [BidResponse] Loaded V2 prompt from DATABASE by ID, length={len(prompt)} chars")
-        except Exception as e:
-            logger.debug(f"[BidResponse] Failed to load v2 by ID: {e}")
-        
-        # 方法2: 如果没有v2，尝试加载 module=bid_response 的最新活跃版本
-        if not prompt:
-            prompt = await loader.get_active_prompt("bid_response")
-            if prompt:
-                logger.info(f"✅ [BidResponse] Loaded active prompt from DATABASE, length={len(prompt)} chars")
+        # 加载 module=bid_response 的当前活跃版本
+        prompt = await loader.get_active_prompt("bid_response")
         
         if not prompt:
             error_msg = (
                 "未找到投标响应抽取的prompt模板！\n"
-                "请确保数据库 prompt_templates 表中存在以下记录之一：\n"
-                "  1. id='prompt_bid_response_v2_001' 且 is_active=true\n"
-                "  2. module='bid_response' 且 is_active=true\n"
+                "请确保数据库 prompt_templates 表中存在：\n"
+                "  module='bid_response' 且 is_active=true\n"
                 "\n解决方案：运行 'python backend/scripts/init_prompts.py' 初始化prompt"
             )
             raise PromptNotFoundError(error_msg)
+        
+        logger.info(f"✅ [BidResponse] Loaded active prompt from DATABASE, module=bid_response, length={len(prompt)} chars")
         
     except PromptNotFoundError:
         raise

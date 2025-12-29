@@ -646,12 +646,14 @@ class ReviewPipelineV3:
         
         return evidence_json, tender_ids, bid_ids
     
-    def _mapping_score(self, req_text: str, resp: Dict) -> int:
+    def _mapping_score(self, req: Dict, resp: Dict) -> int:
         """
-        目标B: 轻量打分 - 关键词匹配
+        目标B+Step3: 轻量打分 - 关键词匹配 + normalized_fields 优先级
         
-        统计 req_text 中出现的关键词，有多少也在 resp.response_text 或 
-        resp.normalized_fields_json 中出现。
+        改进（Step 3）：
+        - 如果 requirement 期望特定 normalized_keys（如 total_price_cny, duration_days, warranty_months）
+        - 且 response 的 normalized_fields_json 含这些 key → 得分直接 +100
+        - 这样 NUMERIC/VALIDITY/PRESENCE 类条款能优先匹配到有结构化字段的 response
         
         关键词词表（极轻量版）：
         - 保证金相关：保证金、投标保证金
@@ -661,15 +663,35 @@ class ReviewPipelineV3:
         - 文档相关：目录、页码
         - 工期相关：工期、交付、验收、质保、售后、付款
         """
+        req_text = req.get("requirement_text", "")
         if not req_text:
             return 0
+        
+        score = 0
+        
+        # ✅ Step 3: normalized_fields 命中优先级（超高权重）
+        expected_evidence_json = req.get("expected_evidence_json", {})
+        if isinstance(expected_evidence_json, dict):
+            normalized_keys = expected_evidence_json.get("normalized_keys", [])
+            if normalized_keys:
+                resp_normalized = resp.get("normalized_fields_json", {})
+                if isinstance(resp_normalized, dict):
+                    # 检查期望的 key 是否在 response 的 normalized_fields 中
+                    for key in normalized_keys:
+                        if key in resp_normalized and resp_normalized[key] is not None:
+                            # 命中一个关键字段 +100 分（远超关键词权重）
+                            score += 100
+                            logger.debug(
+                                f"ReviewPipeline: Mapping boost for req={req.get('requirement_id')}, "
+                                f"matched normalized_key={key}"
+                            )
         
         # 关键词词表
         keywords = [
             # 保证金
             "保证金", "投标保证金",
             # 价格
-            "报价", "投标总价", "预算", "最高限价", "报价单",
+            "报价", "投标总价", "预算", "最高限价", "报价单", "控制价",
             # 资质/证件
             "授权书", "法定代表人", "身份证", "营业执照", "统一社会信用代码", 
             "资质", "业绩", "证书", "许可证", "认证",
@@ -690,8 +712,7 @@ class ReviewPipelineV3:
             import json
             resp_text += " " + json.dumps(normalized_fields, ensure_ascii=False)
         
-        # 统计命中数
-        score = 0
+        # 统计关键词命中数
         for kw in keywords:
             if kw in req_text and kw in resp_text:
                 score += 1
@@ -734,10 +755,10 @@ class ReviewPipelineV3:
                 # 1. Jaccard 相似度（Token overlap）
                 jaccard_score = _jaccard_similarity(req_text, resp_text)
                 
-                # 2. 目标B: 关键词匹配打分
-                keyword_score = self._mapping_score(req_text, resp)
+                # 2. Step3: 关键词匹配打分 + normalized_fields 优先级
+                keyword_score = self._mapping_score(req, resp)
                 
-                # 3. 综合分数（关键词权重更高）
+                # 3. 综合分数（关键词权重更高，normalized_fields 权重最高）
                 combined_score = keyword_score * 10 + jaccard_score
                 
                 scored_responses.append({

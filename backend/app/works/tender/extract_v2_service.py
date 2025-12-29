@@ -10,7 +10,6 @@ from psycopg_pool import ConnectionPool
 from app.platform.extraction.engine import ExtractionEngine
 from app.platform.retrieval.facade import RetrievalFacade
 from app.services.embedding_provider_store import get_embedding_store
-from .extraction_specs.risks_v2 import build_risks_spec_async
 from .extraction_specs.directory_v2 import build_directory_spec_async
 
 logger = logging.getLogger(__name__)
@@ -289,22 +288,10 @@ class ExtractV2Service:
             f"stages_completed={len(stage_results)}/6"
         )
         
-        # ✅ Step 2.1: 追加调用 requirements 抽取（基准条款库）
-        try:
-            logger.info(f"ExtractV2: Starting requirements extraction for project={project_id}")
-            if run_id:
-                self.dao.update_run(run_id, "running", progress=0.95, message="正在生成招标要求基准条款库...")
-            
-            requirements = await self.extract_requirements_v1(
-                project_id=project_id,
-                model_id=model_id,
-                run_id=None,  # 不更新run状态，避免冲突
-            )
-            
-            logger.info(f"ExtractV2: Requirements extraction done - count={requirements.get('count', 0)}")
-        except Exception as e:
-            logger.error(f"ExtractV2: Requirements extraction failed: {e}", exc_info=True)
-            # 不影响主流程，继续返回
+        # ❌ 已移除：Step 2.1 追加调用 requirements 抽取
+        # 原因：与单独的"招标要求提取"功能重复
+        # 现在用户需要单独点击"招标要求提取"按钮来生成 tender_requirements
+        # 这样职责更清晰，避免资源浪费
         
         # 返回完整结果
         return {
@@ -317,73 +304,8 @@ class ExtractV2Service:
             }
         }
     
-    async def extract_risks_v2(
-        self,
-        project_id: str,
-        model_id: Optional[str],
-        run_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        提取招标要求 (v2) - 使用平台 ExtractionEngine
-        
-        Returns:
-            [
-                {
-                    "risk_type": "...",
-                    "title": "...",
-                    "description": "...",
-                    "suggestion": "...",
-                    "severity": "high|medium|low",
-                    "tags": [...],
-                    "evidence_chunk_ids": [...],
-                    "evidence_spans": [...]
-                }
-            ]
-        """
-        logger.info(f"ExtractV2: extract_risks start project_id={project_id}")
-        
-        # 1. 获取 embedding provider
-        embedding_provider = get_embedding_store().get_default()
-        if not embedding_provider:
-            raise ValueError("No embedding provider configured")
-        
-        # 2. 构建 spec
-        spec = await build_risks_spec_async(self.pool)
-        
-        # 3. 调用引擎
-        result = await self.engine.run(
-            spec=spec,
-            retriever=self.retriever,
-            llm=self.llm,
-            project_id=project_id,
-            model_id=model_id,
-            run_id=run_id,
-            embedding_provider=embedding_provider,
-        )
-        
-        # 4. 解析结果为风险列表
-        # result.data 可能直接是 list，或者在某个 key 下
-        if isinstance(result.data, list):
-            arr = result.data
-        elif isinstance(result.data, dict) and "risks" in result.data:
-            arr = result.data["risks"]
-        else:
-            # 尝试直接从 raw output 解析
-            logger.warning(f"Unexpected risks data format: {type(result.data)}")
-            arr = []
-        
-        if not isinstance(arr, list):
-            logger.error(f"ExtractV2: risk output not list, type={type(arr)}")
-            arr = []
-        
-        # 5. 为每个风险补充 evidence_spans（如果还没有）
-        for risk in arr:
-            if "evidence_spans" not in risk or not risk["evidence_spans"]:
-                risk["evidence_spans"] = result.evidence_spans
-        
-        logger.info(f"ExtractV2: extract_risks done risks={len(arr)}")
-        
-        return arr
+    # extract_risks_v2 已删除，请使用 extract_requirements_v1
+    # risks模块已废弃，统一使用requirements模块提取招标要求
     
     async def extract_requirements_v1(
         self,
@@ -945,21 +867,9 @@ class ExtractV2Service:
             f"stages_completed={len([r for r in results if not isinstance(r, Exception)])}/6"
         )
         
-        # 继续执行requirements抽取等后续步骤（与串行版本相同）
-        try:
-            logger.info(f"ExtractV2: Starting requirements extraction for project={project_id}")
-            if run_id:
-                self.dao.update_run(run_id, "running", progress=0.95, message="正在生成招标要求基准条款库...")
-            
-            requirements = await self.extract_requirements_v1(
-                project_id=project_id,
-                model_id=model_id,
-                run_id=None,
-            )
-            
-            logger.info(f"ExtractV2: Requirements extraction done - count={requirements.get('count', 0)}")
-        except Exception as req_err:
-            logger.error(f"ExtractV2: Requirements extraction failed (non-fatal): {req_err}")
+        # ❌ 已移除：追加调用 requirements 抽取
+        # 原因：与单独的"招标要求提取"功能重复
+        # 现在用户需要单独点击"招标要求提取"按钮来生成 tender_requirements
         
         return {
             "schema_version": "tender_info_v3",

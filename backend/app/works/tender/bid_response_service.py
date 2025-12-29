@@ -18,6 +18,81 @@ from app.services.dao.tender_dao import TenderDAO
 logger = logging.getLogger(__name__)
 
 
+def normalize_and_fix_response(resp: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    抽取后矫正器：修正明显错误的维度分类，并拆分复合事实
+    
+    规则：
+    1. dimension=="price" 且包含业绩关键词 → 强制改为 qualification
+    2. dimension=="doc_structure" 且包含证书关键词 → 强制改为 qualification
+    3. business 文本同时含质保和工期 → 拆成两条
+    
+    Returns:
+        修正后的 responses 列表（可能是1条或2条）
+    """
+    import re
+    import copy
+    
+    response_text = resp.get("response_text", "")
+    dimension = resp.get("dimension", "other")
+    
+    # 规则1: price 中的业绩金额 → qualification
+    if dimension == "price":
+        performance_keywords = r'(合同金额|项目业绩|中标金额|类似项目|历史业绩|业绩合同|已完成项目|完工项目金额|近\S*年\S*完成|业绩证明)'
+        if re.search(performance_keywords, response_text):
+            logger.warning(f"[Corrector] price→qualification: {response_text[:50]}...")
+            resp["dimension"] = "qualification"
+            resp["response_type"] = "document_ref"
+            # 标记为业绩证明
+            extracted_value = resp.get("extracted_value_json", {})
+            if not isinstance(extracted_value, dict):
+                extracted_value = {}
+            extracted_value["type"] = "past_performance"
+            resp["extracted_value_json"] = extracted_value
+            return [resp]
+    
+    # 规则2: doc_structure 中的证书 → qualification
+    if dimension == "doc_structure":
+        cert_keywords = r'(营业执照|授权书|授权委托书|资质证书|安全生产许可证|保证金回执|基本存款账户|银行开户许可证|财务审计报告|业绩证明|资格证书|建造师|项目经理)'
+        if re.search(cert_keywords, response_text):
+            logger.warning(f"[Corrector] doc_structure→qualification: {response_text[:50]}...")
+            resp["dimension"] = "qualification"
+            return [resp]
+    
+    # 规则3: business 同时含质保和工期 → 拆成两条
+    if dimension == "business":
+        has_warranty = bool(re.search(r'(质保|保修|售后|服务期|保修期|\d+\s*年|\d+\s*个月)', response_text))
+        has_duration = bool(re.search(r'(工期|交付|完成|验收|\d+\s*天|\d+\s*日|自然日)', response_text))
+        
+        if has_warranty and has_duration:
+            logger.warning(f"[Corrector] Splitting business with both warranty and duration: {response_text[:50]}...")
+            
+            # 创建两条记录
+            warranty_resp = copy.deepcopy(resp)
+            duration_resp = copy.deepcopy(resp)
+            
+            # 质保保留在 business
+            warranty_resp["dimension"] = "business"
+            warranty_resp["response_id"] = warranty_resp.get("response_id", "").replace("_resp_", "_warranty_")
+            # 尝试截取质保相关文本
+            warranty_match = re.search(r'(质保[^，。；]*|保修[^，。；]*|\d+\s*年[^，。；]*|\d+\s*个月[^，。；]*)', response_text)
+            if warranty_match:
+                warranty_resp["response_text"] = warranty_match.group(0)
+            
+            # 工期放到 schedule_quality
+            duration_resp["dimension"] = "schedule_quality"
+            duration_resp["response_id"] = duration_resp.get("response_id", "").replace("_resp_", "_duration_")
+            # 尝试截取工期相关文本
+            duration_match = re.search(r'(工期[^，。；]*|交付[^，。；]*|\d+\s*天[^，。；]*|\d+\s*日[^，。；]*)', response_text)
+            if duration_match:
+                duration_resp["response_text"] = duration_match.group(0)
+            
+            return [warranty_resp, duration_resp]
+    
+    # 无需修正，返回原样
+    return [resp]
+
+
 class BidResponseService:
     """投标响应要素抽取服务"""
     
@@ -153,6 +228,16 @@ class BidResponseService:
         """
         logger.info(f"BidResponseService: extract_bid_response start project_id={project_id}, bidder={bidder_name}")
         
+        # 0. 删除旧数据（避免重复抽取累积）
+        try:
+            self.dao._execute("""
+                DELETE FROM tender_bid_response_items 
+                WHERE project_id = %s AND bidder_name = %s
+            """, (project_id, bidder_name))
+            logger.info(f"BidResponseService: Deleted old bid responses for project={project_id}, bidder={bidder_name}")
+        except Exception as e:
+            logger.warning(f"BidResponseService: Failed to delete old data: {e}")
+        
         # 1. 获取 embedding provider
         embedding_provider = get_embedding_store().get_default()
         if not embedding_provider:
@@ -236,47 +321,51 @@ class BidResponseService:
         # 6. 落库到 tender_bid_response_items
         added_count = 0
         for resp in responses_list:
-            response_id = resp.get("response_id", str(uuid.uuid4()))
-            db_id = str(uuid.uuid4())
+            # ✅ Step 2: 应用矫正器（可能返回1条或2条）
+            corrected_resps = normalize_and_fix_response(resp)
             
-            # 旧字段（向后兼容）
-            extracted_value_json = resp.get("extracted_value_json", {})
-            evidence_chunk_ids = resp.get("evidence_chunk_ids", [])
-            
-            # 新字段
-            normalized_fields_json = resp.get("normalized_fields_json", {})
-            evidence_segment_ids = resp.get("evidence_segment_ids", [])
-            
-            # 兼容性处理
-            if not evidence_chunk_ids and evidence_segment_ids:
-                evidence_chunk_ids = evidence_segment_ids
-            elif not evidence_segment_ids and evidence_chunk_ids:
-                evidence_segment_ids = evidence_chunk_ids
-            
-            # 组装 evidence_json
-            evidence_json = self._build_evidence_json_from_segments(evidence_segment_ids, seg_map)
-            
-            # 插入数据库
-            import json
-            self.dao._execute("""
-                INSERT INTO tender_bid_response_items (
-                    id, project_id, bidder_name, dimension, response_type,
-                    response_text, extracted_value_json, evidence_chunk_ids,
-                    normalized_fields_json, evidence_json
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::text[], %s::jsonb, %s::jsonb)
-            """, (
-                db_id,
-                project_id,
-                extracted_bidder_name,
-                resp.get("dimension", "other"),
-                resp.get("response_type", "text"),
-                resp.get("response_text", ""),
-                json.dumps(extracted_value_json) if extracted_value_json else '{}',
-                evidence_chunk_ids,
-                json.dumps(normalized_fields_json) if normalized_fields_json else '{}',
-                json.dumps(evidence_json) if evidence_json else None,
-            ))
-            added_count += 1
+            for corrected_resp in corrected_resps:
+                response_id = corrected_resp.get("response_id", str(uuid.uuid4()))
+                db_id = str(uuid.uuid4())
+                
+                # 旧字段（向后兼容）
+                extracted_value_json = corrected_resp.get("extracted_value_json", {})
+                evidence_chunk_ids = corrected_resp.get("evidence_chunk_ids", [])
+                
+                # 新字段
+                normalized_fields_json = corrected_resp.get("normalized_fields_json", {})
+                evidence_segment_ids = corrected_resp.get("evidence_segment_ids", [])
+                
+                # 兼容性处理
+                if not evidence_chunk_ids and evidence_segment_ids:
+                    evidence_chunk_ids = evidence_segment_ids
+                elif not evidence_segment_ids and evidence_chunk_ids:
+                    evidence_segment_ids = evidence_chunk_ids
+                
+                # 组装 evidence_json
+                evidence_json = self._build_evidence_json_from_segments(evidence_segment_ids, seg_map)
+                
+                # 插入数据库
+                import json
+                self.dao._execute("""
+                    INSERT INTO tender_bid_response_items (
+                        id, project_id, bidder_name, dimension, response_type,
+                        response_text, extracted_value_json, evidence_chunk_ids,
+                        normalized_fields_json, evidence_json
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::text[], %s::jsonb, %s::jsonb)
+                """, (
+                    db_id,
+                    project_id,
+                    extracted_bidder_name,
+                    corrected_resp.get("dimension", "other"),
+                    corrected_resp.get("response_type", "text"),
+                    corrected_resp.get("response_text", ""),
+                    json.dumps(extracted_value_json) if extracted_value_json else '{}',
+                    evidence_chunk_ids,
+                    json.dumps(normalized_fields_json) if normalized_fields_json else '{}',
+                    json.dumps(evidence_json) if evidence_json else None,
+                ))
+                added_count += 1
         
         logger.info(f"BidResponseService: extract_bid_response done responses={len(responses_list)}, added={added_count}")
         

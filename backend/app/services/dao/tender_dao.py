@@ -438,32 +438,8 @@ class TenderDAO:
 
     # ==================== 风险管理 ====================
 
-    def replace_risks(self, project_id: str, items: List[Dict[str, Any]]):
-        """替换项目的所有风险"""
-        with self.pool.connection() as conn:
-            with conn.transaction():  # 显式事务保护
-                with conn.cursor() as cur:
-                    cur.execute("DELETE FROM tender_risks WHERE project_id=%s", (project_id,))
-                    for it in items:
-                        cur.execute(
-                            """
-                            INSERT INTO tender_risks
-                              (id, project_id, risk_type, title, description, suggestion, severity, tags_json, evidence_chunk_ids_json)
-                            VALUES
-                              (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
-                            """,
-                            (
-                                _id("risk"),
-                                project_id,
-                                it.get("risk_type") or "other",
-                                it.get("title") or "",
-                                it.get("description") or "",
-                                it.get("suggestion") or "",
-                                it.get("severity") or "medium",
-                                json.dumps(it.get("tags") or []),
-                                json.dumps(it.get("evidence_chunk_ids") or []),
-                            ),
-                        )
+    # replace_risks 已删除
+    # tender_risks表已废弃，请使用tender_requirements
             # with transaction() 自动提交或回滚，无需手动 commit
 
     # ==================== 目录管理 ====================
@@ -723,32 +699,61 @@ class TenderDAO:
                         )
             # with transaction() 自动提交或回滚，无需手动 commit
 
-    def list_review_items(self, project_id: str) -> List[Dict[str, Any]]:
-        """列出项目的所有审核项（V3版本：包含status、evaluator等字段）"""
-        rows = self._fetchall(
-            """SELECT 
-                   id, project_id, bidder_name, dimension,
-                   tender_requirement as requirement_text, 
-                   bid_response as response_text, 
-                   result, 
-                   status,
-                   evaluator,
-                   is_hard as rigid, 
-                   remark,
-                   requirement_id,
-                   matched_response_id,
-                   review_run_id,
-                   tender_evidence_chunk_ids_json as tender_evidence_chunk_ids, 
-                   bid_evidence_chunk_ids_json as bid_evidence_chunk_ids,
-                   evidence_json,
-                   rule_trace_json,
-                   computed_trace_json,
-                   created_at 
-               FROM tender_review_items 
-               WHERE project_id=%s 
-               ORDER BY created_at ASC""",
-            (project_id,),
-        )
+    def list_review_items(self, project_id: str, bidder_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """列出项目的所有审核项（V3版本：包含status、evaluator等字段）
+        
+        Args:
+            project_id: 项目ID
+            bidder_name: 投标人名称（可选，如果提供则只返回该投标人的审核结果）
+        """
+        if bidder_name:
+            sql = """SELECT 
+                       id, project_id, bidder_name, dimension,
+                       tender_requirement as requirement_text, 
+                       bid_response as response_text, 
+                       result, 
+                       status,
+                       evaluator,
+                       is_hard as rigid, 
+                       remark,
+                       requirement_id,
+                       matched_response_id,
+                       review_run_id,
+                       tender_evidence_chunk_ids_json as tender_evidence_chunk_ids, 
+                       bid_evidence_chunk_ids_json as bid_evidence_chunk_ids,
+                       evidence_json,
+                       rule_trace_json,
+                       computed_trace_json,
+                       created_at 
+                   FROM tender_review_items 
+                   WHERE project_id=%s AND bidder_name=%s 
+                   ORDER BY created_at ASC"""
+            params = (project_id, bidder_name)
+        else:
+            sql = """SELECT 
+                       id, project_id, bidder_name, dimension,
+                       tender_requirement as requirement_text, 
+                       bid_response as response_text, 
+                       result, 
+                       status,
+                       evaluator,
+                       is_hard as rigid, 
+                       remark,
+                       requirement_id,
+                       matched_response_id,
+                       review_run_id,
+                       tender_evidence_chunk_ids_json as tender_evidence_chunk_ids, 
+                       bid_evidence_chunk_ids_json as bid_evidence_chunk_ids,
+                       evidence_json,
+                       rule_trace_json,
+                       computed_trace_json,
+                       created_at 
+                   FROM tender_review_items 
+                   WHERE project_id=%s 
+                   ORDER BY created_at ASC"""
+            params = (project_id,)
+        
+        rows = self._fetchall(sql, params)
         # 确保数组字段格式正确，反序列化 JSON 字段
         for r in rows:
             for k in ("tender_evidence_chunk_ids", "bid_evidence_chunk_ids"):

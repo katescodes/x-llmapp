@@ -80,13 +80,6 @@ def list_modules(current_user: TokenData = Depends(require_permission("system.pr
                 "category": "extraction"
             },
             {
-                "id": "risks",
-                "name": "招标要求提取",
-                "description": "提取招标文件中的法律、技术、商务、合规要求",
-                "icon": "📋",
-                "category": "analysis"
-            },
-            {
                 "id": "directory",
                 "name": "目录生成",
                 "description": "自动生成投标文件语义大纲和章节结构",
@@ -287,7 +280,10 @@ def update_prompt(
             if not current:
                 raise HTTPException(status_code=404, detail="Prompt not found")
             
-            current_content, current_version = current
+            # 正确处理 DictRow
+            current_dict = dict(current)
+            current_content = current_dict["content"]
+            current_version = current_dict["version"]
             
             # 如果content有变化，保存历史版本
             if data.content and data.content != current_content:

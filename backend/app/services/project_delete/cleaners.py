@@ -196,7 +196,18 @@ class KnowledgeBaseResourceCleaner(ProjectResourceCleaner):
                 chunk_count = list(cur.fetchone().values())[0]
         
         doc_count = len(docs)
-        samples = [list(row.values())[1] or list(row.values())[0][:12] for row in docs[:5]]
+        # 优化：避免多次调用list(row.values())
+        samples = []
+        for row in docs[:5]:
+            values = list(row.values())
+            if len(values) > 1 and values[1]:
+                sample = values[1]
+            elif len(values) > 0:
+                sample = str(values[0])[:12]
+            else:
+                sample = ""
+            samples.append(sample)
+        
         physical_targets = [f"kb_collection: {kb_id}", f"chunks: {chunk_count}"]
         
         return {
