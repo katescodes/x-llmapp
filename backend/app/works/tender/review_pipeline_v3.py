@@ -1415,6 +1415,91 @@ class ReviewPipelineV3:
         
         return results
     
+    def _requirement_to_question(self, req: Dict) -> str:
+        """
+        将招标要求转换为问题
+        
+        策略：
+        - 资格类: "投标人是否具备/提供了 XXX？"
+        - 技术类: "投标人的 XXX 是否满足 YYY？"
+        - 商务类: "投标人的 XXX 条款是否满足要求？"
+        - 数值类: "投标人的 XXX 是多少？"
+        - 其他: 直接用原文
+        """
+        req_text = req.get("requirement_text", "")
+        dimension = req.get("dimension", "")
+        eval_method = req.get("eval_method", "")
+        
+        # 如果是数值类，问具体数值
+        if eval_method == "NUMERIC":
+            # 提取关键词
+            if "价格" in req_text or "报价" in req_text:
+                return f"投标人的投标报价是多少？要求：{req_text}"
+            elif "工期" in req_text or "期限" in req_text:
+                return f"投标人承诺的工期是多少天？要求：{req_text}"
+            elif "质保" in req_text or "保修" in req_text:
+                return f"投标人承诺的质保期是多少个月？要求：{req_text}"
+            else:
+                return f"投标人提供的数值是多少？要求：{req_text}"
+        
+        # 资格类：是否具备/提供
+        if dimension in ["qualification", "资格"]:
+            if "营业执照" in req_text:
+                return f"投标人是否提供了有效的营业执照？要求：{req_text}"
+            elif "资质" in req_text or "证书" in req_text:
+                return f"投标人是否提供了所需的资质证书？要求：{req_text}"
+            elif "授权" in req_text:
+                return f"投标人是否提供了有效的授权文件？要求：{req_text}"
+            else:
+                return f"投标人是否满足以下资格要求：{req_text}"
+        
+        # 技术类：是否满足
+        if dimension in ["technical", "技术"]:
+            return f"投标人的技术方案是否满足以下要求：{req_text}"
+        
+        # 商务类：条款是否满足
+        if dimension in ["business", "商务"]:
+            return f"投标人的商务条款是否满足以下要求：{req_text}"
+        
+        # 其他：直接用原文
+        return f"{req_text}"
+    
+    async def _qa_based_verification(
+        self,
+        req: Dict,
+        project_id: str,
+        bidder_name: str,
+        model_id: Optional[str] = None
+    ) -> Tuple[str, str, float, List[Dict[str, Any]]]:
+        """
+        基于问答的验证（QA-based Verification）
+        
+        流程：
+        1. 将requirement转换为question
+        2. 使用RAG检索相关投标文档段落
+        3. 调用LLM进行问答和符合性判断
+        4. 返回结果和证据
+        
+        Returns:
+            (status, remark, confidence, evidence_list)
+            status: PASS/WARN/FAIL/PENDING
+            remark: 判断理由
+            confidence: 置信度 0.0-1.0
+            evidence_list: 证据列表 [{"page_start", "quote", "heading_path"}]
+        """
+        # Step 1: 转换为问题
+        question = self._requirement_to_question(req)
+        
+        logger.info(f"QA Verification: req_id={req.get('requirement_id')}, question={question[:100]}")
+        
+        # Step 2: 检索（暂时返回空列表，下一步实现）
+        contexts = []
+        
+        # Step 3: LLM判断（暂时返回PENDING，下一步实现）
+        logger.warning(f"QA Verification: Not fully implemented, returning PENDING")
+        
+        return "PENDING", "QA验证功能开发中，需人工复核", 0.0, []
+    
     async def _llm_semantic_review(
         self,
         req: Dict,
