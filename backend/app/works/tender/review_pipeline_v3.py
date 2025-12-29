@@ -237,6 +237,63 @@ class ReviewPipelineV3:
         self.pool = pool
         self.llm = llm_orchestrator
     
+    def _is_process_clause(self, text: str) -> bool:
+        """
+        目标A: 判断是否为过程性/现场性条款
+        
+        这类条款不应进入审核流程，而是直接标记为 PENDING + out_of_scope
+        
+        关键词包括：
+        - 开标/评标相关：开标、评标、签到、报到、回避、询问
+        - 现场相关：现场、启封、封条、封口、密封
+        - 递交相关：送达、递交、收标地点、投标截止、开标时启封
+        - 规则相关：不足3家、不得开标、电讯形式
+        """
+        if not text:
+            return False
+        
+        # 过程性/现场性关键词
+        process_keywords = [
+            "开标", "评标", "现场", "签到", "报到", "回避", 
+            "询问", "启封", "封条", "封口", "密封", "送达", 
+            "递交", "收标地点", "不足3家", "不得开标", 
+            "电讯形式", "投标截止", "开标时启封"
+        ]
+        
+        # 统计命中的关键词数量
+        hits = sum(1 for kw in process_keywords if kw in text)
+        
+        # 命中任意关键词即判定为过程性条款
+        return hits > 0
+    
+    def _make_out_of_scope_item(self, req: Dict) -> Dict:
+        """
+        目标A: 为过程性条款生成 PENDING 结果
+        
+        标记 evaluator="out_of_scope" + rule_trace_json.scope="PROCESS"
+        """
+        return {
+            "requirement_id": req.get("requirement_id"),
+            "matched_response_id": None,
+            "dimension": req.get("dimension", "other"),
+            "clause_title": req.get("requirement_text", "")[:50],
+            "tender_requirement": req.get("requirement_text", ""),
+            "bid_response": "[过程性条款,不适用审核]",
+            "status": "PENDING",
+            "result": "risk",
+            "is_hard": False,
+            "remark": "过程性/现场性条款,不在本次审核范围内,需人工确认",
+            "evaluator": "out_of_scope",
+            "rule_trace_json": {
+                "scope": "PROCESS",
+                "reason": "process_or_onsite_clause",
+                "method": "keyword_match"
+            },
+            "evidence_json": [],
+            "tender_evidence_chunk_ids": req.get("evidence_chunk_ids", []),
+            "bid_evidence_chunk_ids": [],
+        }
+    
     async def run_pipeline(
         self,
         project_id: str,
@@ -263,14 +320,23 @@ class ReviewPipelineV3:
         logger.info(f"ReviewPipeline: START project={project_id}, bidder={bidder_name}, run_id={review_run_id}")
         
         # 1. 加载数据
-        requirements = self._load_requirements(project_id)
+        all_requirements = self._load_requirements(project_id)
         responses = self._load_responses(project_id, bidder_name)
         
-        logger.info(f"ReviewPipeline: Loaded {len(requirements)} requirements, {len(responses)} responses")
+        logger.info(f"ReviewPipeline: Loaded {len(all_requirements)} requirements, {len(responses)} responses")
         
-        if not requirements:
+        if not all_requirements:
             logger.warning("ReviewPipeline: No requirements found")
             return {"review_items": [], "stats": {}}
+        
+        # 目标A: 分流过程性条款 (不进入 HardGate/Quant/Semantic)
+        process_reqs = [r for r in all_requirements if self._is_process_clause(r.get("requirement_text", ""))]
+        requirements = [r for r in all_requirements if not self._is_process_clause(r.get("requirement_text", ""))]
+        
+        logger.info(f"ReviewPipeline: Filtered {len(process_reqs)} process clauses, {len(requirements)} for review")
+        
+        # 为过程性条款生成 out_of_scope 结果
+        out_of_scope_results = [self._make_out_of_scope_item(r) for r in process_reqs]
         
         # Step F1: 批量预取 doc_segments
         all_segment_ids = self._collect_all_segment_ids(requirements, responses)
@@ -300,8 +366,8 @@ class ReviewPipelineV3:
         consistency_results = self._consistency_check(responses)
         logger.info(f"ReviewPipeline: Consistency check produced {len(consistency_results)} results")
         
-        # 7. 合并所有结果
-        all_results = hard_gate_results + quant_results + semantic_results + consistency_results
+        # 7. 合并所有结果（目标A: 加入 out_of_scope_results）
+        all_results = out_of_scope_results + hard_gate_results + quant_results + semantic_results + consistency_results
         
         # 8. 落库（传入 review_run_id）
         self._save_review_items(project_id, bidder_name, all_results, review_run_id)
@@ -580,20 +646,73 @@ class ReviewPipelineV3:
         
         return evidence_json, tender_ids, bid_ids
     
+    def _mapping_score(self, req_text: str, resp: Dict) -> int:
+        """
+        目标B: 轻量打分 - 关键词匹配
+        
+        统计 req_text 中出现的关键词，有多少也在 resp.response_text 或 
+        resp.normalized_fields_json 中出现。
+        
+        关键词词表（极轻量版）：
+        - 保证金相关：保证金、投标保证金
+        - 价格相关：报价、投标总价、预算、最高限价
+        - 资质相关：授权书、法定代表人、身份证、营业执照、统一社会信用代码、资质、业绩
+        - 签字盖章：盖章、公章、签字、签章
+        - 文档相关：目录、页码
+        - 工期相关：工期、交付、验收、质保、售后、付款
+        """
+        if not req_text:
+            return 0
+        
+        # 关键词词表
+        keywords = [
+            # 保证金
+            "保证金", "投标保证金",
+            # 价格
+            "报价", "投标总价", "预算", "最高限价", "报价单",
+            # 资质/证件
+            "授权书", "法定代表人", "身份证", "营业执照", "统一社会信用代码", 
+            "资质", "业绩", "证书", "许可证", "认证",
+            # 签字盖章
+            "盖章", "公章", "签字", "签章", "法人章",
+            # 文档
+            "目录", "页码",
+            # 工期/服务
+            "工期", "交付", "验收", "质保", "售后", "付款", "服务期"
+        ]
+        
+        # 提取 response 文本
+        resp_text = resp.get("response_text", "")
+        
+        # 也搜索 normalized_fields_json (转为字符串)
+        normalized_fields = resp.get("normalized_fields_json", {})
+        if isinstance(normalized_fields, dict):
+            import json
+            resp_text += " " + json.dumps(normalized_fields, ensure_ascii=False)
+        
+        # 统计命中数
+        score = 0
+        for kw in keywords:
+            if kw in req_text and kw in resp_text:
+                score += 1
+        
+        return score
+    
     def _build_candidates(
         self,
         requirements: List[Dict],
         responses: List[Dict],
-        top_k: int = 5
+        top_k: int = 5,
+        keyword_threshold: int = 1  # 目标B: 关键词打分阈值
     ) -> List[Dict[str, Any]]:
         """
-        Step 1: Mapping (Step B: 改进版)
-        为每个 requirement 找候选 response（基于 dimension + 相似度）
+        Step 1: Mapping (目标B: 改进版 - 轻量打分 + 阈值拒配)
+        为每个 requirement 找候选 response（基于 dimension + 相似度 + 关键词打分）
         
-        改进点：
-        1. 不再只返回单个 response，而是 topK 候选列表
-        2. 计算轻量相似度分数（Jaccard）
-        3. 记录候选信息到 trace
+        改进点（目标B）：
+        1. 在同维度里，用轻量的关键词匹配打分选候选 response
+        2. 若最佳分数 < 阈值 → response=None（不要硬配）
+        3. 这样能让"售后承诺"不再莫名其妙匹配"保证金/授权书/开标签到"
         """
         candidates = []
         
@@ -607,16 +726,26 @@ class ReviewPipelineV3:
                 if resp.get("dimension") == req_dimension
             ]
             
-            # 计算相似度并排序
+            # 计算相似度并排序（目标B: 同时用 Jaccard + 关键词打分）
             scored_responses = []
             for resp in matched_responses:
                 resp_text = resp.get("response_text", "")
-                # 使用 Jaccard 相似度（Token overlap）
-                score = _jaccard_similarity(req_text, resp_text)
+                
+                # 1. Jaccard 相似度（Token overlap）
+                jaccard_score = _jaccard_similarity(req_text, resp_text)
+                
+                # 2. 目标B: 关键词匹配打分
+                keyword_score = self._mapping_score(req_text, resp)
+                
+                # 3. 综合分数（关键词权重更高）
+                combined_score = keyword_score * 10 + jaccard_score
+                
                 scored_responses.append({
                     "response": resp,
-                    "score": score,
-                    "method": "jaccard"
+                    "score": combined_score,
+                    "keyword_score": keyword_score,
+                    "jaccard_score": jaccard_score,
+                    "method": "keyword_jaccard"
                 })
             
             # 按分数降序排序
@@ -625,14 +754,26 @@ class ReviewPipelineV3:
             # 取 topK
             top_candidates = scored_responses[:top_k]
             
-            # best_response 是 top1（如果有）
-            best_response = top_candidates[0]["response"] if top_candidates else None
+            # 目标B: 若最佳分数的关键词打分 < 阈值 → best_response=None（不要硬配）
+            best_response = None
+            if top_candidates:
+                best_candidate = top_candidates[0]
+                if best_candidate["keyword_score"] >= keyword_threshold:
+                    best_response = best_candidate["response"]
+                else:
+                    # 关键词打分不足，不匹配
+                    logger.debug(
+                        f"ReviewPipeline: Mapping rejected for req={req.get('requirement_id')}, "
+                        f"best_keyword_score={best_candidate['keyword_score']} < {keyword_threshold}"
+                    )
             
             # 构建候选信息（用于 trace）
             candidates_info = [
                 {
                     "response_id": str(c["response"].get("id")),
                     "score": round(c["score"], 3),
+                    "keyword_score": c["keyword_score"],
+                    "jaccard_score": round(c["jaccard_score"], 3),
                     "method": c["method"]
                 }
                 for c in top_candidates[:3]  # 只保留前3个到 trace
@@ -640,7 +781,7 @@ class ReviewPipelineV3:
             
             candidates.append({
                 "requirement": req,
-                "response": best_response,  # 最佳匹配（top1）
+                "response": best_response,  # 最佳匹配（可能为 None）
                 "candidates": top_candidates,  # 全部候选
                 "candidates_info": candidates_info,  # 用于 trace
                 "requirement_id": req.get("requirement_id"),
@@ -720,7 +861,12 @@ class ReviewPipelineV3:
         resp: Optional[Dict],
         eval_method: str
     ) -> Tuple[str, str, Dict]:
-        """执行确定性评估"""
+        """
+        执行确定性评估
+        
+        目标C: PRESENCE 不再"长度>10就PASS"
+        改为：必须命中材料关键词（与目标B使用同一词表）
+        """
         
         # 如果没有响应
         if not resp:
@@ -732,11 +878,63 @@ class ReviewPipelineV3:
         response_text = resp.get("response_text", "")
         
         if eval_method == "PRESENCE":
-            # 存在性检查
-            if response_text and len(response_text.strip()) > 10:
-                return "PASS", "已提供", {"method": "PRESENCE", "found": True}
+            # 目标C: 存在性检查 - 改为关键词命中验证
+            
+            # 1. 从 requirement_text 提取材料关键词（使用目标B的词表）
+            req_text = req.get("requirement_text", "")
+            material_keywords = [
+                "保证金", "投标保证金",
+                "报价", "投标总价", "预算", "最高限价", "报价单",
+                "授权书", "法定代表人", "身份证", "营业执照", "统一社会信用代码", 
+                "资质", "业绩", "证书", "许可证", "认证",
+                "盖章", "公章", "签字", "签章", "法人章",
+                "目录", "页码",
+                "工期", "交付", "验收", "质保", "售后", "付款", "服务期"
+            ]
+            
+            # 2. 找到 requirement 中出现的关键词
+            req_keywords = [kw for kw in material_keywords if kw in req_text]
+            
+            # 3. 如果 requirement 没有任何可识别关键词 → PENDING（无法验证）
+            if not req_keywords:
+                return "PENDING", "无法识别材料类型,需人工验证", {
+                    "method": "PRESENCE",
+                    "reason": "no_identifiable_keywords",
+                    "req_keywords": []
+                }
+            
+            # 4. 检查 response 中是否命中关键词
+            matched_keywords = [kw for kw in req_keywords if kw in response_text]
+            
+            # 5. 判断逻辑
+            if matched_keywords:
+                # 命中 ≥1 → PASS
+                return "PASS", f"已提供（命中关键词: {', '.join(matched_keywords[:3])}）", {
+                    "method": "PRESENCE",
+                    "found": True,
+                    "req_keywords": req_keywords,
+                    "matched_keywords": matched_keywords
+                }
             else:
-                return "FAIL", "未提供或内容不足", {"method": "PRESENCE", "found": False}
+                # 命中不了 → PENDING（目标C: 极小改动版先用 PENDING 更保守）
+                if len(response_text.strip()) > 10:
+                    # 有内容但关键词不匹配
+                    return "PENDING", f"内容不明确,未命中预期关键词({', '.join(req_keywords[:3])}),需人工验证", {
+                        "method": "PRESENCE",
+                        "found": False,
+                        "req_keywords": req_keywords,
+                        "matched_keywords": [],
+                        "has_content": True
+                    }
+                else:
+                    # 内容不足
+                    return "FAIL", "未提供或内容不足", {
+                        "method": "PRESENCE",
+                        "found": False,
+                        "req_keywords": req_keywords,
+                        "matched_keywords": [],
+                        "has_content": False
+                    }
         
         elif eval_method == "VALIDITY":
             # 有效性检查（简化版，实际需要更复杂的逻辑）
