@@ -2160,7 +2160,7 @@ class TenderService:
         bidder_name: Optional[str],
         bid_asset_ids: List[str],
         custom_rule_pack_ids: Optional[List[str]] = None,
-        use_llm_semantic: bool = False,
+        use_llm_semantic: bool = True,  # ✅ 默认启用QA验证
         run_id: Optional[str] = None,
         owner_id: Optional[str] = None,
     ):
@@ -2172,7 +2172,7 @@ class TenderService:
             custom_rule_pack_ids: 自定义规则包ID列表（应用规则包中的规则）
             bidder_name: 投标人名称（选择投标人）
             bid_asset_ids: 投标资产ID列表（精确指定文件）
-            use_llm_semantic: 是否使用LLM语义审核（默认False）
+            use_llm_semantic: 是否使用LLM语义审核（QA验证，默认True）
             owner_id: 任务所有者ID（可选）
         """
         # 旁路双写：创建 platform job（如果启用）

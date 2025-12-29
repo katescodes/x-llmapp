@@ -32,7 +32,7 @@ class ReviewV3Service:
         model_id: Optional[str] = None,
         custom_rule_pack_ids: Optional[List[str]] = None,
         run_id: Optional[str] = None,
-        use_llm_semantic: bool = False,
+        use_llm_semantic: bool = True,  # ✅ 默认启用QA验证
     ) -> Dict[str, Any]:
         """
         运行审核 V3（固定流水线）
