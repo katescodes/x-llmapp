@@ -1487,18 +1487,67 @@ class ReviewPipelineV3:
             confidence: 置信度 0.0-1.0
             evidence_list: 证据列表 [{"page_start", "quote", "heading_path"}]
         """
+        from app.platform.retrieval.facade import RetrievalFacade
+        
         # Step 1: 转换为问题
         question = self._requirement_to_question(req)
         
         logger.info(f"QA Verification: req_id={req.get('requirement_id')}, question={question[:100]}")
         
-        # Step 2: 检索（暂时返回空列表，下一步实现）
-        contexts = []
+        # Step 2: 检索投标文档相关段落
+        try:
+            retrieval_facade = RetrievalFacade(self.pool)
+            
+            # 根据requirement的dimension决定检索范围
+            dimension = req.get("dimension", "")
+            doc_types = ["bid"]  # 只检索投标文档
+            
+            # 执行检索（top_k=10，获取更多候选）
+            retrieved_chunks = await retrieval_facade.retrieve(
+                query=question,
+                project_id=project_id,
+                doc_types=doc_types,
+                top_k=10,
+            )
+            
+            logger.info(f"QA Verification: Retrieved {len(retrieved_chunks)} chunks for req_id={req.get('requirement_id')}")
+            
+            # 转换为contexts（文本列表）
+            contexts = []
+            evidence_list = []
+            
+            for chunk in retrieved_chunks[:8]:  # 限制最多8个context（避免token过多）
+                # 从meta中获取元数据
+                meta = getattr(chunk, 'meta', {}) or {}
+                page_start = meta.get('page_start') or meta.get('page_no')
+                page_end = meta.get('page_end')
+                heading_path = meta.get('heading_path', '')
+                
+                context_text = f"[页码: {page_start or '?'}]\n{chunk.text}"
+                contexts.append(context_text)
+                
+                # 构造evidence结构
+                evidence_list.append({
+                    "role": "bid",
+                    "page_start": page_start,
+                    "page_end": page_end,
+                    "heading_path": heading_path,
+                    "quote": chunk.text[:300] if chunk.text else "",  # 限制长度
+                    "segment_id": chunk.chunk_id,  # 使用chunk_id作为segment_id
+                })
+            
+            if not contexts:
+                logger.warning(f"QA Verification: No relevant context found for req_id={req.get('requirement_id')}")
+                return "PENDING", "未检索到相关投标文档内容，需人工复核", 0.0, []
+            
+        except Exception as e:
+            logger.error(f"QA Verification: Retrieval failed for req_id={req.get('requirement_id')}: {e}")
+            return "PENDING", f"检索失败: {str(e)}", 0.0, []
         
-        # Step 3: LLM判断（暂时返回PENDING，下一步实现）
-        logger.warning(f"QA Verification: Not fully implemented, returning PENDING")
+        # Step 3: LLM判断（下一步实现）
+        logger.warning(f"QA Verification: LLM judgment not implemented, returning PENDING")
         
-        return "PENDING", "QA验证功能开发中，需人工复核", 0.0, []
+        return "PENDING", f"QA验证-已检索到{len(contexts)}个相关段落，LLM判断功能开发中", 0.0, evidence_list
     
     async def _llm_semantic_review(
         self,
