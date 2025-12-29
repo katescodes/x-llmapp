@@ -313,12 +313,14 @@ class BidResponseService:
             print(f"[DEBUG BidResponse] responses length: {len(result.data.get('responses', []))}")
         
         if isinstance(result.data, dict):
-            # 检查 schema_version
+            # 检查 schema_version (支持v2-v5)
             schema_version = result.data.get("schema_version", "unknown")
             logger.info(f"BidResponseService: schema_version={schema_version}")
             
-            if schema_version != "bid_response_v2":
-                logger.warning(f"BidResponseService: Expected v2 schema but got {schema_version}")
+            # ✅ 兼容v2-v5版本
+            expected_versions = ["bid_response_v2", "bid_response_v3", "bid_response_v5"]
+            if schema_version not in expected_versions:
+                logger.warning(f"BidResponseService: Unexpected schema version: {schema_version}, expected one of {expected_versions}")
             
             responses_list = result.data.get("responses", [])
             logger.info(f"BidResponseService: parsed responses_list length={len(responses_list)}")
