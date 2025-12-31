@@ -10,7 +10,7 @@ from psycopg_pool import ConnectionPool
 from app.platform.extraction.engine import ExtractionEngine
 from app.platform.retrieval.facade import RetrievalFacade
 from app.services.embedding_provider_store import get_embedding_store
-from .extraction_specs.directory_v2 import build_directory_spec_async
+from .schemas.directory_v2 import build_directory_spec_async
 
 logger = logging.getLogger(__name__)
 
@@ -32,101 +32,49 @@ class ExtractV2Service:
         project_id: str,
         model_id: Optional[str],
         run_id: Optional[str] = None,
-        use_staged: bool = True,
     ) -> Dict[str, Any]:
         """
-        抽取项目信息 (v3) - 九阶段顺序抽取
+        抽取项目信息 (V3) - 六阶段顺序/并行抽取
         
-        ⚠️ V3 版本：六大类招标信息抽取（合并版）
-        
-        优先从数据库加载最新的prompt模板，如果数据库中没有则使用文件fallback
+        使用基于Checklist的P0+P1两阶段提取框架
         
         Args:
             project_id: 项目ID
             model_id: 模型ID
             run_id: 运行ID
-            use_staged: 是否使用九阶段抽取（默认True）
         
         Returns:
             {
                 "schema_version": "tender_info_v3",
                 "project_overview": {...},
-                "scope_and_lots": {...},
-                "schedule_and_submission": {...},
                 "bidder_qualification": {...},
                 "evaluation_and_scoring": {...},
                 "business_terms": {...},
                 "technical_requirements": {...},
                 "document_preparation": {...},
-                "bid_security": {...},
                 "evidence_chunk_ids": [...],
                 "evidence_spans": [...],
                 "retrieval_trace": {...}
             }
         """
-        logger.info(f"ExtractV2: extract_project_info_v3 start project_id={project_id} use_staged={use_staged}")
+        logger.info(f"ExtractV2: extract_project_info_v2 start project_id={project_id}")
         
-        # 1. 获取 embedding provider
+        # 获取 embedding provider
         embedding_provider = get_embedding_store().get_default()
         if not embedding_provider:
             raise ValueError("No embedding provider configured")
         
-        # 2. 构建 spec（使用异步版本，支持数据库加载）
-        from app.works.tender.extraction_specs.project_info_v2 import build_project_info_spec_async
+        # 从环境变量读取是否启用并行
+        import os
+        parallel_enabled = os.getenv("EXTRACT_PROJECT_INFO_PARALLEL", "false").lower() in ("true", "1", "yes")
         
-        if use_staged:
-            # 使用九阶段抽取（V3版本）
-            # 从环境变量读取是否启用并行
-            import os
-            parallel_enabled = os.getenv("EXTRACT_PROJECT_INFO_PARALLEL", "false").lower() in ("true", "1", "yes")
-            
-            return await self._extract_project_info_staged(
-                project_id=project_id,
-                model_id=model_id,
-                run_id=run_id,
-                embedding_provider=embedding_provider,
-                parallel=parallel_enabled,
-            )
-        else:
-            # 使用原有的一次性抽取（不推荐，返回V3结构）
-            spec = await build_project_info_spec_async(self.pool)
-            
-            # 3. 调用引擎
-            result = await self.engine.run(
-                spec=spec,
-                retriever=self.retriever,
-                llm=self.llm,
-                project_id=project_id,
-                model_id=model_id,
-                run_id=run_id,
-                embedding_provider=embedding_provider,
-            )
-            
-            # 调试日志：查看实际返回的数据结构
-            logger.info(
-                f"ExtractV2: extract_project_info_v3 done "
-                f"evidence={len(result.evidence_chunk_ids)} "
-                f"data_keys={list(result.data.keys()) if isinstance(result.data, dict) else 'NOT_DICT'} "
-                f"data_type={type(result.data).__name__} "
-                f"data_empty={not bool(result.data)}"
-            )
-            
-            # 如果 data 是空的，记录警告
-            if not result.data or (isinstance(result.data, dict) and not result.data):
-                logger.warning(
-                    f"ExtractV2: extract_project_info_v3 returned EMPTY data! "
-                    f"project_id={project_id} "
-                    f"result.data={result.data}"
-            )
-            
-            # 4. 返回结果（V3结构：顶层直接是六大类）
-            return {
-                "schema_version": "tender_info_v3",
-                **result.data,  # 展开六大类
-                "evidence_chunk_ids": result.evidence_chunk_ids,
-                "evidence_spans": result.evidence_spans,
-                "retrieval_trace": result.retrieval_trace.__dict__ if result.retrieval_trace else {}
-            }
+        return await self._extract_project_info_staged(
+            project_id=project_id,
+            model_id=model_id,
+            run_id=run_id,
+            embedding_provider=embedding_provider,
+            parallel=parallel_enabled,
+        )
     
     async def _extract_project_info_staged(
         self,
@@ -191,7 +139,8 @@ class ExtractV2Service:
                 project_id=project_id,
                 top_k=150,  # 获取足够多的上下文
                 max_context_chunks=100,
-                sort_by_position=True
+                sort_by_position=True,
+                filter_contract_clauses=True,  # ✨ 启用合同条款过滤
             )
             
             if context_data.used_chunks == 0:
@@ -1592,206 +1541,3 @@ class ExtractV2Service:
             return []
             raise
     
-    async def prepare_tender_for_audit(
-        self,
-        project_id: str,
-        model_id: Optional[str] = None,
-        checklist_template: str = "engineering",
-    ) -> Dict[str, Any]:
-        """
-        招标侧统一准备（一次性完成：项目信息 + 招标要求）
-        
-        优势：
-        1. 一次检索，两次使用（复用上下文）
-        2. 数据一致性（基准信息和规则库来自相同证据）
-        3. 减少成本（避免重复检索）
-        
-        Args:
-            project_id: 项目ID
-            model_id: 模型ID
-            checklist_template: 清单模板名称
-            
-        Returns:
-            {
-                "project_info": {...},  # 项目信息抽取结果
-                "requirements": {...},  # 招标要求抽取结果
-                "extraction_guide": {...},  # 提取指南
-                "context_stats": {
-                    "total_chunks": 150,
-                    "used_chunks": 100,
-                    "context_length": 50000
-                }
-            }
-        """
-        logger.info(
-            f"ExtractV2: prepare_tender_for_audit start "
-            f"project_id={project_id}, checklist_template={checklist_template}"
-        )
-        
-        try:
-            # 1. 使用公共检索组件获取招标上下文（一次检索）
-            from .tender_context_retriever import TenderContextRetriever
-            
-            context_retriever = TenderContextRetriever(self.retriever)
-            
-            logger.info("Step 1: 检索招标文档上下文（公共检索）...")
-            context_data = await context_retriever.retrieve_tender_context(
-                project_id=project_id,
-                top_k=150,
-                max_context_chunks=100,
-                sort_by_position=True,
-            )
-            
-            logger.info(
-                f"上下文检索完成: total={context_data.total_chunks}, "
-                f"used={context_data.used_chunks}, length={len(context_data.context_text)}"
-            )
-            
-            if context_data.used_chunks == 0:
-                raise ValueError(f"未检索到招标文档内容，project_id={project_id}")
-            
-            # 2. 使用同一份上下文先抽取项目信息
-            logger.info("Step 2: 抽取项目信息（复用上下文）...")
-            project_info_result = await self._extract_project_info_with_context(
-                project_id=project_id,
-                model_id=model_id,
-                context_data=context_data,
-            )
-            
-            logger.info(f"项目信息抽取完成: {project_info_result.get('status')}")
-            
-            # 3. 再用同一份上下文抽取招标要求
-            logger.info("Step 3: 抽取招标要求（复用上下文）...")
-            requirements_result = await self._extract_requirements_with_context(
-                project_id=project_id,
-                model_id=model_id,
-                checklist_template=checklist_template,
-                context_data=context_data,
-            )
-            
-            logger.info(
-                f"招标要求抽取完成: {requirements_result.get('count')} 条要求"
-            )
-            
-            # 4. 生成并保存 extraction_guide（统一键名）
-            logger.info("Step 4: 生成投标响应提取指南...")
-            from .requirement_postprocessor import generate_bid_response_extraction_guide
-            
-            requirements = requirements_result.get("requirements", [])
-            extraction_guide = generate_bid_response_extraction_guide(requirements)
-            
-            # 保存到 tender_projects.meta_json（使用统一键名 "extraction_guide"）
-            await self._update_project_meta(project_id, {
-                "extraction_guide": extraction_guide
-            })
-            
-            logger.info("提取指南已生成并保存")
-            
-            # 5. 返回完整结果
-            result = {
-                "project_info": project_info_result,
-                "requirements": requirements_result,
-                "extraction_guide": extraction_guide,
-                "context_stats": {
-                    "total_chunks": context_data.total_chunks,
-                    "used_chunks": context_data.used_chunks,
-                    "context_length": len(context_data.context_text),
-                },
-                "status": "success",
-            }
-            
-            logger.info(
-                f"ExtractV2: prepare_tender_for_audit complete - "
-                f"项目信息=OK, 招标要求={requirements_result.get('count')}条, "
-                f"extraction_guide=已生成"
-            )
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"ExtractV2: prepare_tender_for_audit failed: {e}", exc_info=True)
-            raise
-    
-    async def _extract_project_info_with_context(
-        self,
-        project_id: str,
-        model_id: Optional[str],
-        context_data,
-    ) -> Dict[str, Any]:
-        """使用已检索的上下文抽取项目信息（内部方法）"""
-        # TODO: 复用 extract_project_info_v2/v3 的逻辑，但使用提供的 context_data
-        # 暂时调用原方法（后续可优化为直接使用 context_data）
-        return await self.extract_project_info_v2(
-            project_id=project_id,
-            model_id=model_id,
-            use_staged=False,
-        )
-    
-    async def _extract_requirements_with_context(
-        self,
-        project_id: str,
-        model_id: Optional[str],
-        checklist_template: str,
-        context_data,
-    ) -> Dict[str, Any]:
-        """使用已检索的上下文抽取招标要求（内部方法）"""
-        # TODO: 复用 extract_requirements_v2 的逻辑，但使用提供的 context_data
-        # 暂时调用原方法（后续可优化为直接使用 context_data）
-        return await self.extract_requirements_v2(
-            project_id=project_id,
-            model_id=model_id,
-            checklist_template=checklist_template,
-        )
-    
-    def _filter_out_format_and_contract(self, requirements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        过滤排除合同条款和投标文件格式范例
-        
-        排除规则：
-        1. 合同类：requirement_text包含"合同"、"协议"、"甲方"、"乙方"等
-        2. 格式类：requirement_text包含"格式"、"范本"、"样本"、"模板"等
-        
-        Args:
-            requirements: 原始要求列表
-            
-        Returns:
-            过滤后的要求列表
-        """
-        # 合同关键词
-        contract_keywords = [
-            "合同范本", "合同草案", "拟签订的合同", "合同协议书", "合同文本", "合同条款",
-            "甲方应", "乙方应", "甲方负责", "乙方负责", "甲方权利", "乙方义务",
-            "违约责任", "争议解决", "合同签订", "合同生效", "合同终止"
-        ]
-        
-        # 格式范例关键词
-        format_keywords = [
-            "投标文件格式", "编制格式", "参考格式", "格式范本", "格式要求",
-            "样本", "样表", "模板", "范本", "格式如下", "格式见附件",
-            "授权书格式", "承诺函格式", "报价表格式", "封面格式"
-        ]
-        
-        filtered = []
-        
-        for req in requirements:
-            requirement_text = req.get("requirement_text", "")
-            if not requirement_text:
-                filtered.append(req)
-                continue
-            
-            # 检查是否包含合同关键词
-            is_contract = any(keyword in requirement_text for keyword in contract_keywords)
-            
-            # 检查是否包含格式关键词
-            is_format = any(keyword in requirement_text for keyword in format_keywords)
-            
-            # 不是合同也不是格式，保留
-            if not is_contract and not is_format:
-                filtered.append(req)
-            else:
-                reason = "合同条款" if is_contract else "格式范例"
-                logger.debug(f"Filtered out requirement ({reason}): {requirement_text[:50]}...")
-        
-        return filtered
-
-

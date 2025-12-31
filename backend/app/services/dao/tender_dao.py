@@ -308,53 +308,6 @@ class TenderDAO:
 
     # ==================== KB 轻量入库 ====================
 
-    def create_kb_document(
-        self,
-        kb_id: str,
-        filename: str,
-        content_hash: str,
-        meta_json: Dict[str, Any],
-        kb_category: str = "tender_app",
-    ) -> str:
-        """创建 KB 文档记录"""
-        doc_id = _id("doc")
-        self._execute(
-            """
-            INSERT INTO kb_documents (id, kb_id, filename, source, content_hash, status, kb_category, created_at, updated_at, meta_json)
-            VALUES (%s, %s, %s, %s, %s, 'ready', %s, NOW(), NOW(), %s::jsonb)
-            """,
-            (doc_id, kb_id, filename, f"upload://{filename}", content_hash, kb_category, json.dumps(meta_json or {})),
-        )
-        return doc_id
-
-    def insert_kb_chunks(
-        self,
-        kb_id: str,
-        doc_id: str,
-        chunks: List[Dict[str, Any]],
-        kb_category: str = "tender_app",
-    ) -> List[str]:
-        """批量插入 KB chunks"""
-        chunk_ids: List[str] = []
-        with self.pool.connection() as conn:
-            with conn.cursor() as cur:
-                for c in chunks:
-                    cid = _id("chunk")
-                    chunk_ids.append(cid)
-                    title = c.get("title") or ""
-                    url = c.get("url") or ""
-                    position = int(c.get("position") or 0)
-                    content = c.get("content") or ""
-                    cur.execute(
-                        """
-                        INSERT INTO kb_chunks (chunk_id, kb_id, doc_id, title, url, position, content, kb_category, created_at, tsv)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), to_tsvector('simple', %s))
-                        """,
-                        (cid, kb_id, doc_id, title, url, position, content, kb_category, content),
-                    )
-            conn.commit()
-        return chunk_ids
-
     def lookup_chunks(self, chunk_ids: List[str]) -> List[Dict[str, Any]]:
         """根据 chunk_ids 查询 chunks（从新的 doc_segments 表）"""
         if not chunk_ids:

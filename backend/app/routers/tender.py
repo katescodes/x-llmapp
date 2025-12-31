@@ -1103,7 +1103,68 @@ def apply_template_directory(project_id: str, req: TemplateDirReq, request: Requ
         raise HTTPException(status_code=404, detail=str(e))
 
 
-# ==================== 投标响应抽取 ====================
+
+# ==================== 自定义规则（简化输入） ====================
+
+class SimpleRuleCreateReq(BaseModel):
+    """简化规则创建请求"""
+    rule_text: str = Field(..., description="规则文本，支持多条规则（用空行分隔）")
+    pack_name: Optional[str] = Field(None, description="规则包名称（可选）")
+
+@router.post("/projects/{project_id}/rules/create-from-text")
+def create_rules_from_text_api(
+    project_id: str,
+    req: SimpleRuleCreateReq,
+    request: Request,
+    user=Depends(get_current_user_sync),
+):
+    """
+    从文本创建自定义规则（简化接口）
+    
+    用户只需输入规则文本，系统自动解析并创建规则包。
+    
+    支持格式：
+    1. 结构化格式：
+       ```
+       维度：资格条件
+       规则：投标人注册资本不得低于1000万元
+       类型：硬性
+       ```
+    
+    2. 自由文本格式：
+       ```
+       投标人注册资本不得低于1000万元（硬性要求）
+       ```
+    
+    返回：
+        {
+            "pack_id": "规则包ID",
+            "pack_name": "规则包名称",
+            "rules_count": 3,
+            "rules": [...]
+        }
+    """
+    from app.works.tender.simple_rule_parser import create_rules_from_text
+    from app.services.dao.tender_dao import TenderDAO
+    
+    try:
+        dao = TenderDAO()
+        result = create_rules_from_text(
+            pool=dao.pool,
+            project_id=project_id,
+            rule_text=req.rule_text,
+            pack_name=req.pack_name,
+            owner_id=user.get("id"),
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"创建规则失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"创建规则失败: {str(e)}")
+
+
+# ==================== 投标响应提取 ====================
 
 @router.post("/projects/{project_id}/extract-bid-responses")
 def extract_bid_responses(
@@ -1296,8 +1357,9 @@ def get_bid_responses(
     pool = _get_pool(request)
     
     try:
+        import psycopg.rows
         with pool.connection() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
                 if bidder_name:
                     cur.execute("""
                         SELECT 
@@ -1377,66 +1439,6 @@ def get_bid_responses(
         import logging
         logging.getLogger(__name__).exception(f"Get bid responses failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ==================== 自定义规则（简化输入） ====================
-
-class SimpleRuleCreateReq(BaseModel):
-    """简化规则创建请求"""
-    rule_text: str = Field(..., description="规则文本，支持多条规则（用空行分隔）")
-    pack_name: Optional[str] = Field(None, description="规则包名称（可选）")
-
-@router.post("/projects/{project_id}/rules/create-from-text")
-def create_rules_from_text_api(
-    project_id: str,
-    req: SimpleRuleCreateReq,
-    request: Request,
-    user=Depends(get_current_user_sync),
-):
-    """
-    从文本创建自定义规则（简化接口）
-    
-    用户只需输入规则文本，系统自动解析并创建规则包。
-    
-    支持格式：
-    1. 结构化格式：
-       ```
-       维度：资格条件
-       规则：投标人注册资本不得低于1000万元
-       类型：硬性
-       ```
-    
-    2. 自由文本格式：
-       ```
-       投标人注册资本不得低于1000万元（硬性要求）
-       ```
-    
-    返回：
-        {
-            "pack_id": "规则包ID",
-            "pack_name": "规则包名称",
-            "rules_count": 3,
-            "rules": [...]
-        }
-    """
-    from app.works.tender.simple_rule_parser import create_rules_from_text
-    from app.services.dao.tender_dao import TenderDAO
-    
-    try:
-        dao = TenderDAO()
-        result = create_rules_from_text(
-            pool=dao.pool,
-            project_id=project_id,
-            rule_text=req.rule_text,
-            pack_name=req.pack_name,
-            owner_id=user.get("id"),
-        )
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"创建规则失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"创建规则失败: {str(e)}")
 
 
 # ==================== 审核 ====================

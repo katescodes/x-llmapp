@@ -135,44 +135,6 @@ def _run_ddl() -> None:
     ALTER TABLE knowledge_bases 
         ADD COLUMN IF NOT EXISTS category_id TEXT REFERENCES kb_categories(id) ON DELETE SET NULL;
 
-    CREATE TABLE IF NOT EXISTS kb_documents (
-        id TEXT PRIMARY KEY,
-        kb_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
-        filename TEXT NOT NULL,
-        source TEXT NOT NULL,
-        content_hash TEXT NOT NULL,
-        status TEXT NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        meta_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-        kb_category TEXT NOT NULL DEFAULT 'general_doc'
-    );
-    CREATE INDEX IF NOT EXISTS idx_kb_documents_kb ON kb_documents(kb_id);
-    CREATE INDEX IF NOT EXISTS idx_kb_documents_hash ON kb_documents(content_hash);
-    ALTER TABLE kb_documents
-        ADD COLUMN IF NOT EXISTS kb_category TEXT NOT NULL DEFAULT 'general_doc';
-    CREATE INDEX IF NOT EXISTS idx_kb_documents_category ON kb_documents(kb_category);
-
-    CREATE TABLE IF NOT EXISTS kb_chunks (
-        chunk_id TEXT PRIMARY KEY,
-        kb_id TEXT NOT NULL,
-        doc_id TEXT NOT NULL,
-        title TEXT,
-        url TEXT,
-        position INT,
-        content TEXT NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        tsv TSVECTOR,
-        kb_category TEXT NOT NULL DEFAULT 'general_doc'
-    );
-    CREATE INDEX IF NOT EXISTS idx_chunks_kb_doc ON kb_chunks(kb_id, doc_id);
-    CREATE INDEX IF NOT EXISTS idx_chunks_tsv ON kb_chunks USING GIN (tsv);
-    CREATE INDEX IF NOT EXISTS idx_chunks_content_trgm ON kb_chunks USING GIN (content gin_trgm_ops);
-    CREATE INDEX IF NOT EXISTS idx_chunks_title_trgm ON kb_chunks USING GIN (coalesce(title, '') gin_trgm_ops);
-    ALTER TABLE kb_chunks
-        ADD COLUMN IF NOT EXISTS kb_category TEXT NOT NULL DEFAULT 'general_doc';
-    CREATE INDEX IF NOT EXISTS idx_chunks_kb_category ON kb_chunks(kb_category);
-
     CREATE TABLE IF NOT EXISTS doc_cache (
         url TEXT PRIMARY KEY,
         content_hash TEXT NOT NULL,

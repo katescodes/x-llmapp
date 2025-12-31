@@ -181,10 +181,7 @@ class RetrievalFacade:
         """
         从知识库检索（完全基于知识库，不依赖项目）
         
-        对话框专用接口，逻辑：
-        1. 从 documents 表获取 doc_version_ids → doc_segments 检索（新系统）
-        2. 从 kb_chunks 检索（旧系统，兼容独立导入的文档）
-        3. 合并结果
+        从 documents 表获取 doc_version_ids → doc_segments 检索
         
         Args:
             query: 查询文本
@@ -206,7 +203,7 @@ class RetrievalFacade:
         
         all_results = []
         
-        # 策略1: 从 documents 表获取 doc_version_ids，直接检索 doc_segments
+        # 从 documents 表获取 doc_version_ids，直接检索 doc_segments
         doc_version_ids = self._get_doc_version_ids_from_kb(kb_ids, kb_categories)
         print(f"[FACADE DEBUG] _get_doc_version_ids_from_kb returned: {doc_version_ids}", flush=True)
         logger.info(f"[DEBUG] _get_doc_version_ids_from_kb returned: {doc_version_ids}")
@@ -233,27 +230,7 @@ class RetrievalFacade:
         else:
             logger.info(f"No doc_versions found for kb_ids={kb_ids}")
         
-        # 策略2: 从 kb_chunks 检索（兼容旧系统/独立导入的文档）
-        try:
-            legacy_chunks = await self._retrieve_from_kb_chunks(
-                query=query,
-                kb_ids=kb_ids,
-                kb_categories=kb_categories,
-                embedding_provider=embedding_provider,
-                dense_limit=dense_limit,
-                lexical_limit=lexical_limit,
-                final_topk=top_k,
-            )
-            
-            if legacy_chunks:
-                all_results.extend(legacy_chunks)
-                logger.info(
-                    f"Retrieved {len(legacy_chunks)} chunks from kb_chunks (legacy)"
-                )
-        except Exception as e:
-            logger.warning(f"kb_chunks retrieval failed: {e}", exc_info=True)
-        
-        # 策略3: 合并、去重、排序
+        # 去重、排序
         if not all_results:
             logger.warning(f"No results found for kb_ids={kb_ids}")
             return []
@@ -457,62 +434,6 @@ class RetrievalFacade:
                 # ...
         
         return project_ids
-    
-    async def _retrieve_from_kb_chunks(
-        self,
-        query: str,
-        kb_ids: List[str],
-        kb_categories: Optional[List[str]],
-        embedding_provider: EmbeddingProviderStored,
-        dense_limit: int,
-        lexical_limit: int,
-        final_topk: int,
-    ) -> List[RetrievedChunk]:
-        """
-        从 kb_chunks 表检索（独立知识库）
-        
-        使用 legacy retriever
-        """
-        if not embedding_provider:
-            logger.warning("No embedding provider, skipping kb_chunks retrieval")
-            return []
-        
-        try:
-            # 调用 legacy retriever
-            hits, stats = await legacy_retrieve(
-                query=query,
-                kb_ids=kb_ids,
-                kb_categories=kb_categories,
-                anchors=[],  # 对话框不需要 anchors
-                embedding_provider=embedding_provider,
-                dense_topk=dense_limit,
-                lexical_topk=lexical_limit,
-                final_topk=final_topk,
-            )
-            
-            # 转换为 RetrievedChunk 格式
-            chunks = []
-            for hit in hits:
-                chunk = RetrievedChunk(
-                    chunk_id=hit.get("chunk_id", ""),
-                    text=hit.get("text", ""),
-                    score=hit.get("score", 0.0),
-                    meta={
-                        "kb_id": hit.get("kb_id"),
-                        "doc_id": hit.get("doc_id"),
-                        "title": hit.get("title"),
-                        "url": hit.get("url"),
-                        "position": hit.get("position"),
-                        "kb_category": hit.get("kb_category"),
-                    }
-                )
-                chunks.append(chunk)
-            
-            return chunks
-            
-        except Exception as e:
-            logger.error(f"kb_chunks retrieval failed: {e}", exc_info=True)
-            return []
 
 
 async def retrieve(

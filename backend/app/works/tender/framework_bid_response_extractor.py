@@ -171,22 +171,30 @@ class FrameworkBidResponseExtractor:
         
         logger.info(f"Extracting bid responses for dimension: {dimension}, {len(requirements)} requirements")
         
-        # 1. 构建查询词（从要求中提取关键词）
-        query_terms = []
-        for req in requirements:
-            req_text = req.get("requirement_text", "")
-            # 简单提取前50字符作为查询词
-            query_terms.append(req_text[:50])
+        # 1. 构建增强查询（维度关键词 + 要求文本）
+        dimension_keywords = {
+            "technical": "技术参数 性能指标 规格要求 技术方案",
+            "qualification": "资质证书 业绩案例 人员配置 企业资质",
+            "commercial": "工期 质保期 付款方式 违约责任",
+            "price": "投标报价 价格明细 费用清单",
+            "scoring": "评分标准 评审因素 打分依据",
+            "other": "投标承诺 特殊要求"
+        }
         
-        query = " ".join(query_terms[:5])  # 取前5个要求的文本
+        # 提取前10个要求的文本（前100字符）
+        req_texts = [req.get("requirement_text", "")[:100] for req in requirements[:10]]
+        dim_keyword = dimension_keywords.get(dimension, "")
+        query = f"{dim_keyword} " + " ".join(req_texts)
         
-        # 2. 检索投标文档相关内容
+        logger.info(f"Query for dimension {dimension}: {query[:200]}...")
+        
+        # 2. 检索投标文档相关内容（增加检索数量）
         try:
             bid_chunks = await self.retriever.retrieve(
                 query=query,
                 project_id=project_id,
                 doc_types=["bid"],
-                top_k=50  # 获取足够多的上下文
+                top_k=80  # 从50增加到80，提升召回率
             )
             
             logger.info(f"Retrieved {len(bid_chunks)} bid chunks for dimension {dimension}")
@@ -207,10 +215,10 @@ class FrameworkBidResponseExtractor:
                 "notes": "未检索到相关投标文档内容"
             } for req in requirements]
         
-        # 3. 拼接上下文
+        # 3. 拼接上下文（增加使用的chunk数量）
         bid_context = "\n\n".join([
             f"[SEG:{chunk.chunk_id}] {chunk.text}"
-            for chunk in bid_chunks[:30]  # 限制token数
+            for chunk in bid_chunks[:40]  # 从30增加到40，提供更多上下文
         ])
         
         # 4. 构建prompt
@@ -218,7 +226,7 @@ class FrameworkBidResponseExtractor:
         
         logger.info(f"Built prompt for dimension {dimension}, length: {len(prompt)} chars")
         
-        # 5. 调用LLM
+        # 5. 调用LLM（增加 max_tokens）
         try:
             messages = [{"role": "user", "content": prompt}]
             llm_response = await self.llm.achat(
@@ -226,7 +234,7 @@ class FrameworkBidResponseExtractor:
                 model_id=model_id,
                 response_format={"type": "json_object"},
                 temperature=0.1,
-                max_tokens=8000
+                max_tokens=12000  # 从8000增加到12000，支持更多响应
             )
             
             llm_output = llm_response.get("choices", [{}])[0].get("message", {}).get("content")

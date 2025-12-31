@@ -13,7 +13,6 @@ import DirectoryToolbar from './tender/DirectoryToolbar';
 import DocumentCanvas from './tender/DocumentCanvas';
 import SampleSidebar, { SamplePreviewState } from './tender/SampleSidebar';
 import ReviewTable from './tender/ReviewTable';
-import BidResponseTable from './tender/BidResponseTable';
 import RichTocPreview from './template/RichTocPreview';
 import { templateSpecToTemplateStyle, templateSpecToTocItems } from './template/templatePreviewUtils';
 import FormatTemplatesPage from './FormatTemplatesPage';
@@ -140,24 +139,6 @@ export default function TenderWorkspace() {
   
   // ========== 新架构：按项目ID存储所有状态 ==========
   
-  // 投标响应数据接口
-  interface BidResponse {
-    id: string;
-    bidder_name: string;
-    dimension: string;
-    response_type: string;
-    response_text: string;
-    extracted_value_json: any;
-    evidence_chunk_ids: string[];
-    created_at: string;
-  }
-
-  interface BidResponseStats {
-    bidder_name: string;
-    dimension: string;
-    count: number;
-  }
-
   // 每个项目的完整状态
   interface ProjectState {
     // 数据
@@ -170,8 +151,6 @@ export default function TenderWorkspace() {
     directoryRefinementStats: any;  // 规则细化统计
     directoryBracketParsingStats: any;  // 括号解析统计
     directoryTemplateMatchingStats: any;  // ✨ 新增：范本填充统计
-    bidResponses: BidResponse[];
-    bidResponseStats: BidResponseStats[];
     reviewItems: ReviewItem[];
     evidenceChunks: Chunk[];
     bodyByNodeId: Record<string, string>;
@@ -181,7 +160,6 @@ export default function TenderWorkspace() {
       info: TenderRun | null;
       risk: TenderRun | null;
       directory: TenderRun | null;
-      bidResponse: TenderRun | null;
       review: TenderRun | null;
     };
     
@@ -211,8 +189,6 @@ export default function TenderWorkspace() {
     directoryRefinementStats: {},
     directoryBracketParsingStats: {},
     directoryTemplateMatchingStats: {},  // ✨ 新增
-    bidResponses: [],
-    bidResponseStats: [],
     reviewItems: [],
     evidenceChunks: [],
     bodyByNodeId: {},
@@ -220,7 +196,6 @@ export default function TenderWorkspace() {
       info: null,
       risk: null,
       directory: null,
-      bidResponse: null,
       review: null,
     },
     samplesOpen: false,
@@ -2123,20 +2098,15 @@ export default function TenderWorkspace() {
                   { id: 2, label: 'Step 2: 招标要求提取' },
                   { id: 3, label: '③ 目录生成' },
                   { id: 4, label: '④ AI生成全文（预留）' },
-                  { id: 5, label: '⑤ 投标响应抽取' },
-                  { id: 6, label: '⑥ 审核' },
+                  { id: 5, label: '⑤ 审核' },
                 ].map(tab => (
                   <button
                     key={tab.id}
                     onClick={() => {
                       setActiveTab(tab.id);
                       // 切换到审核Tab时加载规则包列表（全局共享）
-                      if (tab.id === 6) {
-                        loadRulePacks();
-                      }
-                      // 切换到投标响应抽取Tab时加载投标响应数据
                       if (tab.id === 5) {
-                        loadBidResponses();
+                        loadRulePacks();
                       }
                     }}
                     className={activeTab === tab.id ? 'pill-button' : 'link-button'}
@@ -2452,70 +2422,8 @@ export default function TenderWorkspace() {
               )}
 
               {/* Step 5: 投标响应抽取 */}
+              {/* Step 5: 审核（改为选择规则文件资产） */}
               {activeTab === 5 && (
-                <section className="kb-upload-section">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                    <h4>投标响应抽取</h4>
-                    <button 
-                      onClick={extractBidResponses} 
-                      className="kb-create-form" 
-                      style={{ width: 'auto', marginBottom: 0 }}
-                      disabled={bidResponseRun?.status === 'running' || !selectedBidder}
-                    >
-                      {bidResponseRun?.status === 'running' ? '抽取中...' : (bidResponses.length > 0 ? '重新抽取' : '开始抽取')}
-                    </button>
-                  </div>
-                  
-                  {bidResponseRun && bidResponseRun.status && (
-                    <div className="kb-import-results">
-                      <div className="kb-import-item">
-                        状态: {bidResponseRun.status}
-                      </div>
-                      {bidResponseRun.message && (
-                        <div className="kb-import-item">{bidResponseRun.message}</div>
-                      )}
-                    </div>
-                  )}
-                  
-                  <div className="kb-doc-meta" style={{ marginBottom: '16px', padding: '12px', backgroundColor: '#e0f2fe', borderRadius: '4px' }}>
-                    💡 <strong>说明</strong>：从投标文件中抽取结构化响应数据，用于V3审核。操作前请先选择投标人。
-                  </div>
-                  
-                  <div className="kb-create-form">
-                    {bidderOptions.length > 0 && (
-                      <>
-                        <label className="sidebar-label">选择投标人:</label>
-                        <select
-                          value={selectedBidder}
-                          onChange={e => setSelectedBidder(e.target.value)}
-                          className="sidebar-select"
-                        >
-                          <option value="">-- 请选择 --</option>
-                          {bidderOptions.map(name => (
-                            <option key={name} value={name}>{name}</option>
-                          ))}
-                        </select>
-                      </>
-                    )}
-                  </div>
-                  
-                  {/* 使用表格组件展示投标响应数据 */}
-                  {bidResponses.length > 0 ? (
-                    <BidResponseTable
-                      responses={bidResponses}
-                      stats={bidResponseStats}
-                      onOpenEvidence={showEvidence}
-                    />
-                  ) : (
-                    <div className="kb-empty" style={{ marginTop: '16px' }}>
-                      {!selectedBidder ? '请先选择投标人，然后点击"开始抽取"' : '暂无投标响应数据'}
-                    </div>
-                  )}
-                </section>
-              )}
-
-              {/* Step 6: 审核（改为选择规则文件资产） */}
-              {activeTab === 6 && (
                 <section className="kb-upload-section">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                     <h4>投标文件审核</h4>
