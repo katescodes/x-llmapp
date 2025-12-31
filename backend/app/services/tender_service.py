@@ -862,7 +862,7 @@ class TenderService:
         self.dao.delete_asset(asset_id)
         logger.info(f"Deleted asset {asset_id} from project {project_id}")
         
-        # 注意：不需要显式删除 tender_project_info, tender_risks, tender_directory_nodes, 
+        # 注意：不需要显式删除 tender_project_info, tender_directory_nodes, 
         # tender_review_items 中引用该文档 chunks 的数据，因为：
         # - 这些表中的 evidence_chunk_ids 是数组类型，删除chunk后这些ID会自然失效
         # - 保留这些记录可以让用户知道曾经有哪些分析结果，只是证据链断了
@@ -944,8 +944,9 @@ class TenderService:
             
             obj = {"data_json": data_to_save, "evidence_chunk_ids": eids}
             
-            # ✅ 写入数据库（V3 格式）
-            self.dao.upsert_project_info(project_id, data_json=data_to_save, evidence_chunk_ids=eids)
+            # ✅ 数据已经在_extract_project_info_staged中保存过了，这里不需要重复保存
+            # 只更新run状态即可
+            logger.info(f"项目信息提取完成，准备更新run状态: project={project_id}")
             
             # 更新运行状态
             if run_id:
@@ -966,7 +967,7 @@ class TenderService:
                 
                 self.dao.update_run(
                     run_id, "success", progress=1.0, 
-                    message="ok", 
+                    message="项目信息提取完成", 
                     result_json=result_json_data
                 )
             
@@ -984,6 +985,15 @@ class TenderService:
                     print(f"[WARN] Failed to update platform job: {e}")
         
         except Exception as e:
+            logger.error(f"项目信息提取失败: {e}", exc_info=True)
+            
+            # 更新run状态为失败
+            if run_id:
+                self.dao.update_run(
+                    run_id, "failed", progress=0, 
+                    message=f"提取失败: {str(e)[:200]}"
+                )
+            
             # 更新 job 失败状态（如果启用）
             if job_id and self.jobs_service:
                 try:

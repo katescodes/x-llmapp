@@ -731,7 +731,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
         : `${apiBaseUrl}/api/settings/llm-models`;
       const method = editingId ? "PUT" : "POST";
 
-      const response = await fetch(url, {
+      const response = await authFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -886,7 +886,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
 
   const handleTestConnection = async (modelId: string) => {
     try {
-      const response = await fetch(
+      const response = await authFetch(
         `${apiBaseUrl}/api/settings/llm-models/${modelId}/test`,
         { method: "POST" }
       );
@@ -929,7 +929,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
         ? `${apiBaseUrl}/api/settings/embedding-providers/${editingId}`
         : `${apiBaseUrl}/api/settings/embedding-providers`;
       const method = editingId ? "PUT" : "POST";
-      const response = await fetch(url, {
+      const response = await authFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -957,7 +957,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
   const handleEmbeddingDelete = async (providerId: string) => {
     if (!confirm("确定要删除这个 Embedding 服务吗？")) return;
     try {
-      const resp = await fetch(
+      const resp = await authFetch(
         `${apiBaseUrl}/api/settings/embedding-providers/${providerId}`,
         { method: "DELETE" }
       );
@@ -975,7 +975,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
 
   const handleEmbeddingSetDefault = async (providerId: string) => {
     try {
-      const resp = await fetch(
+      const resp = await authFetch(
         `${apiBaseUrl}/api/settings/embedding-providers/${providerId}/set-default`,
         { method: "POST" }
       );
@@ -992,7 +992,7 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
 
   const handleEmbeddingTest = async (providerId: string) => {
     try {
-      const resp = await fetch(
+      const resp = await authFetch(
         `${apiBaseUrl}/api/settings/embedding-providers/${providerId}/test`,
         { method: "POST" }
       );

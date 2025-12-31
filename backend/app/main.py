@@ -200,14 +200,33 @@ class SimpleLLMOrchestrator:
             # 发送同步请求（增加超时时间到600秒，用于处理大文本和16K tokens输出）
             # 注意：verify=False 用于跳过SSL证书验证（自签名证书）
             actual_max_tokens = kwargs.get('max_tokens', 'default')
-            logger.info(f"[SimpleLLMOrchestrator] Calling REAL LLM: endpoint={endpoint} model={model.model} max_tokens={actual_max_tokens}")
-            print(f"[DEBUG] 完整 payload: {json.dumps({'model': payload['model'], 'max_tokens': payload.get('max_tokens', 'not set'), 'temperature': payload.get('temperature')}, ensure_ascii=False)}")
+            
+            # 详细的调用信息
+            logger.info("=" * 80)
+            logger.info("[LLM调用] 开始")
+            logger.info(f"  端点: {endpoint}")
+            logger.info(f"  模型: {model.model}")
+            logger.info(f"  max_tokens: {payload.get('max_tokens', 'not set')}")
+            logger.info(f"  temperature: {payload.get('temperature', 'not set')}")
+            logger.info(f"  top_p: {payload.get('top_p', 'not set')}")
+            logger.info(f"  消息数量: {len(messages)}")
+            if messages:
+                first_msg = messages[0]
+                content_preview = first_msg.get('content', '')[:200]
+                logger.info(f"  第一条消息预览: {content_preview}...")
+            logger.info(f"  请求头: Authorization={'已设置' if model.api_key else '未设置'}")
+            logger.info("=" * 80)
+            
             with httpx.Client(timeout=600.0, verify=False) as client:
                 response = client.post(endpoint, json=payload, headers=headers)
                 response.raise_for_status()
                 result = response.json()
-            logger.info(f"[SimpleLLMOrchestrator] REAL LLM returned: status={response.status_code} content_length={len(response.text)}")
-            print(f"[DEBUG] LLM响应长度: {len(response.text)} 字符")
+            
+            logger.info("=" * 80)
+            logger.info("[LLM响应] 完成")
+            logger.info(f"  状态码: {response.status_code}")
+            logger.info(f"  响应长度: {len(response.text)} 字符")
+            logger.info("=" * 80)
             
             # 检查返回的 usage 和 finish_reason
             if "usage" in result:
@@ -238,10 +257,32 @@ class SimpleLLMOrchestrator:
                 logger.warning(f"Unexpected LLM response format: {result}")
                 return {"choices": [{"message": {"content": str(result)}}]}
                 
+        except httpx.ConnectTimeout as e:
+            logger.error("=" * 80)
+            logger.error("[LLM调用失败] 连接超时")
+            logger.error(f"  错误: {e}")
+            logger.error(f"  端点: {endpoint if 'endpoint' in locals() else 'unknown'}")
+            logger.error("  可能原因:")
+            logger.error("    1. LLM服务器不可达")
+            logger.error("    2. 网络连接问题")
+            logger.error("    3. 防火墙阻止连接")
+            logger.error("=" * 80)
+            raise RuntimeError(f"LLM 请求超时，无法连接到服务器") from e
+        except httpx.HTTPStatusError as e:
+            logger.error("=" * 80)
+            logger.error("[LLM调用失败] HTTP错误")
+            logger.error(f"  状态码: {e.response.status_code}")
+            logger.error(f"  响应: {e.response.text[:500]}")
+            logger.error("=" * 80)
+            raise RuntimeError(f"LLM 请求失败: HTTP {e.response.status_code}") from e
         except Exception as e:
-            logger.error(f"[SimpleLLMOrchestrator] LLM call failed: {e}", exc_info=True)
-            # 抛出异常而不是返回错误消息，让上层捕获并记录详细日志
-            raise RuntimeError(f"LLM call failed: {str(e)}") from e
+            logger.error("=" * 80)
+            logger.error("[LLM调用失败] 未知错误")
+            logger.error(f"  错误类型: {type(e).__name__}")
+            logger.error(f"  错误信息: {str(e)}")
+            logger.error("=" * 80)
+            logger.error("详细堆栈:", exc_info=True)
+            raise RuntimeError(f"LLM 请求失败，请检查模型服务") from e
     
     async def achat(self, messages: list, model_id: str = None, **kwargs) -> dict:
         """

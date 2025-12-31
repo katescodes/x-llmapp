@@ -116,27 +116,6 @@ async def export_project_docx(
         raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
 
 
-@router.post("/projects/{project_id}/export/docx-v2", deprecated=True)
-async def export_project_docx_post(
-    project_id: str,
-    req: ExportDocxRequest,
-    pool: ConnectionPool = Depends(get_pool),
-    current_user: dict = Depends(get_current_user_sync),
-):
-    """
-    导出项目为 Word 文档（POST 版本，支持请求体）
-    
-    已废弃，推荐使用 GET 版本
-    """
-    return await export_project_docx(
-        project_id=project_id,
-        format_template_id=req.format_template_id,
-        include_toc=req.include_toc,
-        prefix_numbering=req.prefix_numbering,
-        merge_semantic_summary=req.merge_semantic_summary,
-        pool=pool,
-        current_user=current_user,
-    )
 
 
 @router.post("/projects/{project_id}/directory/backfill-summary")

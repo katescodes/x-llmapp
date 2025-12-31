@@ -2630,6 +2630,10 @@ export default function TenderWorkspace() {
                         marginBottom: '16px',
                         flexWrap: 'wrap'
                       }}>
+                        <div className="stat-card" style={{ flex: '1 1 120px', borderColor: 'rgba(148, 163, 184, 0.3)' }}>
+                          <div className="stat-value" style={{ color: '#e5e7eb' }}>{stats.total}</div>
+                          <div className="stat-label">总计</div>
+                        </div>
                         <div className="stat-card" style={{ flex: '1 1 120px' }}>
                           <div className="stat-value" style={{ color: '#22c55e' }}>{stats.pass}</div>
                           <div className="stat-label">通过</div>
@@ -2645,10 +2649,6 @@ export default function TenderWorkspace() {
                         <div className="stat-card" style={{ flex: '1 1 120px' }}>
                           <div className="stat-value" style={{ color: '#94a3b8' }}>{stats.pending}</div>
                           <div className="stat-label">待复核</div>
-                        </div>
-                        <div className="stat-card" style={{ flex: '1 1 120px', borderColor: 'rgba(148, 163, 184, 0.3)' }}>
-                          <div className="stat-value" style={{ color: '#e5e7eb' }}>{stats.total}</div>
-                          <div className="stat-label">总计</div>
                         </div>
                       </div>
                     );

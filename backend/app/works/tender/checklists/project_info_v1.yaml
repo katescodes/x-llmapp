@@ -1,0 +1,525 @@
+# 项目信息抽取标准清单 v1
+# 用于结构化提取项目基本信息（project_info）
+# 对应 TenderInfoV3 Schema的6个阶段
+
+version: "1.0"
+template_name: "project_info"
+template_type: "项目信息标准清单"
+description: "招标项目的项目信息提取清单，涵盖6大类：项目概览、投标人资格、评审与评分、商务条款、技术要求、文件编制"
+
+metadata:
+  schema_version: "tender_info_v3"
+  total_stages: 6
+  extraction_method: "checklist_guided"
+
+# ============================================
+# Stage 1: 项目概览（Project Overview）
+# 包含：基本信息、范围与标段、进度与递交、保证金与担保
+# ============================================
+stage_1_project_overview:
+  stage: 1
+  stage_key: "project_overview"
+  stage_name: "项目概览"
+  description: "项目的基本信息、范围、标段、进度、保证金等"
+  
+  # 基本信息
+  basic_info:
+    group_name: "基本信息"
+    fields:
+      - id: "overview_001"
+        field_name: "project_name"
+        question: "项目名称是什么？"
+        type: "text"
+        is_required: true
+        description: "完整的项目名称或招标项目名称"
+        
+      - id: "overview_002"
+        field_name: "project_number"
+        question: "项目编号或招标编号是什么？"
+        type: "text"
+        is_required: false
+        description: "项目编号、招标编号、采购编号等"
+        
+      - id: "overview_003"
+        field_name: "owner_name"
+        question: "采购人/业主/招标人是谁？"
+        type: "text"
+        is_required: true
+        description: "采购人、业主单位、招标人名称"
+        
+      - id: "overview_004"
+        field_name: "agency_name"
+        question: "代理机构是谁？"
+        type: "text"
+        is_required: false
+        description: "招标代理机构名称"
+        
+      - id: "overview_005"
+        field_name: "contact_person"
+        question: "联系人是谁？"
+        type: "text"
+        is_required: false
+        description: "项目联系人姓名"
+        
+      - id: "overview_006"
+        field_name: "contact_phone"
+        question: "联系电话是什么？"
+        type: "text"
+        is_required: false
+        description: "联系电话或联系方式"
+        
+      - id: "overview_007"
+        field_name: "project_location"
+        question: "项目地点在哪里？"
+        type: "text"
+        is_required: false
+        description: "项目实施地点或工程地点"
+        
+      - id: "overview_008"
+        field_name: "fund_source"
+        question: "资金来源是什么？"
+        type: "text"
+        is_required: false
+        description: "项目资金来源（如：财政资金、自筹资金等）"
+        
+      - id: "overview_009"
+        field_name: "procurement_method"
+        question: "采购方式是什么？"
+        type: "text"
+        is_required: false
+        description: "采购方式（如：公开招标、邀请招标、竞争性谈判等）"
+        
+      - id: "overview_010"
+        field_name: "budget"
+        question: "预算金额是多少？"
+        type: "text"
+        is_required: false
+        description: "项目预算金额或预算总额"
+        
+      - id: "overview_011"
+        field_name: "max_price"
+        question: "招标控制价/最高限价是多少？"
+        type: "text"
+        is_required: false
+        description: "招标控制价、最高限价或最高投标限价"
+  
+  # 范围与标段
+  scope_and_lots:
+    group_name: "范围与标段"
+    fields:
+      - id: "overview_012"
+        field_name: "project_scope"
+        question: "项目范围或采购内容是什么？"
+        type: "text"
+        is_required: false
+        description: "项目范围、采购内容、工程范围的总体描述"
+        
+      - id: "overview_013"
+        field_name: "lot_division"
+        question: "标段划分说明是什么？"
+        type: "text"
+        is_required: false
+        description: "标段划分、包段划分的说明"
+        
+      - id: "overview_014"
+        field_name: "lots"
+        question: "各标段的详细信息是什么？"
+        type: "list"
+        is_required: false
+        description: "各标段的详情（标段编号、名称、范围、预算等）"
+        item_schema:
+          - lot_number: "标段编号"
+          - lot_name: "标段名称"
+          - scope: "标段范围"
+          - budget: "标段预算"
+  
+  # 进度与递交
+  schedule_and_submission:
+    group_name: "进度与递交"
+    fields:
+      - id: "overview_015"
+        field_name: "bid_deadline"
+        question: "投标截止时间是什么时候？"
+        type: "text"
+        is_required: false
+        description: "投标文件递交截止时间"
+        
+      - id: "overview_016"
+        field_name: "bid_opening_time"
+        question: "开标时间是什么时候？"
+        type: "text"
+        is_required: false
+        description: "开标时间或开标日期"
+        
+      - id: "overview_017"
+        field_name: "bid_opening_location"
+        question: "开标地点在哪里？"
+        type: "text"
+        is_required: false
+        description: "开标地点或开标场所"
+        
+      - id: "overview_018"
+        field_name: "submission_method"
+        question: "递交方式是什么？"
+        type: "text"
+        is_required: false
+        description: "投标文件递交方式（线上/线下）"
+        
+      - id: "overview_019"
+        field_name: "submission_address"
+        question: "递交地点在哪里？"
+        type: "text"
+        is_required: false
+        description: "投标文件递交地点（如果是线下递交）"
+        
+      - id: "overview_020"
+        field_name: "implementation_schedule"
+        question: "实施工期或交付期是多久？"
+        type: "text"
+        is_required: false
+        description: "工期、交付期、实施周期、服务期等"
+        
+      - id: "overview_021"
+        field_name: "key_milestones"
+        question: "关键里程碑有哪些？"
+        type: "text"
+        is_required: false
+        description: "关键时间节点或里程碑要求"
+  
+  # 保证金与担保
+  security_and_guarantee:
+    group_name: "保证金与担保"
+    fields:
+      - id: "overview_022"
+        field_name: "bid_bond_amount"
+        question: "投标保证金金额是多少？"
+        type: "text"
+        is_required: false
+        description: "投标保证金的金额"
+        
+      - id: "overview_023"
+        field_name: "bid_bond_form"
+        question: "保证金形式有哪些？"
+        type: "text"
+        is_required: false
+        description: "保证金形式（如：转账、保函、支票等）"
+        
+      - id: "overview_024"
+        field_name: "bid_bond_deadline"
+        question: "保证金递交截止时间是什么时候？"
+        type: "text"
+        is_required: false
+        description: "保证金递交的截止时间"
+        
+      - id: "overview_025"
+        field_name: "bid_bond_return"
+        question: "保证金退还条件是什么？"
+        type: "text"
+        is_required: false
+        description: "保证金退还的时间和条件"
+        
+      - id: "overview_026"
+        field_name: "performance_bond"
+        question: "履约保证金要求是什么？"
+        type: "text"
+        is_required: false
+        description: "履约保证金或履约担保的要求"
+        
+      - id: "overview_027"
+        field_name: "other_guarantees"
+        question: "其他担保要求有哪些？"
+        type: "text"
+        is_required: false
+        description: "其他担保或保证金要求"
+
+# ============================================
+# Stage 2: 投标人资格（Bidder Qualification）
+# ============================================
+stage_2_bidder_qualification:
+  stage: 2
+  stage_key: "bidder_qualification"
+  stage_name: "投标人资格"
+  description: "投标人的资格要求和资格条款"
+  
+  general:
+    group_name: "资格要求总述"
+    fields:
+      - id: "qual_001"
+        field_name: "general_requirements"
+        question: "一般资格要求有哪些？"
+        type: "text"
+        is_required: false
+        description: "投标人应具备的一般资格要求"
+        
+      - id: "qual_002"
+        field_name: "special_requirements"
+        question: "特殊资格要求有哪些？"
+        type: "text"
+        is_required: false
+        description: "特殊的资格要求或限制条件"
+  
+  qualification_items:
+    group_name: "资格条款清单"
+    fields:
+      - id: "qual_003"
+        field_name: "qualification_items"
+        question: "具体的资格条款有哪些？"
+        type: "list"
+        is_required: false
+        description: "资格条款的详细列表"
+        item_schema:
+          - req_type: "要求类型（资质/业绩/人员/财务/其他）"
+          - requirement: "具体要求内容"
+          - is_mandatory: "是否强制要求"
+  
+  documents:
+    group_name: "资格证明文件"
+    fields:
+      - id: "qual_004"
+        field_name: "must_provide_documents"
+        question: "必须提供的资格证明文件有哪些？"
+        type: "list"
+        is_required: false
+        description: "投标人必须提供的资格证明文件清单"
+
+# ============================================
+# Stage 3: 评审与评分（Evaluation and Scoring）
+# ============================================
+stage_3_evaluation_and_scoring:
+  stage: 3
+  stage_key: "evaluation_and_scoring"
+  stage_name: "评审与评分"
+  description: "评标办法、评分标准和评分项"
+  
+  evaluation_method:
+    group_name: "评审办法"
+    fields:
+      - id: "eval_001"
+        field_name: "evaluation_method"
+        question: "评标办法是什么？"
+        type: "text"
+        is_required: false
+        description: "评标办法（如：综合评分法、最低价法等）"
+        
+      - id: "eval_002"
+        field_name: "reject_conditions"
+        question: "废标/否决条件有哪些？"
+        type: "text"
+        is_required: false
+        description: "投标被废标或否决的条件"
+  
+  scoring_items:
+    group_name: "评分项清单"
+    fields:
+      - id: "eval_003"
+        field_name: "scoring_items"
+        question: "评分项有哪些？"
+        type: "list"
+        is_required: false
+        description: "各评分项的详细信息"
+        item_schema:
+          - category: "评分类别（技术/商务/价格/其他）"
+          - item_name: "评分项名称"
+          - max_score: "最高分值"
+          - scoring_rule: "计分规则"
+          - scoring_method: "计分方法"
+  
+  price_scoring:
+    group_name: "价格评分"
+    fields:
+      - id: "eval_004"
+        field_name: "price_scoring_method"
+        question: "价格分计算方法是什么？"
+        type: "text"
+        is_required: false
+        description: "价格评分的具体计算方法或公式"
+
+# ============================================
+# Stage 4: 商务条款（Business Terms）
+# ============================================
+stage_4_business_terms:
+  stage: 4
+  stage_key: "business_terms"
+  stage_name: "商务条款"
+  description: "合同商务条款和商务要求"
+  
+  main_terms:
+    group_name: "主要商务条款"
+    fields:
+      - id: "biz_001"
+        field_name: "payment_terms"
+        question: "付款方式是什么？"
+        type: "text"
+        is_required: false
+        description: "付款方式、付款比例、付款节点等"
+        
+      - id: "biz_002"
+        field_name: "delivery_terms"
+        question: "交付条款是什么？"
+        type: "text"
+        is_required: false
+        description: "交付方式、交付时间、交付地点等"
+        
+      - id: "biz_003"
+        field_name: "warranty_terms"
+        question: "质保条款是什么？"
+        type: "text"
+        is_required: false
+        description: "质保期、质量保证要求等"
+        
+      - id: "biz_004"
+        field_name: "acceptance_terms"
+        question: "验收条款是什么？"
+        type: "text"
+        is_required: false
+        description: "验收方式、验收标准等"
+        
+      - id: "biz_005"
+        field_name: "liability_terms"
+        question: "违约责任条款是什么？"
+        type: "text"
+        is_required: false
+        description: "违约责任、违约金、赔偿等"
+  
+  clauses:
+    group_name: "商务条款清单"
+    fields:
+      - id: "biz_006"
+        field_name: "clauses"
+        question: "其他商务条款有哪些？"
+        type: "list"
+        is_required: false
+        description: "其他重要的商务条款"
+        item_schema:
+          - clause_type: "条款类型（付款/交付/质保/验收/违约等）"
+          - clause_title: "条款标题"
+          - content: "条款内容"
+          - is_non_negotiable: "是否不可变更"
+
+# ============================================
+# Stage 5: 技术要求（Technical Requirements）
+# ============================================
+stage_5_technical_requirements:
+  stage: 5
+  stage_key: "technical_requirements"
+  stage_name: "技术要求"
+  description: "技术规格、技术标准和技术参数"
+  
+  general:
+    group_name: "技术要求总述"
+    fields:
+      - id: "tech_001"
+        field_name: "technical_specifications"
+        question: "技术规格总体要求是什么？"
+        type: "text"
+        is_required: false
+        description: "技术规格的总体要求或概述"
+        
+      - id: "tech_002"
+        field_name: "quality_standards"
+        question: "质量标准是什么？"
+        type: "text"
+        is_required: false
+        description: "质量标准、国家标准、行业标准等"
+        
+      - id: "tech_003"
+        field_name: "technical_proposal_requirements"
+        question: "技术方案编制要求是什么？"
+        type: "text"
+        is_required: false
+        description: "对技术方案或技术文件的编制要求"
+  
+  parameters:
+    group_name: "技术参数清单"
+    fields:
+      - id: "tech_004"
+        field_name: "technical_parameters"
+        question: "具体的技术参数有哪些？"
+        type: "list"
+        is_required: false
+        description: "技术参数、技术指标的详细列表"
+        item_schema:
+          - name: "参数/指标名称"
+          - value: "参数值/要求"
+          - category: "参数类别"
+          - unit: "单位"
+          - is_mandatory: "是否强制"
+          - allow_deviation: "是否允许偏离"
+
+# ============================================
+# Stage 6: 文件编制（Document Preparation）
+# ============================================
+stage_6_document_preparation:
+  stage: 6
+  stage_key: "document_preparation"
+  stage_name: "文件编制"
+  description: "投标文件的编制要求和格式要求"
+  
+  structure_and_format:
+    group_name: "结构与格式"
+    fields:
+      - id: "doc_001"
+        field_name: "bid_documents_structure"
+        question: "投标文件结构要求是什么？"
+        type: "text"
+        is_required: false
+        description: "投标文件的组成部分、结构要求"
+        
+      - id: "doc_002"
+        field_name: "format_requirements"
+        question: "格式要求有哪些？"
+        type: "text"
+        is_required: false
+        description: "装订、封面、页码、字体等格式要求"
+        
+      - id: "doc_003"
+        field_name: "copies_required"
+        question: "份数要求是什么？"
+        type: "text"
+        is_required: false
+        description: "正本、副本的份数要求"
+        
+      - id: "doc_004"
+        field_name: "signature_and_seal"
+        question: "签字盖章要求是什么？"
+        type: "text"
+        is_required: false
+        description: "签字、盖章、授权等要求"
+  
+  required_forms:
+    group_name: "必填表单清单"
+    fields:
+      - id: "doc_005"
+        field_name: "required_forms"
+        question: "必填表单有哪些？"
+        type: "list"
+        is_required: false
+        description: "必须填写的表单或格式文件"
+        item_schema:
+          - form_name: "表单名称"
+          - form_number: "表单编号"
+          - is_mandatory: "是否必填"
+
+# ============================================
+# 元数据配置
+# ============================================
+extraction_config:
+  # P0阶段配置
+  p0_checklist:
+    enabled: true
+    temperature: 0.0
+    max_tokens: 8000
+  
+  # P1阶段配置（补充扫描）
+  p1_supplement:
+    enabled: true
+    temperature: 0.1
+    max_tokens: 4000
+    supplement_prompt: "请补充checklist中未涵盖但在文档中出现的其他重要信息"
+  
+  # 验证配置
+  validation:
+    enabled: true
+    check_required_fields: true
+    check_evidence_segments: true
+

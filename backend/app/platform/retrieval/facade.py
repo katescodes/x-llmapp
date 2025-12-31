@@ -182,7 +182,7 @@ class RetrievalFacade:
         从知识库检索（完全基于知识库，不依赖项目）
         
         对话框专用接口，逻辑：
-        1. 从 kb_documents 获取 doc_version_ids → doc_segments 检索（新系统）
+        1. 从 documents 表获取 doc_version_ids → doc_segments 检索（新系统）
         2. 从 kb_chunks 检索（旧系统，兼容独立导入的文档）
         3. 合并结果
         
@@ -206,7 +206,7 @@ class RetrievalFacade:
         
         all_results = []
         
-        # 策略1: 从 kb_documents 获取 doc_version_ids，直接检索 doc_segments
+        # 策略1: 从 documents 表获取 doc_version_ids，直接检索 doc_segments
         doc_version_ids = self._get_doc_version_ids_from_kb(kb_ids, kb_categories)
         print(f"[FACADE DEBUG] _get_doc_version_ids_from_kb returned: {doc_version_ids}", flush=True)
         logger.info(f"[DEBUG] _get_doc_version_ids_from_kb returned: {doc_version_ids}")
@@ -283,7 +283,7 @@ class RetrievalFacade:
         kb_categories: Optional[List[str]] = None
     ) -> List[str]:
         """
-        从 kb_documents 表直接获取 doc_version_ids
+        从 documents 表获取 doc_version_ids（新系统）
         
         Args:
             kb_ids: 知识库ID列表
@@ -301,19 +301,19 @@ class RetrievalFacade:
             with conn.cursor() as cur:
                 placeholders = ",".join(["%s"] * len(kb_ids))
                 
-                # 从 kb_documents 的 meta_json 中提取 doc_version_id
+                # 从 documents 表查询（新系统）
                 sql = f"""
-                    SELECT DISTINCT meta_json->>'doc_version_id' as doc_version_id
-                    FROM kb_documents
-                    WHERE kb_id IN ({placeholders})
-                      AND meta_json->>'doc_version_id' IS NOT NULL
+                    SELECT DISTINCT dv.id as doc_version_id
+                    FROM documents d
+                    JOIN document_versions dv ON d.id = dv.document_id
+                    WHERE d.meta_json->>'kb_id' IN ({placeholders})
                 """
                 params = list(kb_ids)
                 
                 # 可选：按分类过滤
                 if kb_categories:
                     cat_placeholders = ",".join(["%s"] * len(kb_categories))
-                    sql += f" AND kb_category IN ({cat_placeholders})"
+                    sql += f" AND d.meta_json->>'kb_category' IN ({cat_placeholders})"
                     params.extend(kb_categories)
                 
                 cur.execute(sql, params)

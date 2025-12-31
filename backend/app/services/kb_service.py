@@ -111,7 +111,7 @@ def delete_kb(kb_id: str):
 
 def list_documents(kb_id: str):
     """
-    列出知识库的文档（统一逻辑：从 kb_documents 表读取）
+    列出知识库的文档（新系统：从 documents 表读取）
     
     支持：
     - 项目关联的文档（tender/declare）
@@ -119,10 +119,45 @@ def list_documents(kb_id: str):
     """
     get_kb_or_raise(kb_id)
     
-    from app.services.dao import kb_dao
+    from app.services.db.postgres import _get_pool
     
-    # 直接从 kb_documents 表读取
-    return kb_dao.list_documents(kb_id)
+    # 从 documents 表读取（新系统）
+    pool = _get_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT 
+                    d.id,
+                    dv.filename,
+                    'upload' as source,
+                    'ready' as status,
+                    d.created_at,
+                    d.created_at as updated_at,
+                    d.meta_json,
+                    d.meta_json->>'kb_category' as kb_category
+                FROM documents d
+                JOIN document_versions dv ON d.id = dv.document_id
+                WHERE d.meta_json->>'kb_id' = %s
+                ORDER BY d.created_at DESC
+            """, (kb_id,))
+            
+            rows = cur.fetchall()
+            
+            documents = []
+            for row in rows:
+                doc_id, filename, source, status, created_at, updated_at, meta_json, kb_category = row
+                documents.append({
+                    'id': doc_id,
+                    'filename': filename,
+                    'source': source,
+                    'status': status,
+                    'created_at': created_at.isoformat() if created_at else None,
+                    'updated_at': updated_at.isoformat() if updated_at else None,
+                    'meta': meta_json or {},
+                    'kb_category': kb_category or 'general_doc',
+                })
+            
+            return documents
 
 
 

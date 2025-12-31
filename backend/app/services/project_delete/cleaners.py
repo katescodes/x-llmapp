@@ -278,7 +278,8 @@ class MetadataResourceCleaner(ProjectResourceCleaner):
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 # 统计各类资源
-                cur.execute("SELECT COUNT(*) as count FROM tender_risks WHERE project_id=%s", (project_id,))
+                # tender_risks 表已删除
+                # cur.execute("SELECT COUNT(*) as count FROM tender_risks WHERE project_id=%s", (project_id,))
                 counts["risks"] = cur.fetchone()['count']
                 
                 cur.execute("SELECT COUNT(*) as count FROM tender_directory_nodes WHERE project_id=%s", (project_id,))
@@ -309,7 +310,7 @@ class MetadataResourceCleaner(ProjectResourceCleaner):
         # 这里显式删除以确保清理完整
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM tender_risks WHERE project_id=%s", (project_id,))
+                # tender_risks 表已删除，不再需要清理
                 cur.execute("DELETE FROM tender_directory_nodes WHERE project_id=%s", (project_id,))
                 cur.execute("DELETE FROM tender_review_items WHERE project_id=%s", (project_id,))
                 cur.execute("DELETE FROM tender_runs WHERE project_id=%s", (project_id,))

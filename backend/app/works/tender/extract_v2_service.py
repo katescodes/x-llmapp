@@ -137,7 +137,9 @@ class ExtractV2Service:
         parallel: bool = False,
     ) -> Dict[str, Any]:
         """
-        六阶段顺序抽取项目信息（V3版本 - 合并版）
+        六阶段顺序抽取项目信息（V3版本 - Checklist-based）
+        
+        ✨ 新方法：基于Checklist的P0+P1两阶段提取框架
         
         Stage 1: project_overview (项目概览 - 含范围、进度、保证金)
         Stage 2: bidder_qualification (投标人资格)
@@ -146,25 +148,26 @@ class ExtractV2Service:
         Stage 5: technical_requirements (技术要求)
         Stage 6: document_preparation (文件编制)
         
+        每个stage采用：
+        - P0阶段：基于checklist的结构化提取
+        - P1阶段：补充扫描遗漏信息
+        - 验证：检查必填字段和证据
+        
         Args:
-            parallel: 是否并行执行所有Stage（默认False保持串行）
+            parallel: 是否并行执行所有Stage（支持最多6个并行）
         """
-        import json
         import os
-        from app.works.tender.extraction_specs.project_info_v2 import build_project_info_spec_async
+        import asyncio
+        from app.works.tender.project_info_extractor import ProjectInfoExtractor
+        from app.works.tender.tender_context_retriever import TenderContextRetriever
         
-        # 从环境变量读取是否启用并行
-        parallel_enabled = os.getenv("EXTRACT_PROJECT_INFO_PARALLEL", "false").lower() in ("true", "1", "yes")
-        parallel = parallel or parallel_enabled
+        logger.info(
+            f"ExtractV2: Starting CHECKLIST-BASED extraction (V3 - 6 stages) "
+            f"for project={project_id} parallel={parallel}"
+        )
         
-        mode = "PARALLEL" if parallel else "SERIAL"
-        logger.info(f"ExtractV2: Starting {mode} extraction (V3 - 6 stages) for project={project_id}")
-        
-        # 构建统一的 spec（从 project_info 模块加载）
-        spec = await build_project_info_spec_async(self.pool)
-        
-        # 定义六个阶段
-        stages = [
+        # 定义六个阶段元数据（用于进度展示）
+        stages_meta = [
             {"stage": 1, "name": "项目概览", "key": "project_overview"},
             {"stage": 2, "name": "投标人资格", "key": "bidder_qualification"},
             {"stage": 3, "name": "评审与评分", "key": "evaluation_and_scoring"},
@@ -173,136 +176,300 @@ class ExtractV2Service:
             {"stage": 6, "name": "文件编制", "key": "document_preparation"},
         ]
         
-        # 存储各阶段结果
-        stage_results = {}
-        all_evidence_chunk_ids = set()
-        all_evidence_spans = []
-        all_traces = []
-        
-        if parallel:
-            # 并行执行所有Stage
-            return await self._extract_stages_parallel(
-                stages, spec, project_id, model_id, run_id, embedding_provider,
-                stage_results, all_evidence_chunk_ids, all_evidence_spans, all_traces
+        try:
+            # ===== 步骤1：统一检索招标文档上下文 =====
+            logger.info("Step 1: 检索招标文档上下文（一次性检索）")
+            
+            if run_id:
+                self.dao.update_run(
+                    run_id, "running", progress=0.05, 
+                    message="正在检索招标文档..."
+                )
+            
+            context_retriever = TenderContextRetriever(self.retriever)
+            context_data = await context_retriever.retrieve_tender_context(
+                project_id=project_id,
+                top_k=150,  # 获取足够多的上下文
+                max_context_chunks=100,
+                sort_by_position=True
             )
-        
-        # 顺序执行六个阶段
-        for stage_info in stages:
-            stage_num = stage_info["stage"]
-            stage_name = stage_info["name"]
-            stage_key = stage_info["key"]
             
-            logger.info(f"ExtractV2: Executing Stage {stage_num}/6 - {stage_name}")
+            if context_data.used_chunks == 0:
+                raise ValueError(f"未检索到招标文档内容，project_id={project_id}")
             
-            # 构建上下文信息（前序阶段的结果）
-            context_info = ""
-            if stage_num > 1:
-                context_parts = []
-                for prev_stage in stages[:stage_num-1]:
-                    prev_key = prev_stage["key"]
-                    if prev_key in stage_results:
-                        context_parts.append(f"{prev_stage['name']}: {json.dumps(stage_results[prev_key], ensure_ascii=False)[:300]}")
-                context_info = "\n".join(context_parts)
+            logger.info(
+                f"上下文检索完成: total={context_data.total_chunks}, "
+                f"used={context_data.used_chunks}, "
+                f"context_length={len(context_data.context_text)}"
+            )
             
-            try:
-                # 更新run状态：开始当前阶段
+            # ===== 步骤2：创建Checklist提取器 =====
+            logger.info("Step 2: 初始化Checklist提取器")
+            
+            extractor = ProjectInfoExtractor(llm=self.llm)
+            
+            # ===== 步骤3：执行6个stage（支持并行或顺序） =====
+            logger.info(f"Step 3: 开始6阶段checklist提取 (parallel={parallel})")
+            
+            all_stage_results = {}
+            all_evidence_ids = set()
+            
+            if parallel:
+                # ===== 并行模式：所有stage同时执行 =====
+                logger.info("使用并行模式，所有6个stage同时执行")
+                
+                # 获取最大并发数
+                max_concurrent = int(os.getenv("EXTRACT_MAX_CONCURRENT", "6"))
+                logger.info(f"最大并发数: {max_concurrent}")
+                
+                # 创建信号量限制并发
+                semaphore = asyncio.Semaphore(max_concurrent)
+                
+                async def extract_stage_with_semaphore(stage_meta):
+                    async with semaphore:
+                        stage_num = stage_meta["stage"]
+                        stage_name = stage_meta["name"]
+                        stage_key = stage_meta["key"]
+                        
+                        logger.info(f"=== 开始并行提取 Stage {stage_num}/6: {stage_name} ===")
+                        
+                        try:
+                            stage_result = await extractor.extract_stage(
+                                stage=stage_num,
+                                context_text=context_data.context_text,
+                                segment_id_map=context_data.segment_id_map,
+                                model_id=model_id,
+                                context_info=None,  # 并行模式下不传递context
+                                enable_p1=True
+                            )
+                            
+                            logger.info(
+                                f"Stage {stage_num} 完成: "
+                                f"fields={len(stage_result['data'])}, "
+                                f"evidence={len(stage_result['evidence_segment_ids'])}"
+                            )
+                            
+                            return stage_key, stage_result
+                            
+                        except Exception as e:
+                            logger.error(f"Stage {stage_num} 失败: {e}", exc_info=True)
+                            return stage_key, {
+                                "data": {},
+                                "evidence_segment_ids": [],
+                                "p1_supplements_count": 0
+                            }
+                
+                # 并行执行所有stage
                 if run_id:
-                    progress = 0.05 + (stage_num - 1) * 0.15  # Stage 1: 0.05, Stage 2: 0.20, ..., Stage 6: 0.80
-                    self.dao.update_run(run_id, "running", progress=progress, message=f"正在抽取：{stage_name}...")
+                    self.dao.update_run(
+                        run_id, "running", progress=0.10,
+                        message="正在并行提取所有阶段..."
+                    )
                 
-                # 调用引擎执行当前阶段
-                result = await self.engine.run(
-                    spec=spec,
-                    retriever=self.retriever,
-                    llm=self.llm,
-                    project_id=project_id,
-                    model_id=model_id,
-                    run_id=run_id,
-                    embedding_provider=embedding_provider,
-                    stage=stage_num,
-                    stage_name=stage_name,
-                    context_info=context_info,
-                )
+                tasks = [extract_stage_with_semaphore(meta) for meta in stages_meta]
+                results = await asyncio.gather(*tasks)
                 
-                # 提取当前阶段的数据
-                stage_data = result.data.get(stage_key) if isinstance(result.data, dict) else result.data
+                # 收集结果
+                for stage_key, stage_result in results:
+                    all_stage_results[stage_key] = stage_result["data"]
+                    all_evidence_ids.update(stage_result["evidence_segment_ids"])
                 
-                if not stage_data:
-                    logger.warning(f"ExtractV2: Stage {stage_num} returned EMPTY data")
-                    # 设置默认值
-                    stage_data = {}
+                # 更新进度
+                if run_id:
+                    self.dao.update_run(
+                        run_id, "running", progress=0.90,
+                        message="所有阶段提取完成，正在保存..."
+                    )
                 
-                # 保存当前阶段结果
-                stage_results[stage_key] = stage_data
+            else:
+                # ===== 顺序模式：一个接一个执行（支持context传递） =====
+                logger.info("使用顺序模式，stage依次执行")
+                context_info = None  # 用于传递前序stage的结果
                 
-                # 收集证据
-                all_evidence_chunk_ids.update(result.evidence_chunk_ids)
-                all_evidence_spans.extend(result.evidence_spans)
-                
-                # 收集追踪信息
-                if result.retrieval_trace:
-                    all_traces.append({
-                        "stage": stage_num,
-                        "name": stage_name,
-                        "trace": result.retrieval_trace.__dict__
-                    })
-                
-                logger.info(
-                    f"ExtractV2: Stage {stage_num}/6 done - "
-                    f"data_type={type(stage_data).__name__} "
-                    f"data_keys={list(stage_data.keys()) if isinstance(stage_data, dict) else 'N/A'} "
-                    f"evidence={len(result.evidence_chunk_ids)}"
-                )
-                
-                # ✅ 增量更新：每完成一个阶段就写入数据库
+                for stage_meta in stages_meta:
+                    stage_num = stage_meta["stage"]
+                    stage_name = stage_meta["name"]
+                    stage_key = stage_meta["key"]
+                    
+                    logger.info(f"=== Extracting Stage {stage_num}/6: {stage_name} ===")
+                    
+                    # 更新进度
+                    if run_id:
+                        progress = 0.05 + (stage_num - 1) * 0.15  # 0.05, 0.20, 0.35, 0.50, 0.65, 0.80
+                        self.dao.update_run(
+                            run_id, "running", progress=progress,
+                            message=f"正在抽取：{stage_name} (P0+P1)..."
+                        )
+                    
+                    try:
+                        # 调用extractor提取单个stage
+                        stage_result = await extractor.extract_stage(
+                            stage=stage_num,
+                            context_text=context_data.context_text,
+                            segment_id_map=context_data.segment_id_map,
+                            model_id=model_id,
+                            context_info=context_info,  # 传递前序stage的结果
+                            enable_p1=True  # 启用P1补充扫描
+                        )
+                        
+                        # 保存结果
+                        all_stage_results[stage_key] = stage_result["data"]
+                        all_evidence_ids.update(stage_result["evidence_segment_ids"])
+                        
+                        # 传递context给下一个stage
+                        if context_info is None:
+                            context_info = {}
+                        context_info[stage_key] = stage_result["data"]
+                        
+                        logger.info(
+                            f"Stage {stage_num} complete: "
+                            f"fields={len(stage_result['data'])}, "
+                            f"evidence={len(stage_result['evidence_segment_ids'])}, "
+                            f"p1_supplements={stage_result['p1_supplements_count']}"
+                        )
+                        
+                        # ✅ 增量保存到数据库（顺序模式）
+                        incremental_data = {
+                            "schema_version": "tender_info_v3",
+                            **{k: all_stage_results.get(k, {}) for k in [s["key"] for s in stages_meta]}
+                        }
+                        self.dao.upsert_project_info(
+                            project_id,
+                            data_json=incremental_data,
+                            evidence_chunk_ids=list(all_evidence_ids)
+                        )
+                        
+                        # 更新完成进度
+                        if run_id:
+                            progress = 0.05 + stage_num * 0.15  # 0.20, 0.35, 0.50, 0.65, 0.80, 0.95
+                            self.dao.update_run(
+                                run_id, "running", progress=progress,
+                                message=f"{stage_name}已完成"
+                            )
+                        
+                    except Exception as e:
+                        logger.error(f"Stage {stage_num} failed: {e}", exc_info=True)
+                        # 失败时设置空数据，继续执行后续stage
+                        all_stage_results[stage_key] = {}
+                        
+                        # 记录错误但不中断流程
+                        if run_id:
+                            self.dao.update_run(
+                                run_id, "running",
+                                message=f"{stage_name}提取失败，继续下一阶段"
+                            )
+            
+            # ===== 步骤4：最终保存（并行模式需要在这里保存） =====
+            if parallel:
                 incremental_data = {
                     "schema_version": "tender_info_v3",
-                    **{k: stage_results.get(k, {}) for k in [s["key"] for s in stages]}
+                    **{k: all_stage_results.get(k, {}) for k in [s["key"] for s in stages_meta]}
                 }
                 self.dao.upsert_project_info(
-                    project_id, 
-                    data_json=incremental_data, 
-                    evidence_chunk_ids=list(all_evidence_chunk_ids)
+                    project_id,
+                    data_json=incremental_data,
+                    evidence_chunk_ids=list(all_evidence_ids)
                 )
-                
-                # 更新run进度
-                if run_id:
-                    progress = 0.05 + stage_num * 0.15  # Stage 1完成: 0.20, ..., Stage 6: 0.95
-                    self.dao.update_run(run_id, "running", progress=progress, message=f"{stage_name}已完成")
-                
-                logger.info(f"ExtractV2: Stage {stage_num}/6 incremental update done")
-                
-            except Exception as e:
-                logger.error(f"ExtractV2: Stage {stage_num}/6 failed: {e}", exc_info=True)
-                # 失败时设置默认值，但不影响其他阶段
-                stage_results[stage_key] = {}
-        
-        # 合并所有阶段结果（V3结构）
-        final_data = {
-            "schema_version": "tender_info_v3",
-            **{stage["key"]: stage_results.get(stage["key"], {}) for stage in stages}
-        }
-        
-        logger.info(
-            f"ExtractV2: STAGED extraction (V3) completed - "
-            f"stages_completed={len(stage_results)}/6"
-        )
-        
-        # ❌ 已移除：Step 2.1 追加调用 requirements 抽取
-        # 原因：与单独的"招标要求提取"功能重复
-        # 现在用户需要单独点击"招标要求提取"按钮来生成 tender_requirements
-        # 这样职责更清晰，避免资源浪费
-        
-        # 返回完整结果
-        return {
-            **final_data,  # 直接展开六大类到顶层
-            "evidence_chunk_ids": list(all_evidence_chunk_ids),
-            "evidence_spans": all_evidence_spans,
-            "retrieval_trace": {
-                "mode": "staged_v3",
-                "stages": all_traces
+            
+            # ===== 步骤5：验证提取结果 =====
+            logger.info("Step 5: 验证提取结果")
+            
+            final_result = {
+                "schema_version": "tender_info_v3",
+                **all_stage_results,
+                "evidence_chunk_ids": list(all_evidence_ids)
             }
-        }
+            
+            validation_report = extractor.validate_result(final_result)
+            
+            if not validation_report["is_valid"]:
+                logger.warning(
+                    f"Validation failed: errors={validation_report['errors']}"
+                )
+            
+            if validation_report["warnings"]:
+                logger.warning(
+                    f"Validation warnings: {validation_report['warnings']}"
+                )
+            
+            # ===== 步骤6：构建最终返回结果 =====
+            logger.info(
+                f"ExtractV2: CHECKLIST-BASED extraction complete - "
+                f"mode={'parallel' if parallel else 'sequential'}, "
+                f"stages_completed={len([r for r in all_stage_results.values() if r])}/6, "
+                f"evidence_segments={len(all_evidence_ids)}"
+            )
+            
+            # 构建evidence_spans（兼容旧格式）
+            evidence_spans = []
+            for seg_id in list(all_evidence_ids)[:50]:  # 限制数量
+                chunk = context_data.segment_id_map.get(seg_id)
+                if chunk:
+                    meta = chunk.meta or {}
+                    evidence_spans.append({
+                        "source": meta.get("doc_version_id", ""),
+                        "page_no": meta.get("page_no", 0),
+                        "snippet": chunk.text[:200]
+                    })
+            
+            # ===== 步骤6：构建完整的结果（确保包含所有6个stage） =====
+            final_result = {
+                "schema_version": "tender_info_v3",
+                # 明确列出所有6个stage，即使某些为空
+                "project_overview": all_stage_results.get("project_overview", {}),
+                "bidder_qualification": all_stage_results.get("bidder_qualification", {}),
+                "evaluation_and_scoring": all_stage_results.get("evaluation_and_scoring", {}),
+                "business_terms": all_stage_results.get("business_terms", {}),
+                "technical_requirements": all_stage_results.get("technical_requirements", {}),
+                "document_preparation": all_stage_results.get("document_preparation", {}),
+                "evidence_chunk_ids": list(all_evidence_ids),
+                "evidence_spans": evidence_spans,
+                "retrieval_trace": {
+                    "mode": "checklist_based_v3",
+                    "method": "P0+P1",
+                    "stages": len(all_stage_results),
+                    "validation": validation_report
+                }
+            }
+            
+            # ===== 步骤7：最终确认保存（确保数据完整） =====
+            # 最后再保存一次，确保所有stage的数据都已保存
+            logger.info("最终保存项目信息到数据库...")
+            data_to_save_final = {
+                "schema_version": "tender_info_v3",
+                "project_overview": all_stage_results.get("project_overview", {}),
+                "bidder_qualification": all_stage_results.get("bidder_qualification", {}),
+                "evaluation_and_scoring": all_stage_results.get("evaluation_and_scoring", {}),
+                "business_terms": all_stage_results.get("business_terms", {}),
+                "technical_requirements": all_stage_results.get("technical_requirements", {}),
+                "document_preparation": all_stage_results.get("document_preparation", {}),
+            }
+            self.dao.upsert_project_info(
+                project_id,
+                data_json=data_to_save_final,
+                evidence_chunk_ids=list(all_evidence_ids)
+            )
+            logger.info("项目信息已保存到数据库")
+            
+            # ===== 步骤8：更新run进度为接近完成 =====
+            if run_id:
+                logger.info(f"更新run进度: run_id={run_id}")
+                self.dao.update_run(
+                    run_id, 
+                    "running",  # 保持running状态，由TenderService最终更新为success
+                    progress=0.98,
+                    message="项目信息提取完成，正在保存..."
+                )
+            
+            return final_result
+            
+        except Exception as e:
+            logger.error(f"Checklist-based extraction failed: {e}", exc_info=True)
+            
+            if run_id:
+                self.dao.update_run(run_id, "failed", message=f"提取失败: {str(e)}")
+            
+            raise
     
     # extract_risks_v2 已删除，请使用 extract_requirements_v1
     # risks模块已废弃，统一使用requirements模块提取招标要求

@@ -352,7 +352,7 @@ async def extract_requirements(
 # ==================== 项目信息抽取 ====================
 
 @router.post("/projects/{project_id}/extract/project-info")
-def extract_project_info(
+async def extract_project_info(
     project_id: str,
     req: ExtractReq,
     request: Request,
@@ -367,24 +367,43 @@ def extract_project_info(
     """
     dao = TenderDAO(_get_pool(request))
     run_id = dao.create_run(project_id, "extract_project_info")
-    dao.update_run(run_id, "running", progress=0.01, message="running")
+    dao.update_run(run_id, "running", progress=0.01, message="初始化...")
     svc = _svc(request)
     owner_id = user.user_id if user else None
     
     # 检查是否同步执行
     run_sync = sync == 1 or request.headers.get("X-Run-Sync") == "1"
 
-    def job():
+    async def job_async():
+        """异步后台任务"""
         try:
-            svc.extract_project_info(project_id, req.model_id, run_id=run_id, owner_id=owner_id)
+            from app.works.tender.extract_v2_service import ExtractV2Service
+            from app.services.db.postgres import _get_pool
+            
+            logger.info(f"[后台任务] 开始: extract_project_info project={project_id}")
+            pool = _get_pool()
+            extract_v2 = ExtractV2Service(pool, svc.llm)
+            
+            # 直接调用异步方法
+            result = await extract_v2.extract_project_info_v2(
+                project_id=project_id,
+                model_id=req.model_id,
+                run_id=run_id
+            )
+            
+            # extract_project_info_v2 返回时状态为running(0.98)
+            # 这里更新为最终的success状态
+            dao.update_run(run_id, "success", progress=1.0, message="项目信息提取完成")
+            logger.info(f"[后台任务] 完成: extract_project_info project={project_id}, stages={len([r for r in result.values() if isinstance(r, dict) and r])}")
+            
         except Exception as e:
             import logging
-            logging.getLogger(__name__).exception(f"Extract project-info failed: {e}")
-            dao.update_run(run_id, "failed", message=str(e))
+            logging.getLogger(__name__).exception(f"[后台任务] 失败: {e}")
+            dao.update_run(run_id, "failed", message=f"提取失败: {str(e)}")
 
     if run_sync:
-        # 同步执行
-        job()
+        # 同步执行 - 直接await
+        await job_async()
         # 返回最新状态
         run = dao.get_run(run_id)
         return {
@@ -394,8 +413,9 @@ def extract_project_info(
             "message": run.get("message") if run else "",
         }
     else:
-        # 异步执行
-        bg.add_task(job)
+        # 异步执行 - 使用asyncio.create_task在当前事件循环中创建任务
+        import asyncio
+        asyncio.create_task(job_async())
         return {"run_id": run_id}
 
 
@@ -509,13 +529,10 @@ def extract_risks(
                     f"count={req_count}, coverage={coverage.get('coverage_rate', 0):.1%}"
                 )
             else:
-                # ❌ V1已废弃，不应进入此分支
-                logger.error(f"❌ V1提取方式已废弃: project={project_id}")
-                raise ValueError(
-                    "❌ V1招标要求提取已废弃，请使用 V2 清单方式（use_checklist=1）\n"
-                    "废弃时间：2025-12-29\n"
-                    "废弃原因：V2标准清单方式提供更高质量的数据（100% norm_key覆盖）+ P1全文补充"
-                )
+                # ❌ V1已废弃，强制使用V2
+                logger.error(f"❌ V1提取方式已废弃，自动使用V2: project={project_id}")
+                dao.update_run(run_id, "failed", message="V1已废弃，请使用use_checklist=1")
+                raise ValueError("V1招标要求提取已废弃，请使用 use_checklist=1 参数")
             
         except Exception as e:
             import logging
@@ -1625,6 +1642,13 @@ def get_review(
         if matched_response_id is not None:
             matched_response_id = str(matched_response_id)
         
+        # 规范化状态：数据库中是小写（pass/fail/pending/missing），前端需要大写
+        db_status = r.get("status") or r.get("result") or "pending"
+        normalized_status = db_status.upper() if db_status else "PENDING"
+        # 特殊处理：missing → WARN（前端没有MISSING状态）
+        if normalized_status == "MISSING":
+            normalized_status = "WARN"
+        
         review_item = {
             "id": r["id"],
             "project_id": r["project_id"],
@@ -1632,12 +1656,12 @@ def get_review(
             "dimension": r.get("dimension") or "其他",
             "requirement_text": r.get("requirement_text") or "",
             "response_text": r.get("response_text") or "",
-            "result": r.get("result") or r.get("status") or "risk",  # 兼容：优先status，回退result
+            "result": normalized_status.lower(),  # result字段保持小写兼容性
             "remark": r.get("remark") or "",
             "rigid": bool(r.get("rigid", False)),
             "rule_id": None,
             "evaluator": r.get("evaluator"),  # V3新增字段
-            "status": r.get("status"),  # V3新增字段
+            "status": normalized_status,  # V3新增字段：规范化为大写
             "requirement_id": r.get("requirement_id"),  # V3新增字段
             "matched_response_id": matched_response_id,  # V3新增字段（UUID转字符串）
             "tender_evidence_chunk_ids": r.get("tender_evidence_chunk_ids") or [],
