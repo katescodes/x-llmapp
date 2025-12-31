@@ -301,6 +301,7 @@ class ReviewPipelineV3:
         model_id: Optional[str] = None,
         use_llm_semantic: bool = True,
         review_run_id: Optional[str] = None,
+        extra_requirements: Optional[List[Dict[str, Any]]] = None,  # ✨ 新增参数
     ) -> Dict[str, Any]:
         """
         运行固定流水线审核
@@ -312,6 +313,8 @@ class ReviewPipelineV3:
         4. Semantic Escalation: 语义审核（仅 PENDING 或 SEMANTIC 类型）
         5. Consistency: 一致性检查（跨维度）
         6. Aggregate: 汇总结果
+        
+        ✨ 增强：支持extra_requirements（如自定义规则），优先级更高
         """
         # 生成审核批次 ID
         if not review_run_id:
@@ -320,14 +323,31 @@ class ReviewPipelineV3:
         logger.info(f"ReviewPipeline: START project={project_id}, bidder={bidder_name}, run_id={review_run_id}")
         
         # 1. 加载数据
-        all_requirements = self._load_requirements(project_id)
+        tender_requirements = self._load_requirements(project_id)
         responses = self._load_responses(project_id, bidder_name)
         
-        logger.info(f"ReviewPipeline: Loaded {len(all_requirements)} requirements, {len(responses)} responses")
+        # ✨ 合并额外要求（如自定义规则）
+        if extra_requirements:
+            logger.info(f"ReviewPipeline: Merging {len(extra_requirements)} extra requirements (custom rules)")
+            all_requirements = extra_requirements + tender_requirements  # 自定义规则在前，优先级更高
+        else:
+            all_requirements = tender_requirements
         
+        logger.info(f"ReviewPipeline: Total {len(all_requirements)} requirements ({len(tender_requirements)} tender + {len(extra_requirements or [])} custom), {len(responses)} responses")
+        
+        # ✅ 前置检查1：确保招标要求已提取
         if not all_requirements:
-            logger.warning("ReviewPipeline: No requirements found")
-            return {"review_items": [], "stats": {}}
+            error_msg = f"❌ 未找到招标要求，请先提取招标要求。项目ID: {project_id}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        # ✅ 前置检查2：确保投标响应已提取
+        if not responses:
+            error_msg = f"❌ 未找到投标响应，请先提取投标响应。项目ID: {project_id}, 投标人: {bidder_name}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        logger.info(f"ReviewPipeline: Data validation passed - {len(all_requirements)} requirements, {len(responses)} responses")
         
         # 目标A: 分流过程性条款 (不进入 HardGate/Quant/Semantic)
         process_reqs = [r for r in all_requirements if self._is_process_clause(r.get("requirement_text", ""))]
@@ -363,18 +383,30 @@ class ReviewPipelineV3:
             )
             logger.info(f"ReviewPipeline: Semantic escalation produced {len(semantic_results)} results")
         
-        # 6. Step 5: Consistency Check - 一致性检查（Step 6）
-        consistency_results = self._consistency_check(responses)
+        # 6. Step 5: Consistency Check - 一致性检查（Step 6 + P2）
+        consistency_results = self._consistency_check(responses, project_id=project_id)
         logger.info(f"ReviewPipeline: Consistency check produced {len(consistency_results)} results")
         
         # 7. 合并所有结果（目标A: 加入 out_of_scope_results）
         all_results = out_of_scope_results + hard_gate_results + quant_results + semantic_results + consistency_results
+        
+        # 7.5. ✅ P1优化：完整性验证
+        completeness_report = self._validate_review_completeness(
+            all_requirements=all_requirements,
+            all_results=all_results,
+            responses=responses,
+        )
+        
+        if completeness_report.get("warnings"):
+            for warning in completeness_report["warnings"]:
+                logger.warning(f"[完整性验证] {warning}")
         
         # 8. 落库（传入 review_run_id）
         self._save_review_items(project_id, bidder_name, all_results, review_run_id)
         
         # 9. 统计
         stats = self._calculate_stats(all_results)
+        stats["completeness"] = completeness_report  # ✅ 添加完整性报告
         
         logger.info(f"ReviewPipeline: DONE - {stats}")
         
@@ -496,14 +528,15 @@ class ReviewPipelineV3:
     
     # ==================== Step F2: Evidence 组装工具 ====================
     
-    def _make_quote(self, text: str, limit: int = 220) -> str:
-        """截取并清理空白"""
+    def _make_quote(self, text: str, limit: int = 400) -> str:
+        """截取并清理空白（增强版 - 更长上下文）"""
         if not text:
             return ""
         
         # 压缩连续空白为单空格
         text = re.sub(r'\s+', ' ', text).strip()
         
+        # ✅ 增加默认长度：220 → 400字符，保留更多上下文
         # 超长加省略号
         if len(text) > limit:
             return text[:limit] + "..."
@@ -518,7 +551,7 @@ class ReviewPipelineV3:
         source: str = "doc_segments"
     ) -> List[Dict]:
         """
-        Step F2: 从 segment_ids 构建统一 evidence 结构
+        Step F2: 从 segment_ids 构建统一 evidence 结构（增强版）
         
         Args:
             role: "tender" or "bid"
@@ -531,8 +564,8 @@ class ReviewPipelineV3:
         """
         evidence_entries = []
         
-        # 最多取前 5 个
-        for seg_id in segment_ids[:5]:
+        # ✅ 增加证据数量上限：5 → 10条，提供更完整的证据链
+        for seg_id in segment_ids[:10]:
             seg = seg_map.get(seg_id)
             
             if seg:
@@ -1685,17 +1718,29 @@ class ReviewPipelineV3:
         logger.warning(f"ReviewPipeline: _llm_semantic_review not implemented, returning PENDING for {req.get('requirement_id')}")
         return "PENDING", "语义审核暂未实现，需人工复核", 0.0
     
-    def _consistency_check(self, responses: List[Dict]) -> List[Dict[str, Any]]:
+    def _consistency_check(self, responses: List[Dict], project_id: str = None) -> List[Dict[str, Any]]:
         """
-        Step 5: Consistency Check (Step E: 改进版)
-        检查跨维度一致性（最小集：公司名称、报价、工期）
+        Step 5: Consistency Check (Step E + P2: 改进版)
+        检查跨维度一致性（扩展集：项目信息、公司名称、报价、工期）
         
         改进点（Step E）:
         1. 使用归一化函数处理数值
         2. 添加阈值判断（报价: 0.5%）
         3. 可降级（PENDING/WARN）而不是直接 FAIL
+        
+        新增（P2）:
+        4. 招标vs投标项目信息一致性（项目名称、项目编号）
         """
         results = []
+        
+        # ✅ P2新增：招标vs投标项目信息一致性检查
+        if project_id:
+            project_info_check = self._check_project_info_consistency(project_id, responses)
+            results.extend(project_info_check)
+        
+        # ✅ P2新增：报价明细合计验证（明细合计应等于总价）
+        price_detail_check = self._check_price_detail_consistency(responses)
+        results.extend(price_detail_check)
         
         # 1. 检查公司名称一致性
         company_names = []
@@ -1895,6 +1940,298 @@ class ReviewPipelineV3:
         
         return results
     
+    def _check_project_info_consistency(
+        self,
+        project_id: str,
+        responses: List[Dict]
+    ) -> List[Dict[str, Any]]:
+        """
+        P2新增：检查招标vs投标的项目信息一致性
+        
+        检查项：
+        1. 项目名称是否一致
+        2. 项目编号是否一致
+        
+        Args:
+            project_id: 项目ID
+            responses: 投标响应列表
+            
+        Returns:
+            一致性检查结果列表
+        """
+        results = []
+        
+        try:
+            # 1. 从数据库加载招标项目信息
+            with self.pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT meta_json
+                        FROM tender_projects
+                        WHERE id = %s
+                    """, (project_id,))
+                    
+                    row = cur.fetchone()
+                    if not row:
+                        logger.warning(f"[项目信息一致性] 未找到招标项目: {project_id}")
+                        return results
+                    
+                    tender_meta = row.get("meta_json") if isinstance(row, dict) else row[0]
+                    if not tender_meta or not isinstance(tender_meta, dict):
+                        logger.warning(f"[项目信息一致性] 招标项目meta_json为空")
+                        return results
+            
+            # 2. 从投标响应中提取项目信息
+            bid_project_name = None
+            bid_project_code = None
+            
+            for resp in responses:
+                norm_fields = resp.get("normalized_fields_json", {})
+                if not isinstance(norm_fields, dict):
+                    continue
+                
+                # 提取项目名称
+                if not bid_project_name and "project_name" in norm_fields:
+                    bid_project_name = norm_fields["project_name"]
+                
+                # 提取项目编号
+                if not bid_project_code and "project_code" in norm_fields:
+                    bid_project_code = norm_fields["project_code"]
+                
+                if bid_project_name and bid_project_code:
+                    break
+            
+            # 3. 获取招标项目信息（从meta_json或project_info）
+            tender_project_name = tender_meta.get("project_info", {}).get("project_name")
+            tender_project_code = tender_meta.get("project_info", {}).get("project_code")
+            
+            # 4. 比对项目名称
+            if tender_project_name and bid_project_name:
+                # 简化比对：去除空格、标点后比较
+                tender_name_simple = self._simplify_text(tender_project_name)
+                bid_name_simple = self._simplify_text(bid_project_name)
+                
+                if tender_name_simple != bid_name_simple:
+                    # 进一步检查：是否主要部分匹配（相似度>=0.8）
+                    similarity = self._text_similarity(tender_name_simple, bid_name_simple)
+                    
+                    if similarity < 0.8:
+                        results.append({
+                            "requirement_id": "consistency_project_name",
+                            "matched_response_id": None,
+                            "dimension": "consistency",
+                            "clause_title": "项目名称一致性检查",
+                            "tender_requirement": f"投标书项目名称应与招标书一致: {tender_project_name}",
+                            "bid_response": f"投标书项目名称: {bid_project_name}",
+                            "status": "FAIL",
+                            "result": "risk",
+                            "is_hard": True,
+                            "remark": f"项目名称不一致（相似度: {similarity:.2%}），可能投标错误项目",
+                            "evaluator": "project_info_consistency",
+                            "evidence_json": None,
+                            "tender_evidence_chunk_ids": [],
+                            "bid_evidence_chunk_ids": [],
+                        })
+                    else:
+                        # 相似但不完全一致，警告
+                        results.append({
+                            "requirement_id": "consistency_project_name",
+                            "matched_response_id": None,
+                            "dimension": "consistency",
+                            "clause_title": "项目名称一致性检查",
+                            "tender_requirement": f"投标书项目名称应与招标书一致: {tender_project_name}",
+                            "bid_response": f"投标书项目名称: {bid_project_name}",
+                            "status": "WARN",
+                            "result": "risk",
+                            "is_hard": False,
+                            "remark": f"项目名称略有差异（相似度: {similarity:.2%}），请核实",
+                            "evaluator": "project_info_consistency",
+                            "evidence_json": None,
+                            "tender_evidence_chunk_ids": [],
+                            "bid_evidence_chunk_ids": [],
+                        })
+            
+            # 5. 比对项目编号
+            if tender_project_code and bid_project_code:
+                # 去除空格、连字符后比较
+                tender_code_simple = tender_project_code.replace(" ", "").replace("-", "").upper()
+                bid_code_simple = bid_project_code.replace(" ", "").replace("-", "").upper()
+                
+                if tender_code_simple != bid_code_simple:
+                    results.append({
+                        "requirement_id": "consistency_project_code",
+                        "matched_response_id": None,
+                        "dimension": "consistency",
+                        "clause_title": "项目编号一致性检查",
+                        "tender_requirement": f"投标书项目编号应与招标书一致: {tender_project_code}",
+                        "bid_response": f"投标书项目编号: {bid_project_code}",
+                        "status": "FAIL",
+                        "result": "risk",
+                        "is_hard": True,
+                        "remark": "项目编号不一致，可能投标错误项目",
+                        "evaluator": "project_info_consistency",
+                        "evidence_json": None,
+                        "tender_evidence_chunk_ids": [],
+                        "bid_evidence_chunk_ids": [],
+                    })
+            
+            if results:
+                logger.warning(f"[项目信息一致性] 发现 {len(results)} 个不一致项")
+            else:
+                logger.info("[项目信息一致性] 项目信息一致")
+            
+        except Exception as e:
+            logger.error(f"[项目信息一致性] 检查失败: {e}", exc_info=True)
+        
+        return results
+    
+    def _check_price_detail_consistency(
+        self,
+        responses: List[Dict]
+    ) -> List[Dict[str, Any]]:
+        """
+        P2新增：检查报价明细合计是否等于总价
+        
+        逻辑：
+        1. 从responses中提取total_price
+        2. 从responses中查找price_detail结构化数据
+        3. 比对 detail_sum 与 total_price
+        4. 若差异>0.5%，则FAIL；若0.1%~0.5%，则WARN
+        
+        Args:
+            responses: 投标响应列表
+            
+        Returns:
+            报价一致性检查结果列表
+        """
+        results = []
+        
+        try:
+            # 1. 提取总价
+            total_price = None
+            for resp in responses:
+                norm_fields = resp.get("normalized_fields_json", {})
+                if isinstance(norm_fields, dict) and "total_price_cny" in norm_fields:
+                    total_price = norm_fields["total_price_cny"]
+                    break
+            
+            if not total_price or total_price <= 0:
+                logger.info("[报价明细一致性] 未找到投标总价，跳过检查")
+                return results
+            
+            # 2. 查找报价明细结构化数据（从meta_json或专门字段）
+            # 注意：price_detail数据应该在前面的抽取步骤中保存到meta_json
+            # 这里我们从responses的meta_json中查找
+            price_detail = None
+            for resp in responses:
+                resp_meta = resp.get("meta_json", {})
+                if isinstance(resp_meta, dict) and "price_detail" in resp_meta:
+                    price_detail = resp_meta["price_detail"]
+                    break
+            
+            if not price_detail:
+                logger.info("[报价明细一致性] 未找到报价明细结构，跳过检查")
+                return results
+            
+            # 3. 提取明细合计
+            detail_sum = price_detail.get("detail_sum", 0)
+            detail_items = price_detail.get("detail_items", [])
+            
+            if detail_sum <= 0 or not detail_items:
+                logger.info("[报价明细一致性] 明细合计无效，跳过检查")
+                return results
+            
+            # 4. 计算差异
+            difference = abs(total_price - detail_sum)
+            diff_ratio = difference / total_price if total_price > 0 else 0
+            
+            logger.info(
+                f"[报价明细一致性] 总价={total_price}, 明细合计={detail_sum}, "
+                f"差异={difference} ({diff_ratio:.2%})"
+            )
+            
+            # 5. 判定
+            if diff_ratio > 0.005:  # >0.5%
+                results.append({
+                    "requirement_id": "consistency_price_detail",
+                    "matched_response_id": None,
+                    "dimension": "consistency",
+                    "clause_title": "报价明细一致性检查",
+                    "tender_requirement": "投标总价应等于各分项报价之和",
+                    "bid_response": (
+                        f"投标总价: {total_price:,.2f}元，"
+                        f"分项合计: {detail_sum:,.2f}元，"
+                        f"差异: {difference:,.2f}元 ({diff_ratio:.2%})"
+                    ),
+                    "status": "FAIL",
+                    "result": "risk",
+                    "is_hard": True,
+                    "remark": f"报价明细合计与总价差异过大（{diff_ratio:.2%}），可能存在计算错误",
+                    "evaluator": "price_detail_consistency",
+                    "evidence_json": {
+                        "total_price": total_price,
+                        "detail_sum": detail_sum,
+                        "difference": difference,
+                        "diff_ratio": diff_ratio,
+                        "detail_count": len(detail_items),
+                    },
+                    "tender_evidence_chunk_ids": [],
+                    "bid_evidence_chunk_ids": price_detail.get("evidence_segment_ids", []),
+                })
+            elif diff_ratio > 0.001:  # 0.1%~0.5%
+                results.append({
+                    "requirement_id": "consistency_price_detail",
+                    "matched_response_id": None,
+                    "dimension": "consistency",
+                    "clause_title": "报价明细一致性检查",
+                    "tender_requirement": "投标总价应等于各分项报价之和",
+                    "bid_response": (
+                        f"投标总价: {total_price:,.2f}元，"
+                        f"分项合计: {detail_sum:,.2f}元，"
+                        f"差异: {difference:,.2f}元 ({diff_ratio:.2%})"
+                    ),
+                    "status": "WARN",
+                    "result": "risk",
+                    "is_hard": False,
+                    "remark": f"报价明细合计与总价有轻微差异（{diff_ratio:.2%}），请核实",
+                    "evaluator": "price_detail_consistency",
+                    "evidence_json": {
+                        "total_price": total_price,
+                        "detail_sum": detail_sum,
+                        "difference": difference,
+                        "diff_ratio": diff_ratio,
+                        "detail_count": len(detail_items),
+                    },
+                    "tender_evidence_chunk_ids": [],
+                    "bid_evidence_chunk_ids": price_detail.get("evidence_segment_ids", []),
+                })
+            else:
+                # 差异<=0.1%，通过
+                logger.info(f"[报价明细一致性] 通过（差异{diff_ratio:.3%}在合理范围内）")
+        
+        except Exception as e:
+            logger.error(f"[报价明细一致性] 检查失败: {e}", exc_info=True)
+        
+        return results
+    
+    def _simplify_text(self, text: str) -> str:
+        """简化文本：去除空格、标点"""
+        import re
+        return re.sub(r'[\s\-\._()（）【】]', '', text).strip()
+    
+    def _text_similarity(self, text1: str, text2: str) -> float:
+        """计算文本相似度（基于字符集合的Jaccard相似度）"""
+        set1 = set(text1)
+        set2 = set(text2)
+        
+        if not set1 or not set2:
+            return 0.0
+        
+        intersection = len(set1 & set2)
+        union = len(set1 | set2)
+        
+        return intersection / union if union > 0 else 0.0
+    
     def _extract_evidence(self, resp: Dict) -> List[Dict]:
         """从响应中提取证据"""
         evidence_json = resp.get("evidence_json", [])
@@ -1997,5 +2334,146 @@ class ReviewPipelineV3:
             "fail_count": fail_count,
             "warn_count": warn_count,
             "pending_count": pending_count,
+        }
+    
+    def _validate_review_completeness(
+        self,
+        all_requirements: List[Dict[str, Any]],
+        all_results: List[Dict[str, Any]],
+        responses: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        P1优化：验证审核完整性
+        
+        检查：
+        1. 所有硬性要求是否都有审核结果
+        2. 所有维度是否都有覆盖
+        3. 响应覆盖率是否合理
+        4. 是否有未匹配的响应
+        
+        Args:
+            all_requirements: 所有招标要求
+            all_results: 所有审核结果
+            responses: 所有投标响应
+        
+        Returns:
+            {
+                "completeness_score": 0.95,  # 完整性得分 (0-1)
+                "coverage": {
+                    "requirement_coverage": 0.98,  # 要求覆盖率
+                    "response_coverage": 0.92,  # 响应覆盖率
+                },
+                "warnings": ["xxx"],
+                "recommendations": ["xxx"],
+            }
+        """
+        warnings = []
+        recommendations = []
+        
+        # 1. 检查要求覆盖率
+        reviewed_req_ids = set()
+        for result in all_results:
+            req_id = result.get("requirement_id")
+            if req_id:
+                reviewed_req_ids.add(req_id)
+        
+        requirement_coverage = len(reviewed_req_ids) / len(all_requirements) if all_requirements else 0
+        
+        # 找出未审核的要求
+        unreviewed_reqs = [
+            req for req in all_requirements 
+            if req.get("requirement_id") not in reviewed_req_ids
+        ]
+        
+        if unreviewed_reqs:
+            # 按维度分组
+            missing_by_dim = {}
+            for req in unreviewed_reqs:
+                dim = req.get("dimension", "other")
+                if dim not in missing_by_dim:
+                    missing_by_dim[dim] = []
+                missing_by_dim[dim].append(req.get("requirement_text", "")[:50])
+            
+            for dim, texts in missing_by_dim.items():
+                warnings.append(f"维度'{dim}'有 {len(texts)} 条要求未审核")
+                if len(texts) <= 3:
+                    for text in texts:
+                        warnings.append(f"  - {text}")
+        
+        # 2. 检查硬性要求覆盖
+        hard_requirements = [req for req in all_requirements if req.get("is_hard")]
+        hard_reviewed = [req for req in hard_requirements if req.get("requirement_id") in reviewed_req_ids]
+        
+        if len(hard_reviewed) < len(hard_requirements):
+            missing_hard_count = len(hard_requirements) - len(hard_reviewed)
+            warnings.append(f"有 {missing_hard_count} 条硬性要求未审核")
+        
+        # 3. 检查响应覆盖率（有多少响应被匹配到审核）
+        matched_response_ids = set()
+        for result in all_results:
+            resp_id = result.get("response_id")
+            if resp_id:
+                matched_response_ids.add(resp_id)
+        
+        response_coverage = len(matched_response_ids) / len(responses) if responses else 0
+        
+        if response_coverage < 0.7:
+            warnings.append(f"投标响应覆盖率偏低 ({response_coverage:.1%})，可能存在未匹配的响应")
+            recommendations.append("建议检查投标响应提取是否完整，或审核映射逻辑是否准确")
+        
+        # 4. 检查维度覆盖
+        requirement_dimensions = set(req.get("dimension") for req in all_requirements)
+        reviewed_dimensions = set(result.get("dimension") for result in all_results if result.get("dimension"))
+        
+        missing_dimensions = requirement_dimensions - reviewed_dimensions
+        if missing_dimensions:
+            warnings.append(f"以下维度未出现在审核结果中: {', '.join(missing_dimensions)}")
+        
+        # 5. 检查FAIL和WARN比例
+        fail_count = sum(1 for r in all_results if r.get("status") == "FAIL")
+        warn_count = sum(1 for r in all_results if r.get("status") == "WARN")
+        total = len(all_results)
+        
+        if total > 0:
+            fail_ratio = fail_count / total
+            warn_ratio = warn_count / total
+            
+            if fail_ratio > 0.3:
+                warnings.append(f"失败项比例较高 ({fail_ratio:.1%})，建议重点关注")
+            
+            if warn_ratio > 0.4:
+                recommendations.append(f"警告项比例较高 ({warn_ratio:.1%})，建议人工复核")
+        
+        # 6. 计算完整性得分
+        completeness_score = (
+            requirement_coverage * 0.5 +  # 要求覆盖权重50%
+            response_coverage * 0.3 +      # 响应覆盖权重30%
+            (1 - len(missing_dimensions) / max(len(requirement_dimensions), 1)) * 0.2  # 维度覆盖权重20%
+        )
+        
+        logger.info(
+            f"[完整性验证] 得分: {completeness_score:.2f}, "
+            f"要求覆盖: {requirement_coverage:.1%}, "
+            f"响应覆盖: {response_coverage:.1%}, "
+            f"警告数: {len(warnings)}"
+        )
+        
+        return {
+            "completeness_score": round(completeness_score, 3),
+            "coverage": {
+                "requirement_coverage": round(requirement_coverage, 3),
+                "response_coverage": round(response_coverage, 3),
+                "reviewed_requirements": len(reviewed_req_ids),
+                "total_requirements": len(all_requirements),
+                "matched_responses": len(matched_response_ids),
+                "total_responses": len(responses),
+            },
+            "dimension_coverage": {
+                "required_dimensions": list(requirement_dimensions),
+                "reviewed_dimensions": list(reviewed_dimensions),
+                "missing_dimensions": list(missing_dimensions),
+            },
+            "warnings": warnings,
+            "recommendations": recommendations,
         }
 

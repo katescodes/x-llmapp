@@ -4,14 +4,16 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel, Field
 from psycopg_pool import ConnectionPool
 import psycopg.rows
 
@@ -287,6 +289,66 @@ def get_latest_runs(project_id: str, request: Request):
     return result
 
 
+# ==================== 招标要求抽取 ====================
+
+@router.post("/projects/{project_id}/extract/requirements")
+async def extract_requirements(
+    project_id: str,
+    req: ExtractReq,
+    request: Request,
+    bg: BackgroundTasks,
+    sync: int = 0,
+    user=Depends(get_current_user_sync),
+):
+    """抽取招标要求（框架式自主提取）
+    
+    Args:
+        sync: 同步执行模式，1=同步返回结果，0=后台任务（默认）
+    """
+    dao = TenderDAO(_get_pool(request))
+    run_id = dao.create_run(project_id, "extract_requirements_v2")
+    dao.update_run(run_id, "running", progress=0.01, message="running")
+    
+    # 获取ExtractV2Service
+    pool = _get_pool(request)
+    llm_orchestrator = getattr(request.app.state, 'llm_orchestrator', None)
+    
+    from app.works.tender.extract_v2_service import ExtractV2Service
+    extract_svc = ExtractV2Service(
+        pool=pool,
+        llm_orchestrator=llm_orchestrator
+    )
+    
+    # 检查是否同步执行
+    run_sync = sync == 1 or request.headers.get("X-Run-Sync") == "1"
+    
+    async def job():
+        try:
+            result = await extract_svc.extract_requirements_v2(
+                project_id=project_id,
+                model_id=req.model_id,
+                checklist_template=getattr(req, 'checklist_template', 'engineering'),
+                run_id=run_id
+            )
+            dao.update_run(run_id, "success", progress=1.0, result_json=result)
+            return result
+        except Exception as e:
+            logger.error(f"Extract requirements failed: {e}", exc_info=True)
+            dao.update_run(run_id, "failed", progress=0.0, message=str(e))
+            raise
+    
+    if run_sync:
+        # 同步执行
+        try:
+            result = await job()
+            return {"run_id": run_id, "status": "completed", "result": result}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    else:
+        # 后台执行
+        bg.add_task(lambda: asyncio.run(job()))
+        return {"run_id": run_id, "status": "running", "message": "Task started in background"}
+
 # ==================== 项目信息抽取 ====================
 
 @router.post("/projects/{project_id}/extract/project-info")
@@ -372,20 +434,31 @@ def extract_risks(
     request: Request,
     bg: BackgroundTasks,
     sync: int = 0,
+    use_checklist: int = 1,  # ✅ 默认使用V2清单方式（V1已废弃）
     user=Depends(get_current_user_sync),
 ):
-    """提取招标要求（V3版本）
+    """提取招标要求（V2清单方式）
     
     新流程：
-    1. 提取 tender_requirements（调用 LLM）
+    1. 提取 tender_requirements（调用 LLM + 标准清单）
     2. 前端通过 /risk-analysis 接口聚合展示
     
     Args:
         sync: 同步执行模式，1=同步返回结果，0=后台任务（默认）
+        use_checklist: 是否使用标准清单方式，1=使用v2清单（默认），0=v1传统方式（已废弃）
+    
+    ✨ V2清单方式（P0+P1优化）：
+        - 标准清单引导：覆盖95%+高频要求
+        - 全文补充扫描：捕获遗漏的项目特定要求
+        - 强制norm_key：100%覆盖率，便于精准比对
+        - 完整性验证：自动检测并报告提取质量
     """
     dao = TenderDAO(_get_pool(request))
     run_id = dao.create_run(project_id, "extract_risks")
-    dao.update_run(run_id, "running", progress=0.01, message="正在提取招标要求...")
+    
+    # 根据use_checklist参数选择提示信息
+    extract_method = "标准清单方式" if use_checklist == 1 else "传统方式"
+    dao.update_run(run_id, "running", progress=0.01, message=f"正在提取招标要求（{extract_method}）...")
     
     # 在路由层面获取依赖，确保在后台任务中可用（与 extract_project_info 相同模式）
     pool = _get_pool(request)
@@ -403,30 +476,50 @@ def extract_risks(
             # 创建 ExtractV2Service，传递 llm orchestrator（与 TenderService.extract_project_info 相同）
             extract_v2 = ExtractV2Service(pool, llm)
             
-            # 调用 extract_requirements_v1（会自动写入 tender_requirements 表）
-            requirements = asyncio.run(extract_v2.extract_requirements_v1(
-                project_id=project_id,
-                model_id=req.model_id,
-                run_id=run_id
-            ))
-            
-            # 获取count
-            req_count = requirements.get("count", 0) if isinstance(requirements, dict) else len(requirements)
-            
-            # 更新运行状态
-            dao.update_run(
-                run_id, 
-                "success", 
-                progress=1.0, 
-                message=f"成功提取 {req_count} 条招标要求",
-                result_json={"count": req_count}
-            )
-            
-            logger.info(f"✅ Extract requirements for risk analysis: project={project_id}, count={req_count}")
+            # ✨ 根据use_checklist参数选择v1或v2
+            if use_checklist == 1:
+                logger.info(f"📋 Using checklist-based extraction (v2) for project={project_id}")
+                
+                # 调用 extract_requirements_v2（标准清单方式 + P1全文补充）
+                result = asyncio.run(extract_v2.extract_requirements_v2(
+                    project_id=project_id,
+                    model_id=req.model_id,
+                    checklist_template="engineering",  # 默认工程类模板
+                    run_id=run_id
+                ))
+                
+                req_count = result.get("count", 0)
+                coverage = result.get("checklist_coverage", {})
+                
+                # 更新运行状态（包含覆盖率信息）
+                dao.update_run(
+                    run_id, 
+                    "success", 
+                    progress=1.0, 
+                    message=f"成功提取 {req_count} 条招标要求（标准清单方式，覆盖率{coverage.get('coverage_rate', 0):.1%}）",
+                    result_json={
+                        "count": req_count,
+                        "method": "checklist_v2",
+                        "coverage": coverage
+                    }
+                )
+                
+                logger.info(
+                    f"✅ Extract requirements (v2 checklist): project={project_id}, "
+                    f"count={req_count}, coverage={coverage.get('coverage_rate', 0):.1%}"
+                )
+            else:
+                # ❌ V1已废弃，不应进入此分支
+                logger.error(f"❌ V1提取方式已废弃: project={project_id}")
+                raise ValueError(
+                    "❌ V1招标要求提取已废弃，请使用 V2 清单方式（use_checklist=1）\n"
+                    "废弃时间：2025-12-29\n"
+                    "废弃原因：V2标准清单方式提供更高质量的数据（100% norm_key覆盖）+ P1全文补充"
+                )
             
         except Exception as e:
             import logging
-            logging.getLogger(__name__).exception(f"Extract requirements for risks failed: {e}")
+            logging.getLogger(__name__).exception(f"Extract requirements failed: {e}")
             dao.update_run(run_id, "failed", message=str(e))
 
     if run_sync:
@@ -1079,6 +1172,96 @@ def extract_bid_responses(
         return {"run_id": run_id, "bidder_name": bidder_name}
 
 
+@router.post("/projects/{project_id}/extract-bid-responses-framework")
+async def extract_bid_responses_framework(
+    project_id: str,
+    bidder_name: str,
+    request: Request,
+    bg: BackgroundTasks,
+    sync: int = 0,
+    user=Depends(get_current_user_sync),
+):
+    """
+    使用框架式方法抽取投标响应（按维度分组批量提取）
+    
+    特性：
+    - 6次LLM调用 vs 原来52次
+    - 支持复杂对应关系
+    - 更强的语义理解
+    
+    Args:
+        bidder_name: 投标人名称
+        sync: 同步执行模式，1=同步返回结果，0=后台任务（默认）
+    """
+    dao = TenderDAO(_get_pool(request))
+    run_id = dao.create_run(project_id, "extract_bid_responses_framework")
+    dao.update_run(run_id, "running", progress=0.01, message=f"开始框架式提取：{bidder_name}")
+    
+    # 检查是否同步执行
+    run_sync = sync == 1 or request.headers.get("X-Run-Sync") == "1"
+    
+    async def job():
+        from app.platform.extraction.engine import ExtractionEngine
+        from app.platform.retrieval.facade import RetrievalFacade
+        from app.works.tender.bid_response_service import BidResponseService
+        
+        try:
+            pool = _get_pool(request)
+            llm = getattr(request.app.state, 'llm_orchestrator', None)
+            engine = ExtractionEngine()
+            retriever = RetrievalFacade(pool)
+            
+            service = BidResponseService(
+                pool=pool,
+                engine=engine,
+                retriever=retriever,
+                llm=llm
+            )
+            
+            # 调用框架式抽取服务
+            result = await service.extract_bid_response_framework(
+                project_id=project_id,
+                bidder_name=bidder_name,
+                model_id=None,
+                run_id=run_id
+            )
+            
+            # 更新运行状态
+            dao.update_run(
+                run_id, 
+                "success", 
+                progress=1.0,
+                message=f"框架式提取完成，共{result.get('added_count', 0)}条响应",
+                result_json={
+                    "bidder_name": result["bidder_name"],
+                    "total_responses": result.get("added_count", 0),
+                    "extraction_method": "framework",
+                    "schema_version": result.get("schema_version", "framework")
+                }
+            )
+            return result
+        except Exception as e:
+            logger.exception(f"Framework bid response extraction failed: {e}")
+            dao.update_run(run_id, "failed", message=str(e))
+            raise
+    
+    if run_sync:
+        # 同步执行
+        try:
+            result = await job()
+            return {
+                "run_id": run_id,
+                "status": "success",
+                "result": result
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    else:
+        # 异步执行
+        bg.add_task(lambda: asyncio.run(job()))
+        return {"run_id": run_id, "bidder_name": bidder_name, "status": "running"}
+
+
 @router.get("/projects/{project_id}/bid-responses")
 def get_bid_responses(
     project_id: str,
@@ -1179,7 +1362,182 @@ def get_bid_responses(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ==================== 自定义规则（简化输入） ====================
+
+class SimpleRuleCreateReq(BaseModel):
+    """简化规则创建请求"""
+    rule_text: str = Field(..., description="规则文本，支持多条规则（用空行分隔）")
+    pack_name: Optional[str] = Field(None, description="规则包名称（可选）")
+
+@router.post("/projects/{project_id}/rules/create-from-text")
+def create_rules_from_text_api(
+    project_id: str,
+    req: SimpleRuleCreateReq,
+    request: Request,
+    user=Depends(get_current_user_sync),
+):
+    """
+    从文本创建自定义规则（简化接口）
+    
+    用户只需输入规则文本，系统自动解析并创建规则包。
+    
+    支持格式：
+    1. 结构化格式：
+       ```
+       维度：资格条件
+       规则：投标人注册资本不得低于1000万元
+       类型：硬性
+       ```
+    
+    2. 自由文本格式：
+       ```
+       投标人注册资本不得低于1000万元（硬性要求）
+       ```
+    
+    返回：
+        {
+            "pack_id": "规则包ID",
+            "pack_name": "规则包名称",
+            "rules_count": 3,
+            "rules": [...]
+        }
+    """
+    from app.works.tender.simple_rule_parser import create_rules_from_text
+    from app.services.dao.tender_dao import TenderDAO
+    
+    try:
+        dao = TenderDAO()
+        result = create_rules_from_text(
+            pool=dao.pool,
+            project_id=project_id,
+            rule_text=req.rule_text,
+            pack_name=req.pack_name,
+            owner_id=user.get("id"),
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"创建规则失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"创建规则失败: {str(e)}")
+
+
 # ==================== 审核 ====================
+
+@router.post("/projects/{project_id}/audit/unified")
+async def run_unified_audit(
+    project_id: str,
+    bidder_name: str,
+    request: Request,
+    bg: BackgroundTasks,
+    sync: int = 0,
+    custom_rule_pack_ids: Optional[str] = Query(None, description="自定义规则包ID列表（逗号分隔）"),
+    user=Depends(get_current_user_sync),
+):
+    """
+    一体化审核（提取响应 + 审核判断一次完成）
+    
+    特性：
+    - 直接从招标要求开始
+    - LLM一次调用完成响应提取和审核判断
+    - 保存响应数据（供其他用途）
+    - 保存审核结果（供前端展示）
+    - 返回完整审核报告
+    - ✨ 支持自定义规则包集成
+    
+    Args:
+        bidder_name: 投标人名称
+        sync: 同步执行模式，1=同步返回结果，0=后台任务（默认）
+        custom_rule_pack_ids: 自定义规则包ID列表（逗号分隔，可选）
+    """
+    dao = TenderDAO(_get_pool(request))
+    run_id = dao.create_run(project_id, "unified_audit")
+    
+    # 解析规则包ID
+    rule_pack_ids_list = []
+    if custom_rule_pack_ids:
+        rule_pack_ids_list = [pid.strip() for pid in custom_rule_pack_ids.split(',') if pid.strip()]
+    
+    mode_msg = f"（启用{len(rule_pack_ids_list)}个自定义规则包）" if rule_pack_ids_list else "（基础评估模式）"
+    dao.update_run(run_id, "running", progress=0.01, message=f"开始一体化审核：{bidder_name} {mode_msg}")
+    
+    # 检查是否同步执行
+    run_sync = sync == 1 or request.headers.get("X-Run-Sync") == "1"
+    
+    async def job():
+        from app.platform.retrieval.facade import RetrievalFacade
+        from app.works.tender.unified_audit_service import UnifiedAuditService
+        
+        try:
+            pool = _get_pool(request)
+            llm = getattr(request.app.state, 'llm_orchestrator', None)
+            retriever = RetrievalFacade(pool)
+            
+            service = UnifiedAuditService(
+                pool=pool,
+                llm_orchestrator=llm,
+                retriever=retriever
+            )
+            
+            # ✨ 执行一体化审核（传入自定义规则包ID）
+            result = await service.run_unified_audit(
+                project_id=project_id,
+                bidder_name=bidder_name,
+                model_id=None,
+                run_id=run_id,
+                custom_rule_pack_ids=rule_pack_ids_list  # 新增参数
+            )
+            
+            # 更新运行状态
+            stats = result.get("statistics", {})
+            dao.update_run(
+                run_id,
+                "success",
+                progress=1.0,
+                message=f"审核完成：{stats.get('pass_count', 0)}条通过，{stats.get('fail_count', 0)}条不合规",
+                result_json=result
+            )
+            return result
+        except ValueError as e:
+            # 业务逻辑错误（如：未找到招标要求）
+            error_msg = str(e)
+            logger.warning(f"Unified audit validation error: {error_msg}")
+            if "未找到招标要求" in error_msg or "招标要求" in error_msg:
+                friendly_msg = "未找到招标要求，请先在【② 要求】标签页提取招标要求"
+                dao.update_run(run_id, "failed", message=friendly_msg)
+            else:
+                dao.update_run(run_id, "failed", message=error_msg)
+            raise
+        except Exception as e:
+            logger.exception(f"Unified audit failed: {e}")
+            dao.update_run(run_id, "failed", message=str(e))
+            raise
+    
+    if run_sync:
+        # 同步执行
+        try:
+            result = await job()
+            return {
+                "run_id": run_id,
+                "status": "success",
+                "result": result
+            }
+        except ValueError as e:
+            # 业务逻辑错误（如：未找到招标要求）
+            error_msg = str(e)
+            if "未找到招标要求" in error_msg or "招标要求" in error_msg:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="请先在【② 要求】标签页提取招标要求，然后再进行审核"
+                )
+            raise HTTPException(status_code=400, detail=error_msg)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    else:
+        # 异步执行
+        bg.add_task(lambda: asyncio.run(job()))
+        return {"run_id": run_id, "bidder_name": bidder_name, "status": "running"}
+
 
 @router.post("/projects/{project_id}/review/run")
 def run_review(
@@ -2212,3 +2570,8 @@ def get_latest_bid_templates(
         "message": "No cached result, please run extract first",
         "result": None,
     }
+
+
+# ==================== 一键审核流水线 (P3新增) ====================
+
+# 已删除 run_full_audit 接口（改用一体化审核 unified_audit）

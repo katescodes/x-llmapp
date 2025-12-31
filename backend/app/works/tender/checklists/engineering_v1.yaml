@@ -1,0 +1,532 @@
+# 标准清单 - 工程类招标 v1
+# 用于结构化提取招标要求（requirements）
+
+version: "1.0"
+template_name: "engineering"
+template_type: "招标要求标准清单"
+industry: "工程建设"
+description: "工程类招标项目的标准要求检查清单，涵盖价格、资格、技术、商务、评分等各方面"
+
+# ============================================
+# 第一部分：价格与保证金 (Price & Security)
+# ============================================
+price_and_security:
+  category: "价格与保证金"
+  dimension: "price"
+  
+  items:
+    - id: "price_001"
+      question: "是否有最高限价（招标控制价）？"
+      type: "boolean_with_number"
+      norm_key: "price_upper_limit_cny"
+      unit: "元"
+      is_hard: true
+      req_type: "threshold"
+      eval_method: "NUMERIC"
+      
+    - id: "price_002"
+      question: "是否要求投标保证金？"
+      type: "boolean_with_number"
+      norm_key: "bid_security_amount_cny"
+      unit: "元"
+      is_hard: true
+      req_type: "must_provide"
+      eval_method: "NUMERIC"
+      
+    - id: "price_003"
+      question: "投标报价是否有特殊计算规则？（如：下浮率、综合单价等）"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "format"
+      eval_method: "SEMANTIC"
+
+# ============================================
+# 第二部分：工期与质保 (Duration & Warranty)
+# ============================================
+duration_and_warranty:
+  category: "工期与质保"
+  dimension: "schedule_quality"
+  
+  items:
+    - id: "duration_001"
+      question: "工期要求是多少天？"
+      type: "number"
+      norm_key: "duration_days"
+      unit: "天"
+      is_hard: true
+      req_type: "threshold"
+      eval_method: "NUMERIC"
+      
+    - id: "duration_002"
+      question: "是否有工期里程碑要求？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+      
+    - id: "warranty_001"
+      question: "质保期要求是多少？"
+      type: "number"
+      norm_key: "warranty_months"
+      unit: "月"
+      is_hard: true
+      req_type: "threshold"
+      eval_method: "NUMERIC"
+      
+    - id: "warranty_002"
+      question: "质保期内是否有特殊要求？（如免费维修、备件等）"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+
+# ============================================
+# 第三部分：资格条件 (Qualification)
+# ============================================
+qualification:
+  category: "资格条件"
+  dimension: "qualification"
+  
+  items:
+    - id: "qual_001"
+      question: "是否要求提供营业执照？"
+      type: "boolean"
+      norm_key: "doc_business_license_present"
+      is_hard: true
+      req_type: "must_provide"
+      eval_method: "PRESENCE"
+      must_reject: true
+      
+    - id: "qual_002"
+      question: "是否要求特定的资质证书？如有，请说明具体要求的资质类型和等级"
+      type: "boolean_with_text"
+      norm_key: "doc_qualification_present"
+      is_hard: true
+      req_type: "must_provide"
+      eval_method: "VALIDITY"
+      must_reject: true
+      
+    - id: "qual_003"
+      question: "是否要求提供法定代表人授权委托书？"
+      type: "boolean"
+      norm_key: "doc_authorization_present"
+      is_hard: true
+      req_type: "must_provide"
+      eval_method: "PRESENCE"
+      
+    - id: "qual_004"
+      question: "是否有注册资本金要求？如有，最低金额是多少？"
+      type: "boolean_with_number"
+      unit: "万元"
+      is_hard: false
+      req_type: "threshold"
+      eval_method: "NUMERIC"
+      
+    - id: "qual_005"
+      question: "是否有类似项目业绩要求？如有，请说明时间范围、项目数量、合同金额等要求"
+      type: "boolean_with_text"
+      norm_key: "doc_performance_present"
+      is_hard: false
+      req_type: "must_provide"
+      eval_method: "VALIDITY"
+      
+    - id: "qual_006"
+      question: "是否有项目经理或项目负责人要求？如有，请说明资格要求"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "must_provide"
+      eval_method: "VALIDITY"
+      
+    - id: "qual_007"
+      question: "是否有财务要求？（如审计报告、财务状况等）"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "must_provide"
+      eval_method: "VALIDITY"
+      
+    - id: "qual_008"
+      question: "是否有信用要求？（如不得列入失信名单等）"
+      type: "boolean_with_text"
+      is_hard: true
+      req_type: "must_not_deviate"
+      eval_method: "VALIDITY"
+      must_reject: true
+
+# ============================================
+# 第四部分：技术要求 (Technical)
+# ============================================
+technical:
+  category: "技术要求"
+  dimension: "technical"
+  
+  items:
+    - id: "tech_001"
+      question: "是否有设备或材料品牌要求？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "must_not_deviate"
+      eval_method: "EXACT_MATCH"
+      
+    - id: "tech_002"
+      question: "是否有技术参数表或设备配置清单？如有，请列举参数项"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "must_not_deviate"
+      eval_method: "TABLE_COMPARE"
+      
+    - id: "tech_003"
+      question: "是否有技术方案或施工方案要求？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+      
+    - id: "tech_004"
+      question: "是否有技术偏离表要求？"
+      type: "boolean"
+      is_hard: false
+      req_type: "format"
+      eval_method: "PRESENCE"
+      
+    - id: "tech_005"
+      question: "是否有培训要求？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+
+    - id: "tech_006"
+      question: "是否有部署或安装调试要求？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+
+    - id: "tech_007"
+      question: "是否有技术功能要求、技术指标或性能规格说明？如有，请详细列举"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "technical"
+      eval_method: "SEMANTIC"
+      description: "提取招标文件中对产品/服务的技术功能、性能指标、技术规格等要求"
+
+
+# ============================================
+# 第五部分：商务条款 (Business Terms)
+# ============================================
+business:
+  category: "商务条款"
+  dimension: "business"
+  
+  items:
+    - id: "biz_001"
+      question: "付款方式和付款比例是什么？"
+      type: "text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+      
+    - id: "biz_002"
+      question: "是否有履约保证金要求？如有，金额或比例是多少？"
+      type: "boolean_with_number"
+      unit: "元"
+      is_hard: false
+      req_type: "other"
+      eval_method: "NUMERIC"
+      
+    - id: "biz_003"
+      question: "是否有交付或验收标准？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+      
+    - id: "biz_004"
+      question: "是否有售后服务要求？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+      
+    - id: "biz_005"
+      question: "是否有违约责任条款？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+
+# ============================================
+# 第六部分：文件编制 (Document Requirements)
+# ============================================
+document:
+  category: "文件编制"
+  dimension: "doc_structure"
+  
+  items:
+    - id: "doc_001"
+      question: "投标文件是否要求正本和副本？如有，份数各是多少？"
+      type: "boolean_with_text"
+      norm_key: "doc_seal_present"
+      is_hard: true
+      req_type: "format"
+      eval_method: "PRESENCE"
+      
+    - id: "doc_002"
+      question: "是否要求签字盖章？具体要求是什么？"
+      type: "boolean_with_text"
+      is_hard: true
+      req_type: "format"
+      eval_method: "PRESENCE"
+      must_reject: true
+      
+    - id: "doc_003"
+      question: "是否有装订或密封要求？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "format"
+      eval_method: "PRESENCE"
+      
+    - id: "doc_004"
+      question: "是否要求提供电子版？如有，格式要求是什么？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "format"
+      eval_method: "PRESENCE"
+      
+    - id: "doc_005"
+      question: "投标文件是否有页码或编号或格式要求？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "format"
+      eval_method: "PRESENCE"
+      
+    - id: "doc_006"
+      question: "招标文件是否规定了投标书的目录结构或章节组成要求？"
+      description: |
+        提取投标书的目录结构要求，如：
+        - 商务标/技术标/价格标的组成
+        - 各标段应包含的具体章节内容
+        - 按招标文件格式编制的目录清单
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "format"
+      eval_method: "PRESENCE"
+
+# ============================================
+# 第七部分：评分标准 (Evaluation Criteria)
+# ============================================
+evaluation:
+  category: "评分标准"
+  dimension: "evaluation"
+  
+  items:
+    - id: "eval_001"
+      question: "是否有投标报价评分？如有，满分是多少？计分规则是什么？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "scoring"
+      eval_method: "SEMANTIC"
+      
+    - id: "eval_002"
+      question: "是否有技术方案评分？如有，满分是多少？主要评分项有哪些？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "scoring"
+      eval_method: "SEMANTIC"
+      
+    - id: "eval_003"
+      question: "是否有企业资信评分？如有，满分是多少？主要评分项有哪些？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "scoring"
+      eval_method: "SEMANTIC"
+      
+    - id: "eval_004"
+      question: "是否有项目业绩评分？如有，满分是多少？计分规则是什么？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "scoring"
+      eval_method: "SEMANTIC"
+      
+    - id: "eval_005"
+      question: "是否有服务承诺或售后服务评分？如有，满分是多少？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "scoring"
+      eval_method: "SEMANTIC"
+
+# ============================================
+# 第八部分：其他特殊要求 (Other Requirements)
+# ============================================
+other:
+  category: "其他特殊要求"
+  dimension: "other"
+  
+  items:
+    - id: "other_001"
+      question: "是否有废标条款？如有，请列举主要的废标条件"
+      type: "boolean_with_text"
+      is_hard: true
+      req_type: "must_not_deviate"
+      eval_method: "SEMANTIC"
+      must_reject: true
+      
+    - id: "other_002"
+      question: "是否有优惠政策？（如中小企业、监狱企业、节能产品等）"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+      
+    - id: "other_003"
+      question: "是否有联合体投标相关要求？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+      
+    - id: "other_004"
+      question: "是否有知识产权或保密要求？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+      
+    - id: "other_005"
+      question: "是否有现场踏勘或答疑会要求？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+    
+    - id: "other_006"
+      question: "投标有效期是多少天？从何时起算？"
+      type: "boolean_with_text"
+      is_hard: true
+      req_type: "must_not_deviate"
+      eval_method: "NUMERIC"
+      description: "投标文件的有效期要求，通常从开标日期起算"
+    
+    - id: "other_007"
+      question: "是否有分包限制？是否允许分包？如允许，有何条件？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+    
+    - id: "other_008"
+      question: "招标文件是否要求提供样品？如有，样品要求是什么？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "PRESENCE"
+      description: "适用于货物采购类项目"
+    
+    - id: "other_009"
+      question: "交货地点或施工地点是哪里？是否有明确的地址要求？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "other"
+      eval_method: "SEMANTIC"
+    
+    - id: "other_010"
+      question: "投标文件使用的语言是什么？是否有特殊的语言要求？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "format"
+      eval_method: "SEMANTIC"
+    
+    - id: "other_011"
+      question: "报价币种是什么？计量单位有何要求？"
+      type: "boolean_with_text"
+      is_hard: true
+      req_type: "price"
+      eval_method: "EXACT_MATCH"
+      norm_key: "currency_code"
+      description: "明确报价的币种（人民币、美元等）和计量单位"
+    
+    - id: "other_012"
+      question: "是否要求提交技术偏离表或商务偏离表？"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "format"
+      eval_method: "PRESENCE"
+      description: "偏离表用于说明投标文件与招标文件的差异"
+    
+    - id: "other_013"
+      question: "是否要求授权代表到场？是否需要提供授权委托书？"
+      type: "boolean_with_text"
+      is_hard: true
+      req_type: "qualification"
+      eval_method: "PRESENCE"
+    
+    - id: "other_014"
+      question: "招标文件要求提供哪些附件材料？请列举所有必须提供的附件清单"
+      type: "boolean_with_text"
+      is_hard: true
+      req_type: "document"
+      eval_method: "PRESENCE"
+      description: "完整提取招标文件要求的所有附件和证明材料清单"
+
+# ============================================
+# 第九部分：评分标准 (Scoring)
+# ============================================
+scoring:
+  category: "评分标准"
+  dimension: "other"
+  
+  items:
+    - id: "scoring_001"
+      question: "招标文件中是否包含评分标准？如有，请提取所有评分项及其要求"
+      description: |
+        请提取招标文件中的评分标准，每个评分项可能包含多个具体要求。
+        请将每个评分项的具体要求拆分为独立的条目。
+      expected_format: "structured"
+      answer_schema:
+        type: "object"
+        properties:
+          has_scoring: 
+            type: "boolean"
+            description: "是否包含评分标准"
+          scoring_items:
+            type: "array"
+            description: "评分项列表"
+            items:
+              properties:
+                item_name:
+                  type: "string"
+                  description: "评分项名称（如：技术方案、商务条款）"
+                max_score:
+                  type: "number"
+                  description: "该项最高分值"
+                requirements:
+                  type: "array"
+                  description: "该评分项包含的具体要求（拆分为多条）"
+                  items:
+                    properties:
+                      requirement_text:
+                        type: "string"
+                        description: "具体要求内容"
+                      evidence_segment_ids:
+                        type: "array"
+                        description: "证据segment IDs"
+                scoring_rule:
+                  type: "string"
+                  description: "评分细则说明"
+      type: "boolean_with_text"
+      is_hard: false
+      req_type: "scoring_standard"
+      eval_method: "SEMANTIC"
+
+# ============================================
+# 元数据 (Metadata)
+# ============================================
+metadata:
+  total_items: 52
+  mandatory_items: 16
+  optional_items: 36
+  created_date: "2025-12-29"
+  last_updated: "2025-12-30"
+  author: "AI Assistant"
+  version: "1.1"
+

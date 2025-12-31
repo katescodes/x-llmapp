@@ -246,29 +246,79 @@ class NewRetriever:
     def _search_lexical(
         self, query: str, doc_version_ids: List[str], limit: int
     ) -> List[Dict]:
-        """PG tsvector 全文检索"""
+        """PG 全文检索：优先使用LIKE（中文友好），TSV作为备用"""
         try:
             with self.pool.connection() as conn:
                 with conn.cursor() as cur:
-                    # 使用 tsvector 检索
-                    sql = """
-                        SELECT id, ts_rank(tsv, query) as rank
-                        FROM doc_segments, to_tsquery('english', %s) query
+                    # 方案1: LIKE 模糊匹配（中文友好，直接使用）
+                    import re
+                    # 简单分词：提取2-4字的中文词组 + 英文单词
+                    # 先按空格和标点分割
+                    segments = re.split(r'[，。？！、\s]+', query)
+                    search_words = []
+                    
+                    for seg in segments:
+                        if not seg:
+                            continue
+                        # 中文：提取2-4字的词组
+                        chinese_chars = re.findall(r'[\u4e00-\u9fff]', seg)
+                        if chinese_chars:
+                            # 生成2字词组
+                            for i in range(len(chinese_chars) - 1):
+                                word = ''.join(chinese_chars[i:i+2])
+                                if word and word not in search_words:
+                                    search_words.append(word)
+                            # 也加入3字词组（如果有）
+                            for i in range(len(chinese_chars) - 2):
+                                word = ''.join(chinese_chars[i:i+3])
+                                if word and word not in search_words:
+                                    search_words.append(word)
+                        
+                        # 英文：直接加入
+                        english_words = re.findall(r'[a-zA-Z]{2,}', seg)
+                        for word in english_words:
+                            if word not in search_words:
+                                search_words.append(word)
+                    
+                    if not search_words:
+                        logger.warning(f"No valid words extracted from query: {query}")
+                        return []
+                    
+                    # 使用最多前5个词
+                    search_words = search_words[:5]
+                    print(f"[LEXICAL DEBUG] Extracted words: {search_words}", flush=True)
+                    
+                    # 构建 LIKE 条件（OR逻辑，而非AND）
+                    like_conditions = " OR ".join([f"content_text LIKE %s" for _ in search_words])
+                    like_params = [f"%{word}%" for word in search_words]
+                    
+                    # 计算匹配得分：匹配的词越多，得分越高
+                    score_expr = " + ".join([
+                        f"(CASE WHEN content_text LIKE %s THEN 1 ELSE 0 END)"
+                        for _ in search_words
+                    ])
+                    score_params = [f"%{word}%" for word in search_words]
+                    
+                    sql_like = f"""
+                        SELECT id, 
+                               ({score_expr})::float as rank
+                        FROM doc_segments
                         WHERE doc_version_id = ANY(%s)
-                          AND tsv @@ query
-                        ORDER BY rank DESC
+                          AND ({like_conditions})
+                        ORDER BY rank DESC, LENGTH(content_text) ASC
                         LIMIT %s
                     """
-                    # 简单处理查询词：用 OR 连接
-                    query_terms = " | ".join(query.split())
                     
-                    cur.execute(sql, [query_terms, doc_version_ids, limit])
+                    params = score_params + [doc_version_ids] + like_params + [limit]
+                    cur.execute(sql_like, params)
                     rows = cur.fetchall()
+                    
+                    logger.info(f"Lexical search (LIKE fallback) found {len(rows)} results")
                     
                     return [
                         {
                             "chunk_id": row['id'],
-                            "score": float(row['rank']),
+                            "score": float(row['rank']) if row['rank'] else 0.1,
                             "rank": idx,
                         }
                         for idx, row in enumerate(rows)

@@ -100,11 +100,13 @@ class RiskAnalysisService:
                 checklist_row = self._build_checklist_row(req)
                 checklist_table.append(checklist_row)
                 
-                # 特殊：如果 allow_deviation=true，追加提醒
-                if req["allow_deviation"]:
-                    extra_row = self._build_deviation_reminder(req)
-                    if extra_row:
-                        checklist_table.append(extra_row)
+                # ❌ 已删除：自动生成的偏离提醒（冗余信息，用户体验差）
+                # 如果招标文件明确有偏离说明，应该在提取时就包含在 requirement_text 中
+                # 不应该在前端显示时自动追加
+                # if req["allow_deviation"]:
+                #     extra_row = self._build_deviation_reminder(req)
+                #     if extra_row:
+                #         checklist_table.append(extra_row)
         
         # 3. 排序
         must_reject_table = self._sort_risk_table(must_reject_table)
@@ -265,24 +267,20 @@ class RiskAnalysisService:
         )
     
     def _build_checklist_row(self, req: Dict[str, Any]) -> ChecklistRow:
-        """构建注意事项行"""
-        # category 基于 req_type 或 dimension
-        category = self._infer_category(req)
+        """构建注意事项行 - 与 RiskRow 保持一致的字段结构"""
+        # 软性要求也需要推断consequence
+        consequence = self._infer_consequence(req["requirement_text"], req["dimension"])
         
         # 软性要求的 severity 通常较低
         if req["req_type"] == "scoring":
             severity = "low"
+        elif consequence == "score_loss":
+            severity = "medium"
         else:
             severity = "medium"
         
-        # title: 简化版要求文本（取前50字）
-        title = req["requirement_text"][:50] + "..." if len(req["requirement_text"]) > 50 else req["requirement_text"]
-        
-        # detail: 完整要求文本
-        detail = req["requirement_text"]
-        
         # suggestion
-        suggestion = self._generate_suggestion(req["req_type"], req["dimension"], "")
+        suggestion = self._generate_suggestion(req["req_type"], req["dimension"], consequence)
         
         return ChecklistRow(
             id=req["id"],
@@ -293,28 +291,24 @@ class RiskAnalysisService:
             allow_deviation=req["allow_deviation"],
             value_schema_json=req["value_schema_json"],
             evidence_chunk_ids=req["evidence_chunk_ids"],
-            category=category,
+            consequence=consequence,
             severity=severity,
-            title=title,
-            detail=detail,
             suggestion=suggestion,
         )
     
     def _build_deviation_reminder(self, req: Dict[str, Any]) -> ChecklistRow:
-        """构建偏离提醒行"""
+        """构建偏离提醒行（已废弃，保留以防需要）"""
         return ChecklistRow(
             id=f"{req['id']}_deviation",
             requirement_id=f"{req['requirement_id']}_deviation",
             dimension=req["dimension"],
             req_type="other",
-            requirement_text="允许正偏离但需保障措施",
+            requirement_text=f"针对「{req['requirement_text'][:30]}...」，允许正偏离（如工期短于要求），但需提供相应保障措施/资源计划。",
             allow_deviation=True,
             value_schema_json=None,
             evidence_chunk_ids=req["evidence_chunk_ids"],
-            category="偏离说明",
+            consequence="score_loss",
             severity="low",
-            title="允许正偏离但需保障措施",
-            detail=f"针对「{req['requirement_text'][:30]}...」，允许正偏离（如工期短于要求），但需提供相应保障措施/资源计划。",
             suggestion="如计划优于招标要求（正偏离），需在响应中明确说明并提供保障措施。",
         )
     

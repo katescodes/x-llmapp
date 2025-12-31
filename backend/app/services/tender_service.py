@@ -559,7 +559,8 @@ class TenderService:
             # 只支持 NEW_ONLY 模式，删除OLD/SHADOW/PREFER_NEW分支
             ingest_v2_result = None
             
-            if kind in ("tender", "bid", "custom_rule"):
+            # ✅ 扩展：template 也需要入库到知识库
+            if kind in ("tender", "bid", "custom_rule", "template"):
                 from app.core.cutover import get_cutover_config
                 cutover = get_cutover_config()
                 ingest_mode = cutover.get_mode("ingest", project_id)
@@ -607,20 +608,23 @@ class TenderService:
                 tpl_meta["ingest_v2_segments"] = ingest_v2_result.segment_count
                 
                 # 重要：从 doc_version_id 获取 document_id 作为 kb_doc_id
-                with self.dao.pool.connection() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute("""
-                            SELECT document_id 
-                            FROM document_versions 
-                            WHERE id = %s
-                        """, (ingest_v2_result.doc_version_id,))
-                        row = cur.fetchone()
-                        if row:
-                            # pool 使用 dict_row factory，所以 row 是 dict
-                            kb_doc_id = row['document_id']
-                            logger.info(f"IngestV2: Got document_id={kb_doc_id} from doc_version_id={ingest_v2_result.doc_version_id}")
-                        else:
-                            logger.warning(f"IngestV2: Failed to get document_id from doc_version_id={ingest_v2_result.doc_version_id}")
+                try:
+                    with self.dao.pool.connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("""
+                                SELECT document_id 
+                                FROM document_versions 
+                                WHERE id = %s
+                            """, (ingest_v2_result.doc_version_id,))
+                            row = cur.fetchone()
+                            if row:
+                                # pool 使用 dict_row factory，所以 row 是 dict
+                                kb_doc_id = row['document_id']
+                                logger.info(f"✓ IngestV2: Got document_id={kb_doc_id} from doc_version_id={ingest_v2_result.doc_version_id}")
+                            else:
+                                logger.error(f"❌ IngestV2: document_versions table has no record for doc_version_id={ingest_v2_result.doc_version_id}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to query document_id from document_versions: {e}", exc_info=True)
                 
                 logger.info(
                     f"IngestV2 NEW_ONLY success: "
@@ -728,7 +732,14 @@ class TenderService:
             )
             
             # ✅ 同步创建 kb_documents 记录（让文档在知识库中可见）
-            if kb_doc_id and kind in ("tender", "bid", "custom_rule"):
+            # 诊断日志：记录是否满足条件
+            logger.info(f"Check kb_document creation: kb_doc_id={kb_doc_id}, kind={kind}, kb_id={kb_id}")
+            
+            if not kb_doc_id:
+                logger.warning(f"⚠️ kb_doc_id is None for {filename}, skipping kb_documents creation. doc_version_id={tpl_meta.get('doc_version_id')}")
+            elif kind not in ("tender", "bid", "custom_rule", "template"):  # ✅ 添加 template
+                logger.warning(f"⚠️ kind '{kind}' not in allowed list for {filename}, skipping kb_documents creation")
+            else:
                 try:
                     from app.services.dao import kb_dao
                     
@@ -743,8 +754,12 @@ class TenderService:
                         kb_category = "bid_doc"
                     elif kind == "custom_rule":
                         kb_category = "custom_rule"
+                    elif kind == "template":
+                        kb_category = "template_doc"
                     else:
                         kb_category = "general_doc"
+                    
+                    logger.info(f"Creating kb_document: kb_id={kb_id}, doc_id={kb_doc_id}, filename={filename}, category={kb_category}")
                     
                     # 创建 kb_documents 记录（使用已有的 document_id）
                     kb_dao.create_kb_document_with_id(
@@ -764,9 +779,9 @@ class TenderService:
                             "size": size,
                         }
                     )
-                    logger.info(f"Created kb_document: kb_id={kb_id}, doc_id={kb_doc_id}, filename={filename}")
+                    logger.info(f"✓ Successfully created kb_document: kb_id={kb_id}, doc_id={kb_doc_id}, filename={filename}")
                 except Exception as e:
-                    logger.warning(f"Failed to create kb_document: {e}")
+                    logger.error(f"❌ Failed to create kb_document for {filename}: {e}", exc_info=True)
                     # 不影响主流程，继续执行
             
             assets_out.append(asset)
@@ -1052,12 +1067,16 @@ class TenderService:
             run_id=run_id
         ))
         
-        # 4. 提取 nodes
+        # 4. 提取 nodes 和生成模式信息
         nodes = v2_result.get("data", {}).get("nodes", [])
         if not nodes:
             raise ValueError("Directory nodes empty")
         
-        logger.info(f"[generate_directory] V2 extracted {len(nodes)} nodes")
+        # 保存生成模式信息
+        generation_mode = v2_result.get("generation_mode", "llm")
+        fast_stats = v2_result.get("fast_stats", {})
+        
+        logger.info(f"[generate_directory] V2 extracted {len(nodes)} nodes, mode={generation_mode}")
         
         # ✅ 4.1 通用目录规范化（新增：wrapper折叠 + 三分册一级 + 语义纠偏）
         nodes = self._normalize_directory_nodes(nodes)

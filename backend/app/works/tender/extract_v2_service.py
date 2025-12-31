@@ -314,131 +314,16 @@ class ExtractV2Service:
         run_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        抽取招标要求 (v1) - 生成 tender_requirements 基准条款库
+        ❌ 已废弃：V1招标要求提取已废弃
         
-        从招标文件中抽取结构化的 requirements，用于后续审核
+        请使用 extract_requirements_v2（标准清单方式）
         
-        Returns:
-            [
-                {
-                    "requirement_id": "qual_001",
-                    "dimension": "qualification",
-                    "req_type": "must_provide",
-                    "requirement_text": "...",
-                    "is_hard": true,
-                    "allow_deviation": false,
-                    "value_schema_json": {...},
-                    "evidence_chunk_ids": [...]
-                }
-            ]
+        废弃时间：2025-12-29
+        废弃原因：V2标准清单方式提供更高质量的数据（100% norm_key覆盖）
         """
-        logger.info(f"ExtractV2: extract_requirements start project_id={project_id}")
-        
-        # 1. 获取 embedding provider
-        embedding_provider = get_embedding_store().get_default()
-        if not embedding_provider:
-            raise ValueError("No embedding provider configured")
-        
-        # 2. 构建 spec
-        from app.works.tender.extraction_specs.requirements_v1 import build_requirements_spec_async
-        spec = await build_requirements_spec_async(self.pool)
-        
-        # 3. 调用引擎
-        result = await self.engine.run(
-            spec=spec,
-            retriever=self.retriever,
-            llm=self.llm,
-            project_id=project_id,
-            model_id=model_id,
-            run_id=run_id,
-            embedding_provider=embedding_provider,
-            module_name="requirements_v1",  # 传递 module_name 用于 max_tokens 设置
+        raise NotImplementedError(
+            "❌ V1招标要求提取已废弃，请使用 extract_requirements_v2（标准清单方式）"
         )
-        
-        # 4. 解析结果
-        requirements = []
-        if isinstance(result.data, dict) and "requirements" in result.data:
-            requirements = result.data["requirements"]
-        elif isinstance(result.data, list):
-            requirements = result.data
-        
-        logger.info(
-            f"ExtractV2: extract_requirements done - "
-            f"requirements_count={len(requirements)}"
-        )
-        
-        # 5. 写入数据库
-        if requirements:
-            import uuid
-            
-            # 先删除旧的 requirements
-            with self.pool.connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "DELETE FROM tender_requirements WHERE project_id = %s",
-                        (project_id,)
-                    )
-                    conn.commit()
-            
-            # 插入新的 requirements
-            from psycopg.types.json import Json
-            
-            with self.pool.connection() as conn:
-                with conn.cursor() as cur:
-                    for req in requirements:
-                        # 处理 JSONB 字段 - 无论是 dict 还是 None 都需要正确处理
-                        value_schema = req.get("value_schema_json")
-                        if value_schema is not None:
-                            if isinstance(value_schema, dict):
-                                value_schema = Json(value_schema)
-                            # 如果是其他类型（如字符串），尝试解析为dict再包装
-                            elif isinstance(value_schema, str):
-                                import json
-                                try:
-                                    value_schema = Json(json.loads(value_schema))
-                                except:
-                                    value_schema = None  # 解析失败则设为None
-                        
-                        # Step 2: 推断路由字段（eval_method、must_reject 等）
-                        eval_method, must_reject, expected_evidence, rubric, weight = self._infer_routing_fields(req)
-                        
-                        # 处理 JSONB 字段
-                        expected_evidence_json = Json(expected_evidence) if expected_evidence else None
-                        rubric_json = Json(rubric) if rubric else None
-                        
-                        cur.execute("""
-                            INSERT INTO tender_requirements (
-                                id, project_id, requirement_id, dimension, req_type,
-                                requirement_text, is_hard, allow_deviation, 
-                                value_schema_json, evidence_chunk_ids,
-                                eval_method, must_reject, expected_evidence_json, rubric_json, weight
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """, (
-                            str(uuid.uuid4()),
-                            project_id,
-                            req.get("requirement_id"),
-                            req.get("dimension"),
-                            req.get("req_type"),
-                            req.get("requirement_text"),
-                            req.get("is_hard", False),
-                            req.get("allow_deviation", False),
-                            value_schema,  # JSONB - 已包装或为None
-                            req.get("evidence_chunk_ids", []),
-                            eval_method,
-                            must_reject,
-                            expected_evidence_json,
-                            rubric_json,
-                            weight,
-                        ))
-                    conn.commit()
-            
-            logger.info(f"ExtractV2: Saved {len(requirements)} requirements to DB")
-        
-        # 返回统计信息（dict格式）
-        return {
-            "count": len(requirements),
-            "requirements": requirements
-        }
     
     def _infer_routing_fields(self, req: Dict[str, Any]) -> tuple:
         """
@@ -562,31 +447,87 @@ class ExtractV2Service:
         project_id: str,
         model_id: Optional[str],
         run_id: Optional[str] = None,
+        use_fast_mode: bool = True,
+        enable_refinement: bool = True,  # 阶段4-A：规则细化
+        enable_bracket_parsing: bool = True,  # 阶段4-B：LLM括号解析
+        enable_template_matching: bool = True,  # ✨ 阶段5：格式范本自动填充
     ) -> Dict[str, Any]:
         """
-        生成目录 (v2) - 使用平台 ExtractionEngine
+        生成目录 (v2) - 多阶段生成
+        
+        阶段1（快速模式）：如果有项目信息，直接构建骨架
+        阶段2（LLM补充）：检索补全细节或全新生成
+        阶段3（目录增强）：补充遗漏的必填节点
+        阶段4-A（规则细化）：基于招标要求细化评分标准、资格审查等节点
+        阶段4-B（LLM括号解析）：解析括号说明，生成L4细分节点
+        阶段5（格式范本填充）：自动识别并填充格式范本到节点正文 ✨ 新增
+        
+        Args:
+            use_fast_mode: 是否启用快速模式（默认True）
+            enable_refinement: 是否启用规则细化（默认True，设为False可回退）
+            enable_bracket_parsing: 是否启用LLM括号解析（默认True，设为False可回退）
+            enable_template_matching: 是否启用格式范本匹配（默认True，设为False可回退）
         
         Returns:
             {
                 "data": {
-                    "nodes": [
-                        {
-                            "title": "章节标题",
-                            "level": 1,
-                            "order_no": 1,
-                            "parent_ref": "父节点标题",
-                            "required": true,
-                            "volume": "第一卷",
-                            "notes": "说明",
-                            "evidence_chunk_ids": [...]
-                        }
-                    ]
+                    "nodes": [...]
                 },
                 "evidence_chunk_ids": [...],
-                "evidence_spans": [...]
+                "evidence_spans": [...],
+                "generation_mode": "fast" | "llm" | "hybrid",
+                "refinement_stats": {...},
+                "bracket_parsing_stats": {...},
+                "template_matching_stats": {...}  # ✨ 新增：范本填充统计
             }
         """
-        logger.info(f"ExtractV2: generate_directory start project_id={project_id}")
+        logger.info(f"ExtractV2: generate_directory start project_id={project_id}, fast_mode={use_fast_mode}")
+        
+        # 阶段1：尝试快速模式
+        fast_nodes = []
+        fast_stats = {}
+        generation_mode = "llm"  # 默认全LLM
+        
+        if use_fast_mode:
+            tender_info = self.dao.get_project_info(project_id)
+            if tender_info and tender_info.get("schema_version") == "tender_info_v3":
+                try:
+                    from app.works.tender.directory_fast_builder import build_directory_from_project_info
+                    
+                    fast_nodes, fast_stats = build_directory_from_project_info(
+                        project_id=project_id,
+                        pool=self.pool,
+                        tender_info=tender_info
+                    )
+                    
+                    if fast_nodes and len(fast_nodes) >= 5:  # 至少5个节点才认为有效
+                        logger.info(
+                            f"ExtractV2: Fast mode success - {len(fast_nodes)} nodes, "
+                            f"skip LLM generation"
+                        )
+                        generation_mode = "fast"
+                        
+                        # 快速模式成功，直接返回
+                        return {
+                            "data": {"nodes": fast_nodes},
+                            "evidence_chunk_ids": [],
+                            "evidence_spans": [],
+                            "retrieval_trace": {},
+                            "generation_mode": generation_mode,
+                            "fast_stats": fast_stats
+                        }
+                    else:
+                        logger.info(f"ExtractV2: Fast mode insufficient ({len(fast_nodes)} nodes), fallback to LLM")
+                        generation_mode = "hybrid"
+                        
+                except Exception as e:
+                    logger.warning(f"ExtractV2: Fast mode failed (non-fatal): {e}")
+                    generation_mode = "llm"
+            else:
+                logger.info("ExtractV2: No project_info available, using LLM mode")
+        
+        # 阶段2：LLM生成（全新或补充）
+        logger.info(f"ExtractV2: Starting LLM generation mode={generation_mode}")
         
         # 1. 获取 embedding provider
         embedding_provider = get_embedding_store().get_default()
@@ -616,7 +557,13 @@ class ExtractV2Service:
         if not nodes:
             logger.warning(f"ExtractV2: no directory nodes extracted for project={project_id}")
         
-        logger.info(f"ExtractV2: generate_directory done nodes={len(nodes)}")
+        # 5. 如果是混合模式，合并快速节点和LLM节点
+        if generation_mode == "hybrid" and fast_nodes:
+            logger.info(f"ExtractV2: Merging fast nodes ({len(fast_nodes)}) with LLM nodes ({len(nodes)})")
+            # 简单策略：优先使用快速节点，LLM节点作为补充
+            nodes = fast_nodes + nodes
+        
+        logger.info(f"ExtractV2: generate_directory done nodes={len(nodes)}, mode={generation_mode}")
         
         # 5. 目录增强 - 利用 tender_info_v3 补充必填节点
         try:
@@ -641,12 +588,128 @@ class ExtractV2Service:
         except Exception as e:
             logger.warning(f"ExtractV2: Directory augmentation failed (non-fatal): {e}")
         
-        # 6. 返回结果
+        # ✨ 6. 规则细化 - 基于招标要求细化评分标准、资格审查等节点（新增阶段4）
+        refinement_stats = {}
+        try:
+            if enable_refinement:
+                logger.info(f"ExtractV2: Starting rule-based refinement for project={project_id}")
+                
+                from app.works.tender.directory_refinement_rule import refine_directory_from_requirements
+                
+                refinement_result = refine_directory_from_requirements(
+                    project_id=project_id,
+                    pool=self.pool,
+                    nodes=nodes,
+                    enable_refinement=True,
+                )
+                
+                # 更新节点列表
+                nodes = refinement_result["refined_nodes"]
+                refinement_stats = refinement_result["stats"]
+                
+                logger.info(
+                    f"ExtractV2: Rule-based refinement done - "
+                    f"added={refinement_result['added_count']} nodes, "
+                    f"total={len(nodes)}, "
+                    f"refined_parents={refinement_result['refined_parents']}"
+                )
+            else:
+                logger.info(f"ExtractV2: Rule-based refinement disabled")
+                refinement_stats = {"enabled": False}
+        except Exception as e:
+            logger.warning(f"ExtractV2: Rule-based refinement failed (non-fatal): {e}")
+            refinement_stats = {"error": str(e)}
+        
+        # ✨ 7. LLM括号解析 - 解析L3节点的括号说明，生成L4子节点（新增阶段4-B）
+        bracket_parsing_stats = {}
+        try:
+            if enable_bracket_parsing:
+                logger.info(f"ExtractV2: Starting LLM-based bracket parsing for project={project_id}")
+                
+                from app.works.tender.directory_bracket_parser import parse_brackets_with_llm
+                
+                bracket_result = await parse_brackets_with_llm(
+                    nodes=nodes,
+                    llm=self.llm,
+                    model_id=model_id,
+                    enable_parsing=True,
+                )
+                
+                # 更新节点列表
+                nodes = bracket_result["enhanced_nodes"]
+                bracket_parsing_stats = bracket_result["stats"]
+                
+                logger.info(
+                    f"ExtractV2: LLM bracket parsing done - "
+                    f"added={bracket_result['added_count']} L4 nodes, "
+                    f"total={len(nodes)}, "
+                    f"parsed_parents={bracket_result['parsed_parents']}"
+                )
+            else:
+                logger.info(f"ExtractV2: LLM bracket parsing disabled")
+                bracket_parsing_stats = {"enabled": False}
+        except Exception as e:
+            logger.warning(f"ExtractV2: LLM bracket parsing failed (non-fatal): {e}")
+            bracket_parsing_stats = {"error": str(e)}
+        
+        # ✨ 8. 格式范本匹配与填充 - 自动识别并填充格式范本到节点正文（新增阶段5）
+        template_matching_stats = {}
+        try:
+            if enable_template_matching:
+                logger.info(f"ExtractV2: Starting template matching and auto-fill for project={project_id}")
+                
+                from app.works.tender.template_matcher import match_templates_to_nodes, auto_fill_template_bodies
+                
+                # 8.1 匹配范本到节点
+                match_result = await match_templates_to_nodes(
+                    nodes=nodes,
+                    project_id=project_id,
+                    pool=self.pool,
+                    llm=self.llm,
+                    model_id=model_id,
+                    enable_matching=True,
+                )
+                
+                matches = match_result.get("matches", [])
+                match_stats = match_result.get("stats", {})
+                
+                # 8.2 自动填充匹配的范本
+                fill_result = {}
+                if matches:
+                    fill_result = await auto_fill_template_bodies(
+                        matches=matches,
+                        project_id=project_id,
+                        pool=self.pool,
+                    )
+                    
+                    logger.info(
+                        f"ExtractV2: Template auto-fill done - "
+                        f"{fill_result.get('filled_count', 0)}/{len(matches)} nodes filled"
+                    )
+                
+                template_matching_stats = {
+                    "enabled": True,
+                    **match_stats,
+                    **fill_result,
+                }
+            else:
+                logger.info(f"ExtractV2: Template matching disabled")
+                template_matching_stats = {"enabled": False}
+        except Exception as e:
+            logger.warning(f"ExtractV2: Template matching failed (non-fatal): {e}")
+            template_matching_stats = {"error": str(e)}
+        
+        # 9. 返回结果
         return {
-            "data": result.data,
+            "data": {"nodes": nodes},
             "evidence_chunk_ids": result.evidence_chunk_ids,
             "evidence_spans": result.evidence_spans,
-            "retrieval_trace": result.retrieval_trace.__dict__ if result.retrieval_trace else {}
+            "retrieval_trace": result.retrieval_trace.__dict__ if result.retrieval_trace else {},
+            "generation_mode": generation_mode,
+            "fast_stats": fast_stats if generation_mode in ["fast", "hybrid"] else {},
+            "refinement_stats": refinement_stats,
+            "bracket_parsing_stats": bracket_parsing_stats,
+            "template_matching_stats": template_matching_stats,  # ✨ 新增：范本填充统计
         }
     
     def _generate_evidence_spans(
@@ -878,5 +941,690 @@ class ExtractV2Service:
             "evidence_spans": all_evidence_spans,
             "retrieval_trace": all_traces,
         }
+    
+    async def extract_requirements_v2(
+        self,
+        project_id: str,
+        model_id: Optional[str],
+        checklist_template: str = "engineering",
+        run_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        抽取招标要求 (v2) - 框架式自主提取
+        
+        ✨ 新方法：系统定框架，LLM自主分析识别所有要求
+        
+        优势：
+        1. 灵活性高：不受预设问题限制，能捕捉特殊和独特要求
+        2. 完整性强：LLM主动搜索，不易遗漏
+        3. 结构化输出：仍保持维度、类型等结构，便于审核
+        4. 智能过滤：自动排除合同条款和格式范例
+        
+        Args:
+            project_id: 项目ID
+            model_id: 模型ID（默认使用全局配置）
+            checklist_template: （已废弃，保留参数兼容性）
+            run_id: 运行ID（可选）
+        
+        Returns:
+            {
+                "count": 提取的要求数量,
+                "requirements": [...],
+                "extraction_method": "framework_autonomous",
+                "schema_version": "requirements_v2_framework"
+            }
+        """
+        logger.info(
+            f"ExtractV2: extract_requirements_v2 start (framework mode) "
+            f"project_id={project_id}"
+        )
+        
+        try:
+            # 1. 使用框架式Prompt Builder
+            from .framework_prompt_builder import FrameworkPromptBuilder
+            
+            prompt_builder = FrameworkPromptBuilder()
+            logger.info("Using framework-guided autonomous extraction")
+            
+            # 2. 检索招标文件上下文
+            logger.info("Retrieving tender document context...")
+            
+            # 使用RetrievalFacade检索
+            # ✅ 扩展查询词以支持多种招标/采购类型（工程、货物、服务、磋商等）
+            context_chunks = await self.retriever.retrieve(
+                query="招标文件 投标人须知 评分标准 技术要求 资格条件 商务条款 工期 质保 价格 磋商 资信 报价 方案 合同 授权 资质 保证金 承诺 证明 材料",
+                project_id=project_id,
+                doc_types=["tender"],
+                top_k=150,  # 获取足够多的上下文
+            )
+            
+            logger.info(f"Retrieved {len(context_chunks)} context chunks")
+            
+            # 拼接上下文（使用实际segment_id作为标记）
+            context_text = "\n\n".join([
+                f"[SEG:{chunk.chunk_id}] {chunk.text}"
+                for i, chunk in enumerate(context_chunks[:100])  # 限制token数
+            ])
+            
+            # 构建segment_id映射表（用于后续evidence验证）
+            segment_id_map = {chunk.chunk_id: chunk for chunk in context_chunks[:100]}
+            
+            if len(context_text) < 100:
+                logger.warning("Context text too short, may not have enough information")
+            
+            # 3. 构建Prompt并调用LLM（框架式自主提取）
+            prompt = prompt_builder.build_prompt(context_text)
+            
+            logger.info(f"Built framework prompt, length: {len(prompt)} chars")
+            
+            # 调用LLM进行自主提取
+            messages = [{"role": "user", "content": prompt}]
+            llm_response = await self.llm.achat(
+                messages=messages,
+                model_id=model_id,
+                response_format={"type": "json_object"},
+                temperature=0.1,
+                max_tokens=16000,  # 自主提取可能输出较多要求
+            )
+            
+            # 提取content
+            llm_output = llm_response.get("choices", [{}])[0].get("message", {}).get("content")
+            if llm_output is None:
+                llm_output = "[]"  # Fallback to empty array
+                logger.warning("LLM returned None content, using empty array")
+            
+            logger.info(f"Got LLM response, length: {len(llm_output)} chars")
+            
+            # 4. 解析LLM返回的要求列表
+            try:
+                llm_requirements = prompt_builder.parse_llm_response(llm_output)
+                logger.info(f"Parsed {len(llm_requirements)} requirements from LLM")
+            except Exception as e:
+                logger.error(f"Failed to parse LLM response: {e}")
+                return {
+                    "count": 0,
+                    "requirements": [],
+                    "error": f"LLM response parsing failed: {str(e)}",
+                    "schema_version": "requirements_v2_framework"
+                }
+            
+            # 5. 验证并转换为数据库格式
+            # 获取文档版本ID
+            doc_version_id = await self._get_doc_version_id(project_id, "tender")
+            
+            requirements = prompt_builder.convert_to_db_format(
+                llm_requirements=llm_requirements,
+                project_id=project_id,
+                doc_version_id=doc_version_id or 0,
+            )
+            
+            logger.info(f"Converted to DB format: {len(requirements)} requirements")
+            
+            # 6. 去重（基于内容相似度）
+            seen_texts = {}
+            unique_requirements = []
+            for req in requirements:
+                text = req.get("requirement_text", "").strip()
+                text_normalized = text[:100].lower()  # 使用前100字符作为指纹
+                
+                if text_normalized and text_normalized not in seen_texts:
+                    seen_texts[text_normalized] = req.get("item_id")
+                    unique_requirements.append(req)
+                else:
+                    logger.warning(f"Duplicate content: {req.get('item_id')}")
+            
+            requirements = unique_requirements
+            logger.info(f"After deduplication: {len(requirements)} requirements")
+            
+            # 7. 后处理：推断eval_method, must_reject等字段
+            from .requirement_postprocessor import generate_bid_response_extraction_guide
+            
+            for req in requirements:
+                # 推断审核方法和权重
+                eval_method, must_reject, expected_evidence, rubric, weight = self._infer_routing_fields(req)
+                
+                req["eval_method"] = req.get("eval_method") or eval_method
+                req["must_reject"] = req.get("must_reject") or must_reject
+                if expected_evidence and not req.get("expected_evidence_json"):
+                    req["expected_evidence_json"] = expected_evidence
+                if rubric:
+                    req["rubric_json"] = rubric
+                if weight is not None:
+                    req["weight"] = weight
+            
+            logger.info(f"Applied eval_method inference to {len(requirements)} requirements")
+            
+            # 8. 保存到数据库
+            logger.info("Saving requirements to database...")
+            
+            import uuid
+            from psycopg.types.json import Json
+            
+            with self.pool.connection() as conn:
+                with conn.cursor() as cur:
+                    # 先删除该项目的旧requirements（避免重复）
+                    cur.execute("DELETE FROM tender_requirements WHERE project_id = %s", (project_id,))
+                    logger.info(f"Deleted old requirements for project {project_id}")
+                    
+                    for req in requirements:
+                        # 处理JSONB字段
+                        value_schema = req.get("value_schema_json")
+                        if value_schema and not isinstance(value_schema, Json):
+                            value_schema = Json(value_schema)
+                        
+                        expected_evidence_json = req.get("expected_evidence_json")
+                        if expected_evidence_json and not isinstance(expected_evidence_json, Json):
+                            expected_evidence_json = Json(expected_evidence_json)
+                        
+                        rubric_json = req.get("rubric_json")
+                        if rubric_json and not isinstance(rubric_json, Json):
+                            rubric_json = Json(rubric_json)
+                        
+                        # 映射字段名：requirement_type -> req_type, is_mandatory -> is_hard
+                        req_type = req.get("requirement_type") or req.get("req_type", "semantic")
+                        is_hard = req.get("is_mandatory") or req.get("is_hard", False)
+                        requirement_id = req.get("item_id") or req.get("requirement_id", f"auto_{uuid.uuid4().hex[:8]}")
+                        
+                        # 合并meta_json到value_schema_json
+                        meta_json = req.get("meta_json", {})
+                        if meta_json and value_schema:
+                            # 如果已有value_schema，合并meta信息
+                            combined_schema = value_schema if isinstance(value_schema, dict) else {}
+                            combined_schema.update({"meta": meta_json})
+                            value_schema = Json(combined_schema)
+                        elif meta_json and not value_schema:
+                            # 如果没有value_schema，将meta作为value_schema
+                            value_schema = Json(meta_json)
+                        
+                        cur.execute("""
+                            INSERT INTO tender_requirements (
+                                id, project_id, requirement_id, dimension, req_type,
+                                requirement_text, is_hard, allow_deviation, 
+                                value_schema_json, evidence_chunk_ids,
+                                eval_method, must_reject, expected_evidence_json, rubric_json, weight
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (
+                            str(uuid.uuid4()),
+                            project_id,
+                            requirement_id,
+                            req.get("dimension", "other"),
+                            req_type,
+                            req.get("requirement_text", ""),
+                            is_hard,
+                            req.get("allow_deviation", True),
+                            value_schema,
+                            req.get("evidence_chunk_ids", []),
+                            req.get("eval_method", "SEMANTIC"),
+                            req.get("must_reject", False),
+                            expected_evidence_json,
+                            rubric_json,
+                            req.get("weight", 1.0),
+                        ))
+                    conn.commit()
+            
+            logger.info(f"ExtractV2: Saved {len(requirements)} requirements to DB")
+            
+            # 9. 生成extraction_guide（用于后续投标响应抽取）
+            logger.info("Generating extraction guide for bid responses...")
+            try:
+                extraction_guide = generate_bid_response_extraction_guide(requirements)
+                
+                # 保存到tender_projects.meta_json
+                await self._update_project_meta(project_id, {
+                    "extraction_guide": extraction_guide
+                })
+                
+                logger.info(f"Extraction guide generated: {len(extraction_guide.get('categories', []))} categories")
+            except Exception as e:
+                logger.warning(f"Failed to generate extraction guide: {e}")
+            
+            # 10. 统计维度分布
+            dimension_stats = {}
+            for req in requirements:
+                dim = req.get("dimension", "other")
+                dimension_stats[dim] = dimension_stats.get(dim, 0) + 1
+            
+            logger.info(
+                f"ExtractV2: extract_requirements_v2 complete - "
+                f"{len(requirements)} requirements extracted, "
+                f"dimensions: {dimension_stats}"
+            )
+            
+            return {
+                "count": len(requirements),
+                "requirements": requirements,
+                "dimension_distribution": dimension_stats,
+                "extraction_method": "framework_autonomous",
+                "schema_version": "requirements_v2_framework",
+            }
+        
+        except Exception as e:
+            logger.error(f"ExtractV2: extract_requirements_v2 failed: {e}", exc_info=True)
+            raise
+    
+    async def _get_project_name(self, project_id: str) -> str:
+        """获取项目名称"""
+        try:
+            with self.pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT name FROM tender_projects WHERE id = %s",
+                        (project_id,)
+                    )
+                    row = cur.fetchone()
+                    
+                    if row:
+                        return row[0]
+        except Exception as e:
+            logger.warning(f"Failed to get project name: {e}")
+        
+        return "本项目"
+    
+    async def _get_doc_version_id(self, project_id: str, doc_type: str) -> Optional[int]:
+        """获取文档版本ID"""
+        try:
+            with self.pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT id FROM doc_versions WHERE project_id = %s AND doc_type = %s ORDER BY uploaded_at DESC LIMIT 1",
+                        (project_id, doc_type)
+                    )
+                    row = cur.fetchone()
+                    
+                    if row:
+                        return row[0]
+        except Exception as e:
+            logger.warning(f"Failed to get doc_version_id: {e}")
+        
+        return None
+    
+    async def _update_project_meta(self, project_id: str, meta_update: Dict[str, Any]):
+        """更新项目meta_json"""
+        from psycopg.types.json import Json
+        
+        try:
+            with self.pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE tender_projects
+                        SET meta_json = COALESCE(meta_json, '{}'::jsonb) || %s::jsonb
+                        WHERE id = %s
+                        """,
+                        (Json(meta_update), project_id)
+                    )
+                conn.commit()
+                
+                logger.info(f"Updated project meta for {project_id}")
+        except Exception as e:
+            logger.error(f"Failed to update project meta: {e}")
+    
+    async def _supplement_requirements_fulltext(
+        self,
+        project_id: str,
+        model_id: Optional[str],
+        existing_requirements: List[Dict[str, Any]],
+        context_chunks: List[Any],
+    ) -> List[Dict[str, Any]]:
+        """
+        P1优化：全文补充提取Checklist未覆盖的招标要求
+        
+        策略：
+        1. 让LLM全文扫描招标文件
+        2. 识别Checklist未覆盖的要求
+        3. 特别关注：技术参数表、功能清单、特殊条款、附件要求、隐含要求
+        
+        Args:
+            project_id: 项目ID
+            model_id: 模型ID
+            existing_requirements: 已提取的要求列表
+            context_chunks: 检索到的上下文chunks
+        
+        Returns:
+            补充的要求列表
+        """
+        logger.info(f"[补充提取] 开始全文扫描，已有 {len(existing_requirements)} 条要求")
+        
+        try:
+            # 1. 构建已提取要求的摘要（用于去重）
+            existing_summary = []
+            for req in existing_requirements[:50]:  # 限制摘要长度
+                dim = req.get("dimension", "")
+                text = req.get("requirement_text", "")[:60]
+                existing_summary.append(f"[{dim}] {text}")
+            
+            existing_text = "\n".join(existing_summary)
+            
+            # 2. 准备全文上下文（使用更多chunks）
+            fulltext_context = "\n\n".join([
+                f"[SEG:{chunk.chunk_id}] {chunk.text}"
+                for chunk in context_chunks[:150]  # 扩展到150个chunks
+            ])
+            
+            # 3. 构建补充提取prompt
+            supplement_prompt = f"""# 招标要求补充提取任务
+
+## 背景
+已通过标准清单提取了 {len(existing_requirements)} 条招标要求，现需要全文扫描招标文件，识别遗漏的要求。
+
+## 已提取要求摘要（前50条）
+{existing_text}
+
+## 招标文件全文
+{fulltext_context}
+
+## 任务要求
+请全文扫描招标文件，识别以下**未被现有清单覆盖的要求**：
+
+### 重点关注（高频遗漏）
+1. **技术参数表、功能清单**：详细的技术指标、性能要求
+2. **特殊条款、补充说明**：合同特殊条款、附加要求
+3. **附件清单**：必须提供的附件、证明材料
+4. **评分项隐含要求**：评分标准中隐含的交付物要求
+5. **投标书目录结构要求**：章节组成、格式要求
+6. **偏离表要求**：技术/商务偏离表
+7. **样品、演示要求**：如有
+8. **特定资质/认证要求**：行业特定资质
+
+### 输出格式
+返回JSON数组，**只包含新发现的、未被已提取要求覆盖的条目**：
+
+```json
+{{
+  "supplement_requirements": [
+    {{
+      "dimension": "qualification|technical|business|price|doc_structure|schedule_quality|other",
+      "req_type": "具体类型",
+      "requirement_text": "要求内容（详细且完整）",
+      "is_hard": true/false,
+      "eval_method": "PRESENCE|NUMERIC|EXACT_MATCH|SEMANTIC",
+      "evidence_segment_ids": ["seg_xxx", "seg_yyy"],
+      "reasoning": "为什么这是一个新要求（未被已提取清单覆盖）"
+    }}
+  ]
+}}
+```
+
+### 去重原则
+- **仔细对比已提取清单**：如果某要求已被覆盖（即使表述不同），**不要重复提取**
+- **宁缺毋滥**：不确定是否重复时，选择不提取
+- **聚焦特殊性**：优先提取特殊、具体的要求，而非通用要求
+
+### 示例
+✅ 应该补充：
+- "提供XX品牌认证证书或同等产品认证"（特定认证要求）
+- "技术方案应包含系统架构图、数据流图、部署拓扑图"（具体交付物）
+- "投标书须提供原厂授权书原件"（特定文件要求）
+
+❌ 不应补充（已被清单覆盖）：
+- "营业执照"（清单qual_001已覆盖）
+- "资质证书"（清单qual_002已覆盖）
+- "投标总价"（清单price_001已覆盖）
+
+请开始分析并输出JSON。"""
+
+            # 4. 调用LLM
+            messages = [{"role": "user", "content": supplement_prompt}]
+            llm_response = await self.llm.achat(
+                messages=messages,
+                model_id=model_id,
+                response_format={"type": "json_object"},
+                temperature=0.1,
+                max_tokens=4096,
+            )
+            
+            # 5. 解析响应
+            import json
+            llm_output = llm_response.get("choices", [{}])[0].get("message", {}).get("content")
+            if not llm_output:
+                logger.warning("[补充提取] LLM返回空内容")
+                return []
+            
+            try:
+                result_data = json.loads(llm_output)
+                supplement_items = result_data.get("supplement_requirements", [])
+            except json.JSONDecodeError as e:
+                logger.error(f"[补充提取] JSON解析失败: {e}")
+                return []
+            
+            if not supplement_items:
+                logger.info("[补充提取] 未发现额外要求")
+                return []
+            
+            logger.info(f"[补充提取] LLM返回 {len(supplement_items)} 条补充要求")
+            
+            # 6. 转换为标准格式
+            import uuid
+            supplement_requirements = []
+            
+            for idx, item in enumerate(supplement_items):
+                requirement_id = f"supplement_{idx+1:03d}"
+                
+                supplement_requirements.append({
+                    "project_id": project_id,
+                    "requirement_id": requirement_id,
+                    "dimension": item.get("dimension", "other"),
+                    "req_type": item.get("req_type", "other"),
+                    "requirement_text": item.get("requirement_text", ""),
+                    "is_hard": item.get("is_hard", False),
+                    "allow_deviation": not item.get("is_hard", False),
+                    "eval_method": item.get("eval_method", "SEMANTIC"),
+                    "must_reject": False,
+                    "evidence_chunk_ids": item.get("evidence_segment_ids", []),
+                    "meta_json": {
+                        "source": "fulltext_supplement",
+                        "reasoning": item.get("reasoning", ""),
+                    }
+                })
+            
+            logger.info(f"[补充提取] 成功转换 {len(supplement_requirements)} 条补充要求")
+            return supplement_requirements
+            
+        except Exception as e:
+            logger.error(f"[补充提取] 失败: {e}", exc_info=True)
+            return []
+            raise
+    
+    async def prepare_tender_for_audit(
+        self,
+        project_id: str,
+        model_id: Optional[str] = None,
+        checklist_template: str = "engineering",
+    ) -> Dict[str, Any]:
+        """
+        招标侧统一准备（一次性完成：项目信息 + 招标要求）
+        
+        优势：
+        1. 一次检索，两次使用（复用上下文）
+        2. 数据一致性（基准信息和规则库来自相同证据）
+        3. 减少成本（避免重复检索）
+        
+        Args:
+            project_id: 项目ID
+            model_id: 模型ID
+            checklist_template: 清单模板名称
+            
+        Returns:
+            {
+                "project_info": {...},  # 项目信息抽取结果
+                "requirements": {...},  # 招标要求抽取结果
+                "extraction_guide": {...},  # 提取指南
+                "context_stats": {
+                    "total_chunks": 150,
+                    "used_chunks": 100,
+                    "context_length": 50000
+                }
+            }
+        """
+        logger.info(
+            f"ExtractV2: prepare_tender_for_audit start "
+            f"project_id={project_id}, checklist_template={checklist_template}"
+        )
+        
+        try:
+            # 1. 使用公共检索组件获取招标上下文（一次检索）
+            from .tender_context_retriever import TenderContextRetriever
+            
+            context_retriever = TenderContextRetriever(self.retriever)
+            
+            logger.info("Step 1: 检索招标文档上下文（公共检索）...")
+            context_data = await context_retriever.retrieve_tender_context(
+                project_id=project_id,
+                top_k=150,
+                max_context_chunks=100,
+                sort_by_position=True,
+            )
+            
+            logger.info(
+                f"上下文检索完成: total={context_data.total_chunks}, "
+                f"used={context_data.used_chunks}, length={len(context_data.context_text)}"
+            )
+            
+            if context_data.used_chunks == 0:
+                raise ValueError(f"未检索到招标文档内容，project_id={project_id}")
+            
+            # 2. 使用同一份上下文先抽取项目信息
+            logger.info("Step 2: 抽取项目信息（复用上下文）...")
+            project_info_result = await self._extract_project_info_with_context(
+                project_id=project_id,
+                model_id=model_id,
+                context_data=context_data,
+            )
+            
+            logger.info(f"项目信息抽取完成: {project_info_result.get('status')}")
+            
+            # 3. 再用同一份上下文抽取招标要求
+            logger.info("Step 3: 抽取招标要求（复用上下文）...")
+            requirements_result = await self._extract_requirements_with_context(
+                project_id=project_id,
+                model_id=model_id,
+                checklist_template=checklist_template,
+                context_data=context_data,
+            )
+            
+            logger.info(
+                f"招标要求抽取完成: {requirements_result.get('count')} 条要求"
+            )
+            
+            # 4. 生成并保存 extraction_guide（统一键名）
+            logger.info("Step 4: 生成投标响应提取指南...")
+            from .requirement_postprocessor import generate_bid_response_extraction_guide
+            
+            requirements = requirements_result.get("requirements", [])
+            extraction_guide = generate_bid_response_extraction_guide(requirements)
+            
+            # 保存到 tender_projects.meta_json（使用统一键名 "extraction_guide"）
+            await self._update_project_meta(project_id, {
+                "extraction_guide": extraction_guide
+            })
+            
+            logger.info("提取指南已生成并保存")
+            
+            # 5. 返回完整结果
+            result = {
+                "project_info": project_info_result,
+                "requirements": requirements_result,
+                "extraction_guide": extraction_guide,
+                "context_stats": {
+                    "total_chunks": context_data.total_chunks,
+                    "used_chunks": context_data.used_chunks,
+                    "context_length": len(context_data.context_text),
+                },
+                "status": "success",
+            }
+            
+            logger.info(
+                f"ExtractV2: prepare_tender_for_audit complete - "
+                f"项目信息=OK, 招标要求={requirements_result.get('count')}条, "
+                f"extraction_guide=已生成"
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"ExtractV2: prepare_tender_for_audit failed: {e}", exc_info=True)
+            raise
+    
+    async def _extract_project_info_with_context(
+        self,
+        project_id: str,
+        model_id: Optional[str],
+        context_data,
+    ) -> Dict[str, Any]:
+        """使用已检索的上下文抽取项目信息（内部方法）"""
+        # TODO: 复用 extract_project_info_v2/v3 的逻辑，但使用提供的 context_data
+        # 暂时调用原方法（后续可优化为直接使用 context_data）
+        return await self.extract_project_info_v2(
+            project_id=project_id,
+            model_id=model_id,
+            use_staged=False,
+        )
+    
+    async def _extract_requirements_with_context(
+        self,
+        project_id: str,
+        model_id: Optional[str],
+        checklist_template: str,
+        context_data,
+    ) -> Dict[str, Any]:
+        """使用已检索的上下文抽取招标要求（内部方法）"""
+        # TODO: 复用 extract_requirements_v2 的逻辑，但使用提供的 context_data
+        # 暂时调用原方法（后续可优化为直接使用 context_data）
+        return await self.extract_requirements_v2(
+            project_id=project_id,
+            model_id=model_id,
+            checklist_template=checklist_template,
+        )
+    
+    def _filter_out_format_and_contract(self, requirements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        过滤排除合同条款和投标文件格式范例
+        
+        排除规则：
+        1. 合同类：requirement_text包含"合同"、"协议"、"甲方"、"乙方"等
+        2. 格式类：requirement_text包含"格式"、"范本"、"样本"、"模板"等
+        
+        Args:
+            requirements: 原始要求列表
+            
+        Returns:
+            过滤后的要求列表
+        """
+        # 合同关键词
+        contract_keywords = [
+            "合同范本", "合同草案", "拟签订的合同", "合同协议书", "合同文本", "合同条款",
+            "甲方应", "乙方应", "甲方负责", "乙方负责", "甲方权利", "乙方义务",
+            "违约责任", "争议解决", "合同签订", "合同生效", "合同终止"
+        ]
+        
+        # 格式范例关键词
+        format_keywords = [
+            "投标文件格式", "编制格式", "参考格式", "格式范本", "格式要求",
+            "样本", "样表", "模板", "范本", "格式如下", "格式见附件",
+            "授权书格式", "承诺函格式", "报价表格式", "封面格式"
+        ]
+        
+        filtered = []
+        
+        for req in requirements:
+            requirement_text = req.get("requirement_text", "")
+            if not requirement_text:
+                filtered.append(req)
+                continue
+            
+            # 检查是否包含合同关键词
+            is_contract = any(keyword in requirement_text for keyword in contract_keywords)
+            
+            # 检查是否包含格式关键词
+            is_format = any(keyword in requirement_text for keyword in format_keywords)
+            
+            # 不是合同也不是格式，保留
+            if not is_contract and not is_format:
+                filtered.append(req)
+            else:
+                reason = "合同条款" if is_contract else "格式范例"
+                logger.debug(f"Filtered out requirement ({reason}): {requirement_text[:50]}...")
+        
+        return filtered
 
 

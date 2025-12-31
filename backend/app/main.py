@@ -243,6 +243,27 @@ class SimpleLLMOrchestrator:
             # 抛出异常而不是返回错误消息，让上层捕获并记录详细日志
             raise RuntimeError(f"LLM call failed: {str(e)}") from e
     
+    async def achat(self, messages: list, model_id: str = None, **kwargs) -> dict:
+        """
+        异步版本的 chat 方法
+        
+        Args:
+            messages: 消息列表 [{"role": "user", "content": "..."}]
+            model_id: 可选的模型 ID
+            **kwargs: 其他参数（temperature, max_tokens, top_p, response_format 等）
+        
+        Returns:
+            OpenAI 格式的响应: {"choices": [{"message": {"content": "..."}}]}
+        
+        Raises:
+            RuntimeError: 当 LLM 调用失败时
+        """
+        import asyncio
+        
+        # 在线程池中运行同步的chat方法
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, lambda: self.chat(messages, model_id, **kwargs))
+    
     # 为兼容性提供别名
     complete = chat
     generate = chat

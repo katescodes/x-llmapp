@@ -52,7 +52,6 @@ from ..services.logging.request_logger import (
 )
 from ..services.google_search import filter_chinese_entries, google_search_multi
 from ..services.rag_service import retrieve_context
-from ..platform.retrieval.new_retriever import NewRetriever
 from ..services.search_usage import usage_manager
 from ..services.segmenter.chunker import chunk_document
 from ..services.settings_store import load_settings
@@ -87,35 +86,6 @@ def _get_pool() -> "ConnectionPool":
     """从 postgres 模块获取连接池"""
     from app.services.db.postgres import _get_pool as get_sync_pool
     return get_sync_pool()
-
-
-def _find_projects_by_kb_ids(pool, kb_ids: List[str]) -> List[str]:
-    """
-    根据 kb_ids 查找对应的 tender 项目 ID
-    
-    Args:
-        pool: 数据库连接池
-        kb_ids: 知识库 ID 列表
-        
-    Returns:
-        项目 ID 列表
-    """
-    if not kb_ids:
-        return []
-    
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            # 查询 tender_projects 表
-            placeholders = ",".join(["%s"] * len(kb_ids))
-            cur.execute(
-                f"""
-                SELECT id FROM tender_projects 
-                WHERE kb_id IN ({placeholders})
-                """,
-                kb_ids
-            )
-            rows = cur.fetchall()
-            return [row[list(row.keys())[0]] for row in rows]
 
 
 def _prepare_sources(retrieved_chunks: list[dict], min_sources: int = 0) -> list[Source]:
@@ -324,11 +294,6 @@ async def _chat_endpoint_impl(
         host = urlparse(url).netloc.lower()
         return any(host == dom or host.endswith(f".{dom}") for dom in blocked_domains)
 
-    fallback_mode = req.search_mode or app_settings.search.mode
-    enable_web = req.enable_web if req.enable_web is not None else fallback_mode == "force"
-    enable_web = bool(enable_web)
-    search_mode = "force" if enable_web else "off"
-
     raw_selected_ids = (
         req.selected_kb_ids
         if req.selected_kb_ids is not None
@@ -336,6 +301,32 @@ async def _chat_endpoint_impl(
     )
     kb_override_provided = raw_selected_ids is not None
     explicit_kb_ids = [kb for kb in (raw_selected_ids or []) if kb]
+    
+    # 🔧 联网搜索决策逻辑重构：
+    # 1. 如果用户明确勾选了联网搜索（req.enable_web === true），则启用
+    # 2. 如果用户选择了知识库，默认禁用联网搜索（除非明确勾选）
+    # 3. 如果没有选择知识库，根据配置决定是否联网搜索
+    fallback_mode = req.search_mode or app_settings.search.mode
+    
+    if req.enable_web is True:
+        # 用户明确勾选了联网搜索
+        enable_web = True
+        req_logger.info("[联网决策] 用户明确勾选联网搜索，启用")
+    elif explicit_kb_ids:
+        # 用户选择了知识库，默认禁用联网搜索
+        enable_web = False
+        req_logger.info(f"[联网决策] 用户选择了知识库 {len(explicit_kb_ids)} 个，默认禁用联网搜索")
+    elif req.enable_web is False:
+        # 用户明确取消联网搜索
+        enable_web = False
+        req_logger.info("[联网决策] 用户明确取消联网搜索，禁用")
+    else:
+        # 根据配置决定
+        enable_web = fallback_mode == "force"
+        req_logger.info(f"[联网决策] 根据配置决定: fallback_mode={fallback_mode}, enable_web={enable_web}")
+    
+    enable_web = bool(enable_web)
+    search_mode = "force" if enable_web else "off"
 
     store = get_llm_store()
     model_result = None
@@ -612,16 +603,39 @@ async def _chat_endpoint_impl(
         )
         if is_debug_enabled():
             req_logger.debug("Intent parser exception detail", exc_info=True)
+    
+    # 🔧 强制知识库问答：当用户选择了知识库时，强制使用 kb_qa 模式
+    if effective_kb_ids:
+        modified_fields = []
+        
+        # 1. 强制 task_type 为 kb_qa
+        if intent_plan.task_type != "kb_qa":
+            original_task_type = intent_plan.task_type
+            intent_plan.task_type = "kb_qa"
+            modified_fields.append(f"task_type: {original_task_type} -> kb_qa")
+        
+        # 2. 如果没有明确勾选联网搜索，强制 need_web 为 false
+        if not enable_web and intent_plan.need_web:
+            intent_plan.need_web = False
+            modified_fields.append(f"need_web: true -> false")
+        
+        if modified_fields:
+            req_logger.info(
+                f"[知识库强制] 用户选择了 {len(effective_kb_ids)} 个知识库，修正意图: {', '.join(modified_fields)}"
+            )
+    
     intent_elapsed = (time.perf_counter() - intent_start) * 1000
     req_logger.info(
-        "Intent plan resolved fallback=%s queries=%s anchors=%s elapsed=%.1fms",
+        "Intent plan resolved fallback=%s task_type=%s need_web=%s queries=%s anchors=%s elapsed=%.1fms",
         intent_fallback,
+        intent_plan.task_type,
+        intent_plan.need_web,
         intent_plan.queries[:3],
         [anchor.text for anchor in intent_plan.anchors[:3]],
         intent_elapsed,
     )
 
-    # 不再自动启用联网搜索，完全尊重用户的选择
+    # 不再根据意图自动启用联网搜索，完全尊重用户的明确选择
     # if not enable_web and intent_plan.need_web:
     #     enable_web = True
     #     search_mode = "force"
@@ -834,7 +848,7 @@ async def _chat_endpoint_impl(
     retrieved_chunks: list[dict] = []
     retrieval_stats = {"dense_candidates": 0, "lexical_candidates": 0, "fused": 0}
 
-    # 使用新的检索器
+    # 使用统一检索接口（支持项目知识库 + 独立知识库）
     if retrieval_targets and req.mode != "history_decision":
         if embedding_provider is None:
             raise HTTPException(status_code=503, detail="未配置默认 Embedding 服务，请先在设置中添加")
@@ -849,64 +863,56 @@ async def _chat_endpoint_impl(
         )
         
         try:
-            # 根据 kb_ids 查找对应的项目
-            pool = _get_pool()
-            project_ids = _find_projects_by_kb_ids(pool, effective_kb_ids)
+            # 使用 RetrievalFacade.retrieve_from_kb 统一接口
+            from app.platform.retrieval.facade import RetrievalFacade
             
-            if project_ids:
-                req_logger.info(
-                    "Knowledge base retrieval: kb_ids=%s -> project_ids=%s",
-                    effective_kb_ids,
-                    project_ids,
-                )
-                
-                # 使用新检索器检索所有相关项目
-                new_retriever = NewRetriever(pool)
-                all_results = []
-                
-                for project_id in project_ids:
-                    try:
-                        chunks = await new_retriever.retrieve(
-                            query=req.message,
-                            project_id=project_id,
-                            doc_types=None,  # 不限制文档类型
-                            embedding_provider=embedding_provider,
-                            top_k=final_target,
-                            dense_limit=dense_limit,
-                            lexical_limit=lexical_limit,
-                        )
-                        all_results.extend(chunks)
-                    except Exception as e:
-                        req_logger.warning(f"Retrieval failed for project {project_id}: {e}")
-                
-                # 转换为旧格式以兼容后续代码
-                retrieved_chunks = []
-                for chunk in all_results[:final_target]:
-                    retrieved_chunks.append({
-                        "chunk_id": chunk.chunk_id,
-                        "kb_id": chunk.meta.get("kb_id"),
-                        "doc_id": chunk.meta.get("doc_id"),
-                        "title": chunk.meta.get("title", ""),
-                        "url": chunk.meta.get("url"),
-                        "text": chunk.text,
-                        "position": chunk.meta.get("position"),
-                        "score": chunk.score,
-                        "hit_dense": True,
-                        "hit_lexical": True,
-                        "kb_category": "tender_doc",
-                    })
-                
-                retrieval_stats = {
-                    "dense_candidates": len(all_results),
-                    "lexical_candidates": len(all_results),
-                    "fused": len(retrieved_chunks),
-                }
-                req_logger.info(f"New retrieval done: {len(retrieved_chunks)} chunks from {len(project_ids)} projects")
-            else:
-                req_logger.warning(f"No projects found for kb_ids={effective_kb_ids}")
+            pool = _get_pool()
+            retrieval_facade = RetrievalFacade(pool)
+            
+            req_logger.info(
+                f"Knowledge base retrieval: kb_ids={effective_kb_ids}, query={req.message[:50]}..."
+            )
+            
+            # 调用新的统一接口（自动处理项目知识库 + 独立知识库）
+            chunks_results = await retrieval_facade.retrieve_from_kb(
+                query=req.message,
+                kb_ids=effective_kb_ids,
+                kb_categories=None,  # 不限制分类
+                embedding_provider=embedding_provider,
+                top_k=final_target,
+                dense_limit=dense_limit,
+                lexical_limit=lexical_limit,
+            )
+            
+            # 转换为旧格式以兼容后续代码
+            retrieved_chunks = []
+            for chunk in chunks_results:
+                retrieved_chunks.append({
+                    "chunk_id": chunk.chunk_id,
+                    "kb_id": chunk.meta.get("kb_id"),
+                    "doc_id": chunk.meta.get("doc_id"),
+                    "title": chunk.meta.get("title", ""),
+                    "url": chunk.meta.get("url"),
+                    "text": chunk.text,
+                    "position": chunk.meta.get("position"),
+                    "score": chunk.score,
+                    "hit_dense": True,
+                    "hit_lexical": True,
+                    "kb_category": chunk.meta.get("kb_category", "general_doc"),
+                })
+            
+            retrieval_stats = {
+                "dense_candidates": len(chunks_results),
+                "lexical_candidates": len(chunks_results),
+                "fused": len(retrieved_chunks),
+            }
+            
+            req_logger.info(
+                f"Knowledge base retrieval done: {len(retrieved_chunks)} chunks from kb_ids={effective_kb_ids}"
+            )
                 
         except Exception as exc:
-            req_logger.error(f"New retrieval failed: {exc}", exc_info=True)
+            req_logger.error(f"Knowledge base retrieval failed: {exc}", exc_info=True)
             raise HTTPException(status_code=502, detail=f"检索失败: {str(exc)}") from exc
         
         embedding_usage["retrieval"] = retrieval_stats

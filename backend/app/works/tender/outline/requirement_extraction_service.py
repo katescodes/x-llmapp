@@ -171,72 +171,141 @@ class RequirementExtractionService:
         """构建抽取prompt"""
         # 准备chunks文本
         chunks_text = ""
-        for i, chunk in enumerate(chunks[:20]):  # 限制最多20个chunk
+        for i, chunk in enumerate(chunks[:30]):  # 增加到30个chunk
             chunk_id = chunk.get("chunk_id", "")
             content = chunk.get("content", "")
             chunks_text += f"\n[Chunk {i+1} - ID: {chunk_id}]\n{content}\n"
         
-        prompt = f"""请从以下招标文档片段中，抽取所有的"要求项"（包括评分点、技术要求、资格条件等）。
+        prompt = f"""# 角色与任务
 
-文档片段：
+你是一位资深的招投标评审专家。你的任务是：从招标文件中提取**完整的评审规则清单**，这些规则将用于后续审核投标书是否符合要求。
+
+# 文档片段
+
 {chunks_text}
 
-要求项类型（req_type）：
-- TECH_SCORE: 技术评分点
-- BIZ_SCORE: 商务评分点
-- QUALIFICATION: 资格条件
-- TECH_SPEC: 技术参数/规格
-- DELIVERY_ACCEPTANCE: 交付验收
-- SERVICE_WARRANTY: 售后维保
-- DOC_FORMAT: 文档格式要求
+---
 
-强制级别（must_level）：
-- MUST: 必须满足（如"必须"、"不得"、"应当"等）
-- SHOULD: 应该满足（如"建议"、"推荐"等）
-- OPTIONAL: 可选（如"可以"、"允许"等）
-- UNKNOWN: 无法判断
+# 评审维度说明
 
-请以JSON数组格式输出，每个要求项包含以下字段：
-- req_type: 要求类型（必须从上述类型中选择）
-- title: 简短标题（10字以内）
-- content: 要求原文（尽量保持简洁，50字以内）
-- score_hint: 分值/评分描述（如有）
-- must_level: 强制级别
-- source_chunk_ids: 来源chunk ID列表（必须从输入中引用）
-- confidence: 置信度 0~1
+评审规则通常包含以下维度（但不限于此）：
 
-示例输出格式：
+1. **一票否决项**：废标条款、实质性要求（如："保证金不足作废标处理"、"未按要求签章的投标文件无效"）
+2. **评分标准**：技术评分、商务评分、价格评分等各类评分项（如："项目经验每个2分，最多10分"）
+3. **资格条件**：营业执照、资质证书、业绩证明、人员配置、信用记录等
+4. **技术规格**：设备参数、性能指标、技术方案要求、兼容性要求等
+5. **商务条款**：质保期、售后服务、培训方案、付款方式、交付要求等
+6. **文档格式**：装订要求、签字盖章、份数、封装方式等
+
+**请根据文档内容的语义和上下文，自行判断每个要求项属于哪个维度。**
+
+---
+
+# 核心要求
+
+## 1. 完整性优先（宁多勿少）
+- 提取所有评审相关的规则和要求，不要遗漏
+- 评分表中的每一个评分项都应拆分为独立的要求项
+- 不确定是否应提取时，优先选择提取
+- 同一维度的多个要求应分别提取（如多个资格要求、多个评分项）
+
+## 2. 准确理解语义
+- 识别废标条款的关键表述："作废标处理"、"一票否决"、"投标无效"、"视为不响应"等
+- 识别评分项的评分规则和计算方式
+- 准确判断强制级别（必须/应该/可选）
+- 理解隐含要求（如："技术方案评分" 隐含需要提供技术方案）
+
+## 3. 特别关注带符号的条款 ⚠️
+- **▲ 三角形符号**：通常标识实质性要求、废标条款、重要技术指标等，必须重点提取
+- **★ 星号符号**：通常标识重要评分项、关键要求等
+- **● 圆点符号**：可能标识必须满足的条件
+- **※ 特殊符号**：通常标识需要特别注意的内容
+- 带有这些符号的条款往往是最重要的评审规则，务必完整提取并在title或content中保留符号标识
+
+## 4. 保留完整上下文
+- content字段应包含足够信息，让审核人员能准确判断投标书是否符合
+- 包含评分规则、计算方式、证明材料要求、页码位置等关键信息
+- 不要过度压缩导致信息丢失
+
+---
+
+# 输出格式
+
+返回JSON数组，每个要求项包含以下字段：
+
 ```json
 [
   {{
-    "req_type": "TECH_SCORE",
-    "title": "项目经验",
-    "content": "投标人近3年内完成过类似项目，每个得2分，最多10分",
-    "score_hint": "最多10分",
-    "must_level": "SHOULD",
-    "source_chunk_ids": ["chunk_abc123"],
+    "req_type": "维度类型（根据理解自行判断，如：MUST_REJECT/TECH_SCORE/BIZ_SCORE/QUALIFICATION/TECH_SPEC/BUSINESS/DOC_FORMAT等）",
+    "title": "简短标题",
+    "content": "要求内容（保留完整信息，包括评分规则、证明材料、强制表述等）",
+    "score_hint": "分值描述（如有，如：10分、每个2分最多10分）",
+    "must_level": "MUST/SHOULD/OPTIONAL/UNKNOWN",
+    "source_chunk_ids": ["来源chunk ID"],
     "confidence": 0.9
-  }},
-  {{
-    "req_type": "QUALIFICATION",
-    "title": "营业执照",
-    "content": "投标人必须具有有效的营业执照",
-    "score_hint": null,
-    "must_level": "MUST",
-    "source_chunk_ids": ["chunk_def456"],
-    "confidence": 0.95
   }}
 ]
 ```
 
-注意：
-1. 只输出JSON数组，不要有其他文字
-2. 每个要求项必须关联到至少一个chunk ID
-3. 尽量抽取所有有意义的要求项
-4. 如果一个要求项跨多个chunk，将所有相关chunk ID都列出
-5. content字段尽量简洁，保留核心信息即可
+---
 
-请开始抽取："""
+# 示例（参考理解方式）
+
+**示例1：废标条款（带符号标识）**
+```json
+{{
+  "req_type": "MUST_REJECT",
+  "title": "▲保证金不符",
+  "content": "▲投标保证金金额不足或缴纳形式不符合要求的，作废标处理。投标保证金应为人民币50万元，以银行转账或保函形式提交。",
+  "score_hint": null,
+  "must_level": "MUST",
+  "source_chunk_ids": ["chunk_001"],
+  "confidence": 0.95
+}}
+```
+
+**示例2：评分项（完整规则）**
+```json
+{{
+  "req_type": "TECH_SCORE",
+  "title": "类似业绩",
+  "content": "投标人近3年内完成的类似项目业绩，每提供1个有效业绩得2分，最多提供5个，本项最高10分。有效业绩需提供合同复印件及验收证明，合同金额不低于100万元。",
+  "score_hint": "最多10分",
+  "must_level": "SHOULD",
+  "source_chunk_ids": ["chunk_045"],
+  "confidence": 0.9
+}}
+```
+
+**示例3：资格要求**
+```json
+{{
+  "req_type": "QUALIFICATION",
+  "title": "建筑资质",
+  "content": "投标人须具备建筑工程施工总承包二级及以上资质，资质证书在有效期内，需提供证书复印件并加盖公章。",
+  "score_hint": null,
+  "must_level": "MUST",
+  "source_chunk_ids": ["chunk_012"],
+  "confidence": 0.95
+}}
+```
+
+---
+
+# 最终检查
+
+提取完成后，请自检：
+1. ✅ 所有带特殊符号（▲★●※等）的条款都提取了吗？这些往往是最重要的
+2. ✅ 所有废标条款、实质性要求都提取了吗？
+3. ✅ 评分表中的每个评分项都逐条提取了吗（而非合并）？
+4. ✅ 资格要求、技术规格、商务条款都完整提取了吗？
+5. ✅ 每条要求的content包含足够信息吗（评分规则、证明材料等）？
+6. ✅ 每条要求都关联了source_chunk_ids吗？
+
+---
+
+**只输出JSON数组，不要有任何其他文字。开始提取：**
+"""
         
         return prompt
     

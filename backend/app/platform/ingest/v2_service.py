@@ -186,6 +186,22 @@ class IngestV2Service:
             # 尝试推断页码和段落类型
             page_start, page_end, segment_type = self._infer_location(chunk, pages, metadata)
             
+            # ✨ 新增：识别潜在的格式范本
+            from app.works.tender.template_matcher import identify_potential_template
+            
+            template_info = identify_potential_template(
+                chunk_text=chunk.text,
+                chunk_meta=meta_json,
+            )
+            
+            if template_info:
+                # 合并范本识别信息到 meta_json
+                meta_json.update(template_info)
+                logger.debug(
+                    f"IngestV2: Identified potential template in chunk {idx} "
+                    f"(score={template_info.get('template_score', 0)})"
+                )
+            
             segments.append({
                 "segment_no": idx,
                 "content_text": chunk.text,
@@ -199,6 +215,14 @@ class IngestV2Service:
         
         # 批量插入（幂等：先删除再插入）
         segment_ids = self.docstore.create_segments(doc_version_id, segments)
+        
+        # ✨ 统计识别到的范本数量
+        template_count = sum(1 for seg in segments if seg["meta_json"].get("is_potential_template"))
+        if template_count > 0:
+            logger.info(
+                f"IngestV2: Identified {template_count}/{len(segments)} potential template chunks"
+            )
+        
         return segment_ids
     
     def _infer_location(self, chunk, pages: Optional[List], metadata: Dict) -> tuple:

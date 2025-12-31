@@ -21,7 +21,11 @@ KbCategory = Literal[
     "web_snapshot", 
     "tender_app",
     "tender_notice",
+    "tender_doc",      # 招标文档（新）
     "bid_document",
+    "bid_doc",         # 投标文档（新）
+    "custom_rule",     # 自定义规则（新）
+    "template_doc",    # 模板文档（新）
     "format_template",
     "standard_spec",
     "technical_material",

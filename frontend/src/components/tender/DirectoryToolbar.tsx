@@ -13,6 +13,11 @@ type Props = {
   applyingFormat?: boolean;
   autoFillingSamples?: boolean;
   busy?: boolean;
+  generationMode?: string;  // "fast" | "llm" | "hybrid"
+  fastStats?: any;
+  refinementStats?: any;  // 规则细化统计
+  bracketParsingStats?: any;  // 括号解析统计
+  templateMatchingStats?: any;  // ✨ 新增：范本填充统计
 };
 
 export default function DirectoryToolbar({
@@ -26,6 +31,11 @@ export default function DirectoryToolbar({
   applyingFormat,
   autoFillingSamples,
   busy,
+  generationMode,
+  fastStats,
+  refinementStats,
+  bracketParsingStats,
+  templateMatchingStats,  // ✨ 新增
 }: Props) {
   return (
     <div className="source-card" style={{ marginBottom: 12 }}>
@@ -79,6 +89,88 @@ export default function DirectoryToolbar({
 
       <div className="kb-doc-meta" style={{ marginTop: 8 }}>
         说明：生成目录成功后，下方区域会原地切换为"一页模式（目录+正文）"。正文为自动保存。套用格式后可切换到"格式预览"查看整体效果。
+        {generationMode && (
+          <div style={{ marginTop: 4, padding: '6px 10px', background: 'rgba(16, 185, 129, 0.1)', borderRadius: 4, fontSize: '13px' }}>
+            {generationMode === 'fast' && (
+              <span style={{ color: '#10b981' }}>
+                ⚡ 快速生成模式：基于已提取的项目信息构建骨架
+                {fastStats && ` (${fastStats.total_nodes}个节点，其中${fastStats.from_project_info}个来自项目信息)`}
+              </span>
+            )}
+            {generationMode === 'llm' && (
+              <span style={{ color: '#6366f1' }}>
+                🤖 LLM生成模式：通过检索招标书全文生成目录
+              </span>
+            )}
+            {generationMode === 'hybrid' && (
+              <span style={{ color: '#f59e0b' }}>
+                🔀 混合模式：基础骨架来自项目信息，细节由LLM补充
+                {fastStats && ` (快速生成${fastStats.from_project_info}个节点)`}
+              </span>
+            )}
+          </div>
+        )}
+        {/* ✨ 新增：细化统计 */}
+        {refinementStats && refinementStats.enabled && (
+          <div style={{ marginTop: 4, padding: '6px 10px', background: 'rgba(147, 51, 234, 0.1)', borderRadius: 4, fontSize: '12px' }}>
+            <span style={{ color: '#9333ea', fontWeight: 500 }}>
+              ✨ 规则细化：
+            </span>
+            <span style={{ color: '#7c3aed' }}>
+              {refinementStats.new_nodes > 0 ? (
+                <>
+                  从招标要求中提取了 <strong>{refinementStats.new_nodes}</strong> 个细分节点
+                  {refinementStats.refinable_nodes && ` (细化了 ${refinementStats.refinable_nodes} 个父节点)`}
+                  {/* 示例：评分标准 → 5个评分项子节点 */}
+                </>
+              ) : (
+                '未发现可细化的节点'
+              )}
+            </span>
+          </div>
+        )}
+        {/* ✨ 新增：括号解析统计 */}
+        {bracketParsingStats && bracketParsingStats.enabled && (
+          <div style={{ marginTop: 4, padding: '6px 10px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: 4, fontSize: '12px' }}>
+            <span style={{ color: '#3b82f6', fontWeight: 500 }}>
+              🔍 LLM括号解析：
+            </span>
+            <span style={{ color: '#2563eb' }}>
+              {bracketParsingStats.new_l4_nodes > 0 ? (
+                <>
+                  从括号说明中提取了 <strong>{bracketParsingStats.new_l4_nodes}</strong> 个L4子节点
+                  {bracketParsingStats.split_count > 0 && ` (解析了 ${bracketParsingStats.split_count}/${bracketParsingStats.bracket_candidates} 个括号)`}
+                </>
+              ) : (
+                `检查了${bracketParsingStats.bracket_candidates || 0}个括号，未发现需要拆分的列表项`
+              )}
+            </span>
+          </div>
+        )}
+        {/* ✨ 新增：范本填充统计 */}
+        {templateMatchingStats && templateMatchingStats.enabled && (
+          <div style={{ marginTop: 4, padding: '6px 10px', background: 'rgba(236, 72, 153, 0.1)', borderRadius: 4, fontSize: '12px' }}>
+            <span style={{ color: '#ec4899', fontWeight: 500 }}>
+              📄 格式范本填充：
+            </span>
+            <span style={{ color: '#db2777' }}>
+              {templateMatchingStats.filled_count > 0 ? (
+                <>
+                  自动填充了 <strong>{templateMatchingStats.filled_count}</strong> 个节点的格式范本
+                  {templateMatchingStats.filled_nodes && templateMatchingStats.filled_nodes.length > 0 && (
+                    <span style={{ fontSize: '10px', marginLeft: '4px' }}>
+                      ({templateMatchingStats.filled_nodes.slice(0, 3).join('、')}{templateMatchingStats.filled_nodes.length > 3 && '...'})
+                    </span>
+                  )}
+                </>
+              ) : (
+                templateMatchingStats.matches_count > 0 
+                  ? `发现${templateMatchingStats.matches_count}个匹配但填充失败`
+                  : '未发现可匹配的格式范本'
+              )}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

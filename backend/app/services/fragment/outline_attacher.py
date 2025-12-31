@@ -261,7 +261,7 @@ class OutlineSampleAttacher:
             if not best_fragment or (ftype and confidence < 0.9):
                 logger.info(
                     f"[OutlineSampleAttacher] Node '{node.get('title')}' using LLM fallback "
-                    f"(rule confidence: {confidence:.2f if ftype else 0.0})"
+                    f"(rule confidence: {confidence if ftype else 0.0:.2f})"
                 )
                 
                 try:
@@ -278,7 +278,7 @@ class OutlineSampleAttacher:
         if best_fragment:
             logger.info(
                 f"[OutlineSampleAttacher] Node '{node.get('title')}' using rule match "
-                f"as fallback (confidence: {confidence:.2f if ftype else 0.0})"
+                f"as fallback (confidence: {confidence if ftype else 0.0:.2f})"
             )
             return best_fragment
         

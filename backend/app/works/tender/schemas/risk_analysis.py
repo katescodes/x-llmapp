@@ -33,11 +33,9 @@ class ChecklistRow(BaseModel):
     value_schema_json: Optional[Dict[str, Any]] = Field(None, description="值约束")
     evidence_chunk_ids: List[str] = Field(default_factory=list, description="证据chunk IDs")
     
-    # 派生字段
-    category: str = Field(..., description="类别")
+    # 派生字段 - 与 RiskRow 保持一致
+    consequence: str = Field(..., description="后果: reject|hard_requirement|score_loss")
     severity: str = Field(..., description="严重性: high|medium|low")
-    title: str = Field(..., description="标题/要点")
-    detail: str = Field(..., description="说明")
     suggestion: str = Field(..., description="建议")
 
 

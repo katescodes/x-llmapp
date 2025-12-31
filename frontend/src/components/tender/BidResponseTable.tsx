@@ -21,20 +21,28 @@ export type BidResponseStats = {
   count: number;
 };
 
-// 维度标签映射
+// 维度标签映射（扩展版）
 const DIMENSION_LABELS: Record<string, string> = {
   qualification: "资格",
   commercial: "商务",
   technical: "技术",
+  price: "价格",
+  format: "格式",
+  scoring: "评分",
   other: "其他",
 };
 
-// 响应类型标签映射
+// 响应类型标签映射（中文）
 const RESPONSE_TYPE_LABELS: Record<string, string> = {
   text: "文本",
   document_ref: "文档引用",
   structured: "结构化",
   number: "数值",
+  baseline: "基准信息",
+  requirement_response: "要求响应",
+  missing: "缺失",
+  compliant: "符合",
+  non_compliant: "不符合",
 };
 
 export default function BidResponseTable({

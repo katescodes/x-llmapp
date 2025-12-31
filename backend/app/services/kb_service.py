@@ -111,171 +111,20 @@ def delete_kb(kb_id: str):
 
 def list_documents(kb_id: str):
     """
-    列出知识库的文档（新逻辑：从 DocStore 读取）
+    列出知识库的文档（统一逻辑：从 kb_documents 表读取）
     
-    支持所有使用 DocStore 的应用：
-    - 招投标应用（tender）
-    - 申报应用（declare）
-    - 未来其他应用
+    支持：
+    - 项目关联的文档（tender/declare）
+    - 独立上传的文档
     """
     get_kb_or_raise(kb_id)
     
-    from app.services.db.postgres import _get_pool
-    from app.platform.docstore.service import DocStoreService
+    from app.services.dao import kb_dao
     
-    pool = _get_pool()
-    docstore = DocStoreService(pool)
-    documents = []
-    
-    # 查找所有使用此知识库的项目（支持多个应用）
-    projects = []
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            # 1. 查找招投标项目
-            cur.execute(
-                "SELECT id FROM tender_projects WHERE kb_id=%s",
-                (kb_id,)
-            )
-            tender_rows = cur.fetchall()
-            for row in tender_rows:
-                projects.append(('tender', row['id']))
-            
-            # 2. 查找申报项目
-            cur.execute(
-                "SELECT project_id FROM declare_projects WHERE kb_id=%s",
-                (kb_id,)
-            )
-            declare_rows = cur.fetchall()
-            for row in declare_rows:
-                projects.append(('declare', row['project_id']))
-    
-    # 遍历所有项目，读取资产
-    for app_type, project_id in projects:
-        if app_type == "tender":
-            # 招投标资产
-            with pool.connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT id, project_id, kind, filename, size_bytes, bidder_name, meta_json, created_at "
-                        "FROM tender_project_assets WHERE project_id=%s ORDER BY created_at ASC",
-                        (project_id,)
-                    )
-                    assets = cur.fetchall()
-            
-            for asset in assets:
-                asset_id, proj_id, kind, filename, size_bytes, bidder_name, meta_json, created_at = asset
-                # meta_json 从数据库读取时可能是dict或str，需要统一处理
-                if isinstance(meta_json, str):
-                    import json
-                    try:
-                        meta = json.loads(meta_json)
-                    except:
-                        meta = {}
-                else:
-                    meta = meta_json or {}
-                
-                doc_version_id = meta.get("doc_version_id")
-                
-                if not doc_version_id:
-                    continue
-                
-                # 从 DocStore 获取版本信息
-                version_info = docstore.get_document_version(doc_version_id)
-                if not version_info:
-                    continue
-                
-                # 获取document_id (用于前端引用)
-                document_id = version_info.get("document_id")
-                
-                # 获取分片数量
-                segment_count = docstore.count_segments_by_version(doc_version_id)
-                
-                # 确定文档分类
-                if kind == "tender":
-                    kb_category = "tender_doc"
-                elif kind == "bid":
-                    kb_category = "bid_doc"
-                elif kind == "custom_rule":
-                    kb_category = "custom_rule"
-                else:
-                    kb_category = "general_doc"
-                
-                documents.append({
-                    "id": document_id or doc_version_id,  # 优先使用document_id
-                    "filename": filename or "未命名",
-                    "source": f"{app_type}_upload",
-                    "status": "ready",
-                    "created_at": created_at,
-                    "updated_at": created_at,
-                    "meta": {
-                        "size": size_bytes,
-                        "chunks": segment_count,
-                        "doc_version_id": doc_version_id,
-                        "document_id": document_id,
-                        "kind": kind,
-                        "bidder_name": bidder_name,
-                        "project_id": proj_id,
-                        "app_type": app_type,
-                    },
-                    "kb_category": kb_category,
-                })
-        
-        elif app_type == "declare":
-            # 申报资产
-            with pool.connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT asset_id, project_id, kind, filename, file_size, meta_json, created_at "
-                        "FROM declare_assets WHERE project_id=%s ORDER BY created_at ASC",
-                        (project_id,)
-                    )
-                    assets = cur.fetchall()
-            
-            for asset in assets:
-                asset_id, proj_id, kind, filename, file_size, meta_json, created_at = asset
-                meta = meta_json or {}
-                doc_version_id = meta.get("doc_version_id")
-                
-                if not doc_version_id:
-                    continue
-                
-                # 从 DocStore 获取版本信息
-                version_info = docstore.get_document_version(doc_version_id)
-                if not version_info:
-                    continue
-                
-                # 获取分片数量
-                segment_count = docstore.count_segments_by_version(doc_version_id)
-                
-                # 确定文档分类
-                if kind == "notice":
-                    kb_category = "declare_notice"
-                elif kind == "company":
-                    kb_category = "declare_company"
-                elif kind == "tech":
-                    kb_category = "declare_tech"
-                else:
-                    kb_category = "general_doc"
-                
-                documents.append({
-                    "id": doc_version_id,
-                    "filename": filename or "未命名",
-                    "source": f"{app_type}_upload",
-                    "status": "ready",
-                    "created_at": created_at,
-                    "updated_at": created_at,
-                    "meta": {
-                        "size": file_size,
-                        "chunks": segment_count,
-                        "doc_version_id": doc_version_id,
-                        "kind": kind,
-                        "project_id": proj_id,
-                        "app_type": app_type,
-                    },
-                    "kb_category": kb_category,
-                })
-    
-    return documents
+    # 直接从 kb_documents 表读取
+    return kb_dao.list_documents(kb_id)
+
+
 
 
 def delete_document(kb_id: str, doc_id: str, skip_asset_cleanup: bool = False):

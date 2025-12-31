@@ -165,6 +165,11 @@ export default function TenderWorkspace() {
     projectInfo: ProjectInfo | null;
     riskAnalysisData: RiskAnalysisData | null;
     directory: DirectoryNode[];
+    directoryGenerationMode: string;  // "fast" | "llm" | "hybrid"
+    directoryFastStats: any;
+    directoryRefinementStats: any;  // 规则细化统计
+    directoryBracketParsingStats: any;  // 括号解析统计
+    directoryTemplateMatchingStats: any;  // ✨ 新增：范本填充统计
     bidResponses: BidResponse[];
     bidResponseStats: BidResponseStats[];
     reviewItems: ReviewItem[];
@@ -201,6 +206,11 @@ export default function TenderWorkspace() {
     projectInfo: null,
     riskAnalysisData: null,
     directory: [],
+    directoryGenerationMode: "",
+    directoryFastStats: {},
+    directoryRefinementStats: {},
+    directoryBracketParsingStats: {},
+    directoryTemplateMatchingStats: {},  // ✨ 新增
     bidResponses: [],
     bidResponseStats: [],
     reviewItems: [],
@@ -311,6 +321,36 @@ export default function TenderWorkspace() {
     if (!currentProject) return;
     updateProjectState(currentProject.id, { runs: { ...state.runs, directory: value } });
   }, [currentProject, state.runs, updateProjectState]);
+  
+  const directoryGenerationMode = state.directoryGenerationMode;
+  const setDirectoryGenerationMode = useCallback((value: string) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { directoryGenerationMode: value });
+  }, [currentProject, updateProjectState]);
+  
+  const directoryFastStats = state.directoryFastStats;
+  const directoryRefinementStats = state.directoryRefinementStats;
+  const directoryBracketParsingStats = state.directoryBracketParsingStats;
+  const directoryTemplateMatchingStats = state.directoryTemplateMatchingStats;  // ✨ 新增
+  const setDirectoryFastStats = useCallback((value: any) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { directoryFastStats: value });
+  }, [currentProject, updateProjectState]);
+  
+  const setDirectoryRefinementStats = useCallback((value: any) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { directoryRefinementStats: value });
+  }, [currentProject, updateProjectState]);
+  
+  const setDirectoryBracketParsingStats = useCallback((value: any) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { directoryBracketParsingStats: value });
+  }, [currentProject, updateProjectState]);
+  
+  const setDirectoryTemplateMatchingStats = useCallback((value: any) => {
+    if (!currentProject) return;
+    updateProjectState(currentProject.id, { directoryTemplateMatchingStats: value });
+  }, [currentProject, updateProjectState]);
   
   const bidResponses = state.bidResponses;
   const setBidResponses = useCallback((value: BidResponse[]) => {
@@ -525,7 +565,13 @@ export default function TenderWorkspace() {
           stopPolling(projectId, taskType);
           
           if (currentProject?.id === projectId) {
-            alert(`任务失败: ${run.message || 'unknown error'}`);
+            const errorMsg = run.message || 'unknown error';
+            // 检查是否是"未提取招标要求"错误
+            if (errorMsg.includes('未找到招标要求') || errorMsg.includes('招标要求')) {
+              alert('⚠️ 请先提取招标要求\n\n请在【② 要求】标签页点击"提取要求"按钮，\n完成招标要求提取后再进行审核。');
+            } else {
+              alert(`任务失败: ${errorMsg}`);
+            }
           }
         } else if (run.status === 'running') {
           // 运行中：增量加载数据
@@ -1264,15 +1310,15 @@ export default function TenderWorkspace() {
     setRiskAnalysisData(null);
     
     try {
-      // API路径保持不变，但后端已改为调用requirements_v1
-      const res = await api.post(`/api/apps/tender/projects/${projectId}/extract/risks`, { model_id: null });
+      // ✨ 使用V2标准清单方式（覆盖率100%，置信度0.98）
+      const res = await api.post(`/api/apps/tender/projects/${projectId}/extract/risks?use_checklist=1`, { model_id: null });
       
       // 设置新的run状态
       const newRun: TenderRun = { 
         id: res.run_id, 
         status: 'running', 
         progress: 0, 
-        message: '开始提取招标要求...', 
+        message: '开始提取招标要求（标准清单方式）...', 
         kind: 'extract_risks'  // 保持kind名称不变，以兼容现有代码
       } as TenderRun;
       setRiskRun(newRun);
@@ -1310,6 +1356,23 @@ export default function TenderWorkspace() {
       
       // 启动轮询
       startPolling(projectId, 'directory', res.run_id, async () => {
+        // 获取run结果，提取生成模式信息
+        try {
+          const run = await api.get(`/api/apps/tender/runs/${res.run_id}`);
+          const resultJson = run.result_json || {};
+          setDirectoryGenerationMode(resultJson.generation_mode || "");
+          setDirectoryFastStats(resultJson.fast_stats || {});
+          setDirectoryRefinementStats(resultJson.refinement_stats || {});
+          setDirectoryBracketParsingStats(resultJson.bracket_parsing_stats || {});
+          setDirectoryTemplateMatchingStats(resultJson.template_matching_stats || {});  // ✨ 新增
+          console.log('[generateDirectory] 生成模式:', resultJson.generation_mode);
+          console.log('[generateDirectory] 细化统计:', resultJson.refinement_stats);
+          console.log('[generateDirectory] 括号解析统计:', resultJson.bracket_parsing_stats);
+          console.log('[generateDirectory] 范本填充统计:', resultJson.template_matching_stats);
+        } catch (err) {
+          console.warn('[generateDirectory] 无法获取生成模式信息:', err);
+        }
+        
         const nodes = await loadDirectory(projectId);
         console.log('[generateDirectory] 后端返回目录(前5条title):', (nodes || []).slice(0, 5).map(n => n?.title));
         if (nodes.length > 0) {
@@ -1441,6 +1504,8 @@ export default function TenderWorkspace() {
     // 保留空函数或删除，Step4不再需要
   };
 
+  // 已删除 runFullAudit 函数（改用一体化审核）
+
   const runReview = async () => {
     if (!currentProject) return;
     const projectId = currentProject.id;
@@ -1451,28 +1516,43 @@ export default function TenderWorkspace() {
     }
     
     try {
-      const res = await api.post(`/api/apps/tender/projects/${projectId}/review/run`, {
-        model_id: null,
-        custom_rule_asset_ids: selectedRuleAssetIds,
-        custom_rule_pack_ids: selectedRulePackIds,  // 新增：传递规则包ID
-        bidder_name: selectedBidder || undefined,
-        bid_asset_ids: [],
-      });
+      // ✨ 构建API参数（包含自定义规则包）
+      let apiUrl = `/api/apps/tender/projects/${projectId}/audit/unified?sync=0&bidder_name=${encodeURIComponent(selectedBidder)}`;
+      
+      // 如果选中了自定义规则包，添加到URL参数
+      if (selectedRulePackIds.length > 0) {
+        const packIdsParam = selectedRulePackIds.join(',');
+        apiUrl += `&custom_rule_pack_ids=${encodeURIComponent(packIdsParam)}`;
+      }
+      
+      // 调用新的一体化审核接口
+      const res = await api.post(apiUrl);
+      
+      const modeMsg = selectedRulePackIds.length > 0 
+        ? `（启用${selectedRulePackIds.length}个自定义规则包）` 
+        : '（基础评估模式）';
+      showToast('success', `一体化审核启动成功！正在审核投标人: ${selectedBidder} ${modeMsg}`);
       
       // 设置新的run状态
       const newRun: TenderRun = { 
         id: res.run_id, 
         status: 'running', 
         progress: 0, 
-        message: '开始审核...', 
+        message: `一体化审核中${modeMsg}...`, 
         kind: 'review' 
       } as TenderRun;
       setReviewRun(newRun);
       
       // 启动轮询
       startPolling(projectId, 'review', res.run_id, () => loadReview(projectId));
-    } catch (err) {
-      alert(`审核失败: ${err}`);
+    } catch (err: any) {
+      // 检查是否是"未提取招标要求"错误
+      const errorMsg = err?.response?.data?.detail || err?.message || String(err);
+      if (errorMsg.includes('招标要求') || errorMsg.includes('② 要求')) {
+        alert('⚠️ 请先提取招标要求\n\n请在【② 要求】标签页点击"提取要求"按钮，\n完成招标要求提取后再进行审核。');
+      } else {
+        alert(`审核失败: ${errorMsg}`);
+      }
       setReviewRun(null);
     }
   };
@@ -1723,7 +1803,6 @@ export default function TenderWorkspace() {
                 fontSize: '14px',
                 fontWeight: '500',
                 cursor: 'pointer',
-                transition: 'all 0.2s ease',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1731,14 +1810,6 @@ export default function TenderWorkspace() {
                 boxShadow: '0 2px 8px rgba(102, 126, 234, 0.3)',
                 zIndex: 10,
                 position: 'relative',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.transform = 'translateY(-1px)';
-                e.currentTarget.style.boxShadow = '0 4px 12px rgba(102, 126, 234, 0.4)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = '0 2px 8px rgba(102, 126, 234, 0.3)';
               }}
             >
               <span style={{ fontSize: '16px' }}>📋</span>
@@ -1761,7 +1832,6 @@ export default function TenderWorkspace() {
                 fontSize: '14px',
                 fontWeight: '500',
                 cursor: 'pointer',
-                transition: 'all 0.2s ease',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1769,14 +1839,6 @@ export default function TenderWorkspace() {
                 boxShadow: '0 2px 8px rgba(240, 147, 251, 0.3)',
                 zIndex: 10,
                 position: 'relative',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.transform = 'translateY(-1px)';
-                e.currentTarget.style.boxShadow = '0 4px 12px rgba(240, 147, 251, 0.4)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = '0 2px 8px rgba(240, 147, 251, 0.3)';
               }}
             >
               <span style={{ fontSize: '16px' }}>⚙️</span>
@@ -1799,7 +1861,6 @@ export default function TenderWorkspace() {
                 fontSize: '14px',
                 fontWeight: '500',
                 cursor: 'pointer',
-                transition: 'all 0.2s ease',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1807,14 +1868,6 @@ export default function TenderWorkspace() {
                 boxShadow: '0 2px 8px rgba(252, 203, 144, 0.3)',
                 zIndex: 10,
                 position: 'relative',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.transform = 'translateY(-1px)';
-                e.currentTarget.style.boxShadow = '0 4px 12px rgba(252, 203, 144, 0.4)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = '0 2px 8px rgba(252, 203, 144, 0.3)';
               }}
             >
               <span style={{ fontSize: '16px' }}>📁</span>
@@ -2226,6 +2279,11 @@ export default function TenderWorkspace() {
                       applyingFormat={applyingFormat}
                       autoFillingSamples={autoFillingSamples}
                       busy={dirRun?.status === "running"}
+                      generationMode={directoryGenerationMode}
+                      fastStats={directoryFastStats}
+                      refinementStats={directoryRefinementStats}
+                      bracketParsingStats={directoryBracketParsingStats}
+                      templateMatchingStats={directoryTemplateMatchingStats}
                     />
 
                     {directory.length > 0 ? (
@@ -2465,9 +2523,10 @@ export default function TenderWorkspace() {
                       onClick={runReview} 
                       className="kb-create-form"
                       style={{ width: 'auto', marginBottom: 0 }}
-                      disabled={reviewRun?.status === 'running'}
+                      disabled={reviewRun?.status === 'running' || !selectedBidder}
+                      title="一体化审核：提取投标响应 + 审核判断一次完成"
                     >
-                      {reviewRun?.status === 'running' ? '审核中...' : '开始审核'}
+                      {reviewRun?.status === 'running' ? '审核中...' : '🚀 开始审核'}
                     </button>
                   </div>
                   

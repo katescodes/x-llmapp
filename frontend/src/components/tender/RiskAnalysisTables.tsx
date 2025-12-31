@@ -34,6 +34,32 @@ export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.
     });
   };
 
+  // 维度颜色
+  const getDimensionColor = (dimension: string) => {
+    switch (dimension) {
+      case 'qualification':
+        return '#ef4444';
+      case 'price':
+        return '#f59e0b';
+      case 'technical':
+        return '#3b82f6';
+      case 'business':
+      case 'commercial':
+        return '#8b5cf6';
+      case 'doc_structure':
+      case 'format':
+        return '#06b6d4';
+      case 'bid_security':
+        return '#ec4899';
+      case 'schedule_quality':
+        return '#10b981';
+      case 'scoring':
+        return '#fbbf24';
+      default:
+        return '#94a3b8';
+    }
+  };
+
   // 严重性颜色
   const getSeverityColor = (severity: string) => {
     switch (severity) {
@@ -153,8 +179,6 @@ export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.
                   <th style={thStyle}>后果</th>
                   <th style={thStyle}>严重性</th>
                   <th style={thStyle}>招标要求</th>
-                  <th style={thStyle}>允许偏离</th>
-                  <th style={thStyle}>值约束</th>
                   <th style={thStyle}>建议</th>
                   <th style={thStyle}>证据</th>
                 </tr>
@@ -241,19 +265,6 @@ export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.
                         )}
                       </div>
                     </td>
-                    <td style={tdStyle}>
-                      <span
-                        style={{
-                          fontSize: '11px',
-                          color: row.allow_deviation ? '#10b981' : '#ef4444',
-                        }}
-                      >
-                        {row.allow_deviation ? '允许' : '不允许'}
-                      </span>
-                    </td>
-                    <td style={{ ...tdStyle, maxWidth: '150px', fontSize: '11px', color: '#94a3b8' }}>
-                      {renderValueSchema(row.value_schema_json)}
-                    </td>
                     <td style={{ ...tdStyle, maxWidth: '200px', fontSize: '12px', color: '#94a3b8' }}>
                       {row.suggestion}
                     </td>
@@ -338,10 +349,11 @@ export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.
                 }}
               >
                 <tr>
-                  <th style={thStyle}>类别</th>
+                  <th style={thStyle}>维度</th>
+                  <th style={thStyle}>类型</th>
+                  <th style={thStyle}>后果</th>
                   <th style={thStyle}>严重性</th>
-                  <th style={thStyle}>标题/要点</th>
-                  <th style={thStyle}>说明</th>
+                  <th style={thStyle}>招标要求</th>
                   <th style={thStyle}>建议</th>
                   <th style={thStyle}>证据</th>
                 </tr>
@@ -361,12 +373,40 @@ export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.
                           fontSize: '11px',
                           padding: '2px 6px',
                           borderRadius: '4px',
-                          background: 'rgba(251, 191, 36, 0.15)',
-                          color: '#fbbf24',
+                          background: `${getDimensionColor(row.dimension)}15`,
+                          color: getDimensionColor(row.dimension),
                           whiteSpace: 'nowrap',
                         }}
                       >
-                        {row.category}
+                        {DIMENSION_LABELS[row.dimension] || row.dimension}
+                      </span>
+                    </td>
+                    <td style={tdStyle}>
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          background: 'rgba(96, 165, 250, 0.15)',
+                          color: '#60a5fa',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {REQ_TYPE_LABELS[row.req_type] || row.req_type}
+                      </span>
+                    </td>
+                    <td style={tdStyle}>
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          background: `${getConsequenceColor(row.consequence)}15`,
+                          color: getConsequenceColor(row.consequence),
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {CONSEQUENCE_LABELS[row.consequence] || row.consequence}
                       </span>
                     </td>
                     <td style={tdStyle}>
@@ -383,17 +423,11 @@ export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.
                         {SEVERITY_LABELS[row.severity] || row.severity}
                       </span>
                     </td>
-                    <td style={{ ...tdStyle, maxWidth: '200px' }}>
-                      <div style={{ color: '#e5e7eb', lineHeight: '1.4', fontWeight: 500 }}>
-                        {row.title}
-                      </div>
-                    </td>
                     <td style={{ ...tdStyle, maxWidth: '300px' }}>
                       <div>
                         <div
                           style={{
-                            color: '#94a3b8',
-                            fontSize: '12px',
+                            color: '#e5e7eb',
                             lineHeight: '1.4',
                             display: expandedRows.has(row.id) ? 'block' : '-webkit-box',
                             WebkitLineClamp: expandedRows.has(row.id) ? 'unset' : 2,
@@ -402,9 +436,9 @@ export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.
                             textOverflow: 'ellipsis',
                           }}
                         >
-                          {row.detail}
+                          {row.requirement_text}
                         </div>
-                        {row.detail.length > 100 && (
+                        {row.requirement_text.length > 100 && (
                           <button
                             onClick={() => toggleExpand(row.id)}
                             className="link-button"

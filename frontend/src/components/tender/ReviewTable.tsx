@@ -3,6 +3,20 @@ import type { TenderReviewItem } from "../../types/tender";
 import { getStatus, getStatusText, getStatusColor } from "../../types/reviewUtils";
 import EvidenceDrawer from "./EvidenceDrawer";
 
+// 维度中文映射（扩展版）
+const DIMENSION_MAP: Record<string, string> = {
+  qualification: "资格条件",
+  technical: "技术参数",
+  commercial: "商务条款",
+  business: "商务条款",
+  price: "价格报价",
+  doc_structure: "文档结构",
+  schedule_quality: "工期质量",
+  format: "格式要求",
+  scoring: "评分标准",
+  other: "其他",
+};
+
 // 兼容旧版本的 ReviewItem（用于内部类型，实际数据用 TenderReviewItem）
 export type ReviewItem = TenderReviewItem & {
   source?: string; // "compare" | "rule" | "v3"
@@ -84,7 +98,7 @@ export default function ReviewTable({
         </select>
 
         <input
-          placeholder="搜索维度/要求/响应/备注/评估器"
+          placeholder="搜索维度/要求/响应/备注"
           value={kw}
           onChange={(e) => setKw(e.target.value)}
           style={{ flex: 1, minWidth: 220 }}
@@ -98,7 +112,6 @@ export default function ReviewTable({
             <tr>
               <th style={{ width: 110 }}>维度</th>
               <th style={{ width: 90 }}>状态</th>
-              <th style={{ width: 110 }}>评估器</th>
               <th style={{ width: 70 }}>硬性</th>
               <th>招标要求</th>
               <th>投标响应</th>
@@ -113,13 +126,8 @@ export default function ReviewTable({
               
               return (
                 <tr key={it.id}>
-                  <td>{it.dimension || "其他"}</td>
+                  <td>{DIMENSION_MAP[it.dimension || ""] || it.dimension || "其他"}</td>
                   <td>{badge(it)}</td>
-                  <td>
-                    <span style={{ fontSize: "12px", color: "#64748b" }}>
-                      {it.evaluator || "-"}
-                    </span>
-                  </td>
                   <td>{isHard ? <span className="tender-badge required">硬性</span> : "-"}</td>
                   <td className="tender-cell">{reqText}</td>
                   <td className="tender-cell">{respText}</td>
@@ -152,7 +160,7 @@ export default function ReviewTable({
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={7} className="kb-empty" style={{ textAlign: "center", padding: 20 }}>
+                <td colSpan={6} className="kb-empty" style={{ textAlign: "center", padding: 20 }}>
                   暂无数据
                 </td>
               </tr>

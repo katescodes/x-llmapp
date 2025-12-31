@@ -26,11 +26,9 @@ export interface ChecklistRow {
   allow_deviation: boolean;
   value_schema_json: any;
   evidence_chunk_ids: string[];
-  // 派生字段
-  category: string;
+  // 派生字段 - 与 RiskRow 保持一致
+  consequence: 'reject' | 'hard_requirement' | 'score_loss';
   severity: 'high' | 'medium' | 'low';
-  title: string;
-  detail: string;
   suggestion: string;
 }
 
@@ -49,15 +47,18 @@ export interface RiskAnalysisData {
   stats: RiskAnalysisStats;
 }
 
-// 维度中文映射
+// 维度中文映射（完整版）
 export const DIMENSION_LABELS: Record<string, string> = {
   qualification: '资格要求',
   technical: '技术要求',
+  commercial: '商务要求',
   business: '商务要求',
   price: '价格要求',
   doc_structure: '文档结构',
   schedule_quality: '进度与质量',
   bid_security: '保证金',
+  format: '格式要求',
+  scoring: '评分标准',
   other: '其他',
 };
 

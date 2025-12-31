@@ -130,7 +130,7 @@ class ReviewReportEnhancer:
             if quote:
                 quote_short = quote[:100] + "..." if len(quote) > 100 else quote
                 quote_short = quote_short.replace("\n", " ")
-                parts.append(f""{quote_short}""
+                parts.append(f'"{quote_short}"')
             elif segment_id or chunk_id:
                 parts.append(f"[{segment_id or chunk_id}]")
             
