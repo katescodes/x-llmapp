@@ -54,44 +54,19 @@ def list_modules(current_user: TokenData = Depends(require_permission("system.pr
     获取所有模块列表
     
     权限要求：system.prompt
+    
+    注意：project_info、requirements、bid_response、review 已废弃，
+    系统已切换到 Checklist 框架，不再使用数据库 Prompt 管理。
     """
     return {
         "ok": True,
         "modules": [
             {
-                "id": "project_info",
-                "name": "招标信息提取",
-                "description": "提取招标文件的六大类信息：项目概览、投标人资格、评审与评分、商务条款、技术要求、文件编制",
-                "icon": "📋",
-                "category": "extraction"
-            },
-            {
-                "id": "requirements",
-                "name": "招标要求抽取",
-                "description": "从招标文件中抽取结构化的招标要求（基准条款库），包括资格要求、技术要求、商务要求等7个维度",
-                "icon": "📝",
-                "category": "extraction"
-            },
-            {
-                "id": "bid_response",
-                "name": "投标响应要素抽取",
-                "description": "从投标文件中抽取结构化的响应要素，包括资格响应、技术响应、商务响应等7个维度",
-                "icon": "📄",
-                "category": "extraction"
-            },
-            {
                 "id": "directory",
                 "name": "目录生成",
-                "description": "自动生成投标文件语义大纲和章节结构",
+                "description": "自动生成投标文件语义大纲和章节结构（✅ 正在使用）",
                 "icon": "📑",
                 "category": "generation"
-            },
-            {
-                "id": "review",
-                "name": "审核评估",
-                "description": "基于 requirements × responses + 规则引擎的智能审核",
-                "icon": "✅",
-                "category": "review"
             }
         ]
     }

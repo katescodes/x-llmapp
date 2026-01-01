@@ -1431,6 +1431,7 @@ class TenderDAO:
                    created_at
             FROM doc_fragment
             WHERE owner_type=%s AND owner_id=%s
+            AND confidence >= 0.9
             ORDER BY created_at DESC NULLS LAST, start_body_index ASC
             """,
             ("PROJECT", project_id),
