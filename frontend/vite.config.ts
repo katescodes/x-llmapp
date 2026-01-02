@@ -89,6 +89,7 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     server: {
       port: devPort,
+      strictPort: true, // 强制使用指定端口，不自动切换
       host: "0.0.0.0",
       allowedHosts: true,
       hmr: {

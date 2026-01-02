@@ -3,6 +3,7 @@
  * 真正的 Word 风格 - 左侧目录导航 + 右侧统一的连续文档
  */
 import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { api } from '../config/api';
 
 // ========== 类型定义 ==========
 
@@ -503,23 +504,13 @@ export default function DocumentComponentManagement({
                 ? `/api/apps/declare/projects/${projectId}/sections/generate`
                 : `/api/apps/tender/projects/${projectId}/sections/generate`;
               
-              const response = await fetch(apiPath, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  title: node.title,
-                  level: node.level,
-                  requirements: userMessage, // 将用户要求传给后端
-                }),
+              // 使用统一的 api.post 方法，会自动处理认证
+              const data = await api.post(apiPath, {
+                title: node.title,
+                level: node.level,
+                requirements: userMessage, // 将用户要求传给后端
               });
 
-              if (!response.ok) {
-                throw new Error(`API返回错误: ${response.status}`);
-              }
-
-              const data = await response.json();
               const generatedContent = data.content || '<p>生成失败</p>';
 
               setContents(prev => ({
@@ -630,27 +621,13 @@ export default function DocumentComponentManagement({
         
         console.log('[生成内容] API URL:', apiPath);
         
-        const response = await fetch(apiPath, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            title: node.title,
-            level: node.level,
-            requirements: requirements || undefined,
-          }),
+        // 使用统一的 api.post 方法，会自动处理认证
+        const data = await api.post(apiPath, {
+          title: node.title,
+          level: node.level,
+          requirements: requirements || undefined,
         });
 
-        console.log('[生成内容] Response status:', response.status);
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ detail: '未知错误' }));
-          console.error('[生成内容] API错误:', errorData);
-          throw new Error(errorData.detail || '生成失败');
-        }
-
-        const data = await response.json();
         console.log('[生成内容] API返回数据:', data);
         const generatedHtml = data.content || '<p>生成失败</p>';
 
