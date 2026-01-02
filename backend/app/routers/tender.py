@@ -205,7 +205,7 @@ def delete_asset(project_id: str, asset_id: str, request: Request):
 async def import_assets(
     project_id: str,
     request: Request,
-    kind: str = Form(...),  # tender | bid | template | custom_rule
+    kind: str = Form(...),  # tender | bid | template | custom_rule | company_profile | tech_doc | case_study | finance_doc | cert_doc
     bidder_name: Optional[str] = Form(None),
     files: List[UploadFile] = File(...),
 ):
@@ -213,12 +213,12 @@ async def import_assets(
     项目内上传文件并自动绑定
     
     Args:
-        kind: 文件类型（tender/bid/template/custom_rule）
+        kind: 文件类型（tender/bid/company_profile/tech_doc/case_study/finance_doc/cert_doc/template/custom_rule）
         bidder_name: 投标人名称（kind=bid 时必填）
         files: 上传的文件列表
     """
     # 参数校验
-    if kind not in ("tender", "bid", "template", "custom_rule"):
+    if kind not in ("tender", "bid", "template", "custom_rule", "company_profile", "tech_doc", "case_study", "finance_doc", "cert_doc"):
         raise HTTPException(status_code=400, detail="invalid kind")
     if kind == "bid" and not (bidder_name or "").strip():
         raise HTTPException(status_code=400, detail="bidder_name required for bid")
@@ -1686,6 +1686,85 @@ def get_review(
         out.append(review_item)
     
     return out
+
+
+# ==================== AI生成全文 ====================
+
+class GenerateSectionContentReq(BaseModel):
+    """生成单个章节内容请求"""
+    title: str = Field(..., description="章节标题")
+    level: int = Field(..., description="章节层级")
+    requirements: Optional[str] = Field(None, description="用户自定义要求")
+
+
+@router.post("/projects/{project_id}/sections/generate")
+async def generate_section_content(
+    project_id: str,
+    req: GenerateSectionContentReq,
+    request: Request,
+    model_id: Optional[str] = None,
+):
+    """
+    生成单个章节的内容
+    - 根据章节标题和层级生成内容
+    - 可选：传入用户自定义要求
+    """
+    svc = _svc(request)
+    dao = TenderDAO(_get_pool(request))
+    
+    # 构建项目上下文
+    project = dao.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    project_context = await svc._build_tender_project_context(project_id)
+    
+    # 如果有用户要求，添加到上下文中
+    if req.requirements:
+        project_context += f"\n\n【用户自定义要求】\n{req.requirements}"
+    
+    # 生成内容
+    result = await svc._generate_section_content(
+        project_id=project_id,
+        title=req.title,
+        level=req.level,
+        project_context=project_context,
+        model_id=model_id,
+    )
+    
+    return {"content": result.get("content", "")}
+
+
+@router.post("/projects/{project_id}/generate-full-content", response_model=RunOut)
+async def generate_full_content(
+    project_id: str,
+    request: Request,
+    bg: BackgroundTasks,
+    sync: int = Query(0, description="是否同步执行：0=异步，1=同步"),
+    model_id: Optional[str] = None,
+):
+    """
+    AI生成标书全文
+    - 基于已生成的目录，为所有空章节生成内容
+    - 支持同步/异步执行
+    """
+    svc = _svc(request)
+    dao = TenderDAO(_get_pool(request))
+    
+    # 创建 run 记录
+    run_id = dao.create_run(project_id, kind="generate_full_content")
+    
+    if sync == 1:
+        # 同步执行
+        await svc.generate_full_content(project_id, model_id, run_id)
+        run = dao.get_run(run_id)
+        return run
+    else:
+        # 异步执行
+        import asyncio
+        asyncio.create_task(svc.generate_full_content(project_id, model_id, run_id))
+        run = dao.get_run(run_id)
+        return run
 
 
 # ==================== 文档生成 ====================

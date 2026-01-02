@@ -1481,6 +1481,7 @@ class TenderDAO:
         fragment_id: Optional[str],
         content_html: Optional[str],
         content_json: Optional[object] = None,
+        evidence_chunk_ids: Optional[List[str]] = None,
     ):
         """插入或更新章节正文"""
         import json as json_module
@@ -1497,17 +1498,18 @@ class TenderDAO:
         self._execute(
             """
             INSERT INTO project_section_body
-              (id, project_id, node_id, source, fragment_id, content_html, content_json, updated_at, created_at)
+              (id, project_id, node_id, source, fragment_id, content_html, content_json, evidence_chunk_ids, updated_at, created_at)
             VALUES
-              (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+              (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
             ON CONFLICT (project_id, node_id) DO UPDATE SET
               source=EXCLUDED.source,
               fragment_id=EXCLUDED.fragment_id,
               content_html=EXCLUDED.content_html,
               content_json=EXCLUDED.content_json,
+              evidence_chunk_ids=EXCLUDED.evidence_chunk_ids,
               updated_at=NOW()
             """,
-            (bid, project_id, node_id, source, fragment_id, content_html, content_json_str),
+            (bid, project_id, node_id, source, fragment_id, content_html, content_json_str, evidence_chunk_ids or []),
         )
     
     def get_section_body(self, project_id: str, node_id: str) -> Optional[Dict[str, Any]]:

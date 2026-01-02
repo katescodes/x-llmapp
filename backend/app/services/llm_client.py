@@ -278,7 +278,7 @@ async def generate_answer_with_llm(
     _apply_generation_overrides(payload, overrides, None)
 
     try:
-        async with httpx.AsyncClient(timeout=300.0, follow_redirects=False) as client:  # ✅ 优化：增加到300秒（5分钟）
+        async with httpx.AsyncClient(timeout=300.0, follow_redirects=False, verify=False) as client:  # ✅ 优化：增加到300秒（5分钟）
             resp = await client.post(url, json=payload, headers=headers)
             if resp.status_code in (307, 308):
                 location = resp.headers.get("Location") or ""
@@ -363,7 +363,7 @@ async def generate_answer_with_model(
         has_token,
     ) = _prepare_llm_request(system_prompt, user_message, history, model, api_key, overrides)
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, verify=False) as client:
             attempt = 0
             while True:
                 resp = await client.post(url, json=payload, headers=headers)
@@ -469,7 +469,7 @@ async def stream_answer_with_model(
             await on_token(text)
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, verify=False) as client:
             async with client.stream("POST", url, json=payload, headers=headers) as resp:
                 try:
                     resp.raise_for_status()

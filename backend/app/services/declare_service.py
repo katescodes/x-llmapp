@@ -35,7 +35,7 @@ class DeclareService:
         
         Args:
             project_id: 项目ID
-            kind: 资产类型 (notice|company|tech|other)
+            kind: 资产类型 (notice|user_doc|image|company|tech|other)
             files: 上传文件列表
             user_id: 用户ID
         
@@ -63,14 +63,29 @@ class DeclareService:
         
         doc_type_map = {
             "notice": "declare_notice",
+            "user_doc": "declare_user_doc",  # 新增
+            "image": "declare_image",         # 新增
             "company": "declare_company",
             "tech": "declare_tech",
             "other": "declare_other",
         }
         doc_type = doc_type_map.get(kind, "declare_other")
-        kb_category = map_doc_type_to_kb_category(doc_type)  # 映射到知识库分类
+        kb_category = map_doc_type_to_kb_category(doc_type)
         
         assets = []
+        
+        # 特殊处理：检查是否有图片说明Excel
+        image_descriptions = {}
+        if kind == "image":
+            for file in files:
+                if file.filename.endswith(('.xlsx', '.xls')):
+                    # 解析Excel获取图片说明
+                    file_bytes = file.file.read()
+                    file.file.seek(0)  # 重置文件指针
+                    image_descriptions = self._parse_image_description_excel(file_bytes)
+                    logger.info(f"[DeclareService] Parsed image descriptions from {file.filename}: {len(image_descriptions)} images")
+                    break
+        
         for file in files:
             # 读取文件内容
             file_bytes = file.file.read()
@@ -83,16 +98,83 @@ class DeclareService:
             with open(file_path, "wb") as f:
                 f.write(file_bytes)
             
+            # 判断资产类型
+            asset_type = self._determine_asset_type(file.filename, kind)
+            
+            # 如果是图片说明Excel，只存储不入库向量
+            if asset_type == "image_description":
+                asset = self.dao.create_asset(
+                    project_id=project_id,
+                    kind=kind,
+                    asset_type=asset_type,
+                    filename=file.filename,
+                    storage_path=file_path,
+                    file_size=os.path.getsize(file_path),
+                    mime_type=file.content_type,
+                    document_id=None,
+                    doc_version_id=None,
+                    meta_json={"type": "image_description"},
+                )
+                assets.append(asset)
+                continue
+            
+            # 图片文件：存储 + 关联说明
+            if asset_type == "image":
+                description = image_descriptions.get(file.filename, "")
+                asset = self.dao.create_asset(
+                    project_id=project_id,
+                    kind=kind,
+                    asset_type=asset_type,
+                    filename=file.filename,
+                    storage_path=file_path,
+                    file_size=os.path.getsize(file_path),
+                    mime_type=file.content_type,
+                    document_id=None,
+                    doc_version_id=None,
+                    meta_json={
+                        "description": description,
+                        "description_source": "excel" if description else "none",
+                    },
+                )
+                assets.append(asset)
+                
+                # 如果有说明，将说明文字入库向量（用于检索）
+                if description:
+                    temp_asset_id = f"temp_{uuid.uuid4().hex}"
+                    text_content = f"图片：{file.filename}\n说明：{description}".encode('utf-8')
+                    ingest_result = run_async(ingest_service.ingest_asset_v2(
+                        project_id=project_id,
+                        asset_id=temp_asset_id,
+                        file_bytes=text_content,
+                        filename=f"{file.filename}_description.txt",
+                        doc_type=kb_category,
+                        owner_id=user_id,
+                        storage_path=None,
+                    ))
+                    # 更新asset的doc_version_id
+                    self.dao.update_asset_meta(
+                        asset["asset_id"],
+                        {
+                            **asset["meta_json"],
+                            "doc_version_id": ingest_result.doc_version_id,
+                            "segment_count": ingest_result.segment_count,
+                        }
+                    )
+                    logger.info(f"[DeclareService] Indexed image description: {file.filename} -> {ingest_result.segment_count} segments")
+                
+                continue
+            
+            # 文档文件：正常入库
             # 生成临时 asset_id
             temp_asset_id = f"temp_{uuid.uuid4().hex}"
             
-            # 调用 IngestV2 入库 - 使用映射后的知识库分类
+            # 调用 IngestV2 入库
             ingest_result = run_async(ingest_service.ingest_asset_v2(
                 project_id=project_id,
                 asset_id=temp_asset_id,
                 file_bytes=file_bytes,
                 filename=file.filename,
-                doc_type=kb_category,  # 使用映射后的知识库分类
+                doc_type=kb_category,
                 owner_id=user_id,
                 storage_path=file_path,
             ))
@@ -101,11 +183,12 @@ class DeclareService:
             asset = self.dao.create_asset(
                 project_id=project_id,
                 kind=kind,
+                asset_type="document",
                 filename=file.filename,
                 storage_path=file_path,
                 file_size=os.path.getsize(file_path),
                 mime_type=file.content_type,
-                document_id=None,  # IngestV2Result 没有 document_id
+                document_id=None,
                 doc_version_id=ingest_result.doc_version_id,
                 meta_json={
                     "ingest_v2_status": "success",
@@ -261,8 +344,17 @@ class DeclareService:
         project_id: str,
         model_id: Optional[str],
         run_id: Optional[str] = None,
+        max_concurrent: int = 5,
     ):
-        """自动填充所有章节（同步入口）"""
+        """
+        自动填充所有章节（并行生成）
+        
+        Args:
+            project_id: 项目ID
+            model_id: 模型ID
+            run_id: 运行记录ID
+            max_concurrent: 最大并发数（默认5）
+        """
         from app.services.db.postgres import _get_pool
         
         pool = _get_pool()
@@ -281,31 +373,17 @@ class DeclareService:
         version_id = self.dao.create_sections_version(project_id, run_id=run_id)
         
         try:
-            for node in nodes:
-                node_id = node.get("id")
-                node_title = node.get("title", "")
-                
-                # 自动填充单个章节
-                section_result = run_async(extract_v2.autofill_section(
-                    project_id=project_id,
-                    model_id=model_id,
-                    node_title=node_title,
-                    requirements_summary=requirements_summary,
-                    run_id=run_id,
-                ))
-                
-                # 保存章节
-                self.dao.upsert_section(
-                    version_id=version_id,
-                    project_id=project_id,
-                    node_id=node_id,
-                    node_title=node_title,
-                    content_md=section_result.get("data", {}).get("content_md", ""),
-                    evidence_chunk_ids=section_result.get("evidence_chunk_ids", []),
-                    retrieval_trace=section_result.get("retrieval_trace", {}),
-                )
-                
-                logger.info(f"[DeclareService] Autofilled section: {node_title}")
+            # 使用异步方式并行生成
+            result = run_async(self._autofill_sections_parallel(
+                project_id=project_id,
+                nodes=nodes,
+                version_id=version_id,
+                requirements_summary=requirements_summary,
+                model_id=model_id,
+                run_id=run_id,
+                max_concurrent=max_concurrent,
+                extract_v2=extract_v2,
+            ))
             
             # 激活新版本
             self.dao.set_active_sections_version(project_id, version_id)
@@ -316,11 +394,11 @@ class DeclareService:
                     run_id,
                     "success",
                     progress=1.0,
-                    message=f"Sections autofilled: {len(nodes)} sections",
-                    result_json={"sections_count": len(nodes)},
+                    message=f"章节填充完成: {result['success']}/{len(nodes)} 成功",
+                    result_json=result,
                 )
             
-            logger.info(f"[DeclareService] autofill_sections success project_id={project_id} count={len(nodes)}")
+            logger.info(f"[DeclareService] autofill_sections success project_id={project_id} result={result}")
             
         except (ExtractionParseError, ExtractionSchemaError, ValueError) as e:
             logger.error(f"[DeclareService] autofill_sections failed: {e}")
@@ -333,6 +411,128 @@ class DeclareService:
                     result_json={"error": str(e), "error_type": type(e).__name__},
                 )
             raise
+    
+    async def _autofill_sections_parallel(
+        self,
+        project_id: str,
+        nodes: List[Dict[str, Any]],
+        version_id: str,
+        requirements_summary: str,
+        model_id: Optional[str],
+        run_id: Optional[str],
+        max_concurrent: int,
+        extract_v2: Any,
+        use_unified_components: bool = True,  # 新增参数：是否使用统一组件
+    ) -> Dict[str, Any]:
+        """
+        并行填充章节内容
+        
+        Args:
+            project_id: 项目ID
+            nodes: 目录节点列表
+            version_id: 章节版本ID
+            requirements_summary: 申报要求摘要
+            model_id: 模型ID
+            run_id: 运行记录ID
+            max_concurrent: 最大并发数
+            extract_v2: ExtractV2Service实例
+            use_unified_components: 是否使用统一组件（默认True）
+            
+        Returns:
+            生成结果统计
+        """
+        import asyncio
+        
+        total = len(nodes)
+        completed = 0
+        failed = 0
+        
+        logger.info(
+            f"[DeclareService] 开始并行填充章节: "
+            f"project_id={project_id}, total={total}, "
+            f"max_concurrent={max_concurrent}, "
+            f"use_unified={use_unified_components}"
+        )
+        
+        # 创建信号量控制并发
+        semaphore = asyncio.Semaphore(max_concurrent)
+        
+        async def autofill_one(node: Dict[str, Any], index: int):
+            """填充单个章节"""
+            nonlocal completed, failed
+            
+            async with semaphore:
+                node_id = node.get("id")
+                node_title = node.get("title", "")
+                node_level = node.get("level", 1)
+                
+                try:
+                    logger.info(f"[{index+1}/{total}] 开始填充: {node_title}")
+                    
+                    # 根据配置选择填充方法
+                    if use_unified_components:
+                        # 使用统一组件
+                        section_result = await extract_v2.autofill_section_unified(
+                            project_id=project_id,
+                            model_id=model_id,
+                            node_title=node_title,
+                            node_level=node_level,
+                            requirements_summary=requirements_summary,
+                            run_id=run_id,
+                        )
+                    else:
+                        # 使用原有方法
+                        section_result = await extract_v2.autofill_section(
+                            project_id=project_id,
+                            model_id=model_id,
+                            node_title=node_title,
+                            requirements_summary=requirements_summary,
+                            run_id=run_id,
+                        )
+                    
+                    # 保存章节
+                    self.dao.upsert_section(
+                        version_id=version_id,
+                        project_id=project_id,
+                        node_id=node_id,
+                        node_title=node_title,
+                        content_md=section_result.get("data", {}).get("content_md", ""),
+                        evidence_chunk_ids=section_result.get("evidence_chunk_ids", []),
+                        retrieval_trace=section_result.get("retrieval_trace", {}),
+                    )
+                    
+                    completed += 1
+                    logger.info(f"[{index+1}/{total}] 填充成功: {node_title}")
+                    
+                    # 更新进度
+                    if run_id:
+                        progress = completed / total
+                        self.dao.update_run(
+                            run_id,
+                            "running",
+                            progress=progress,
+                            message=f"已完成 {completed}/{total} 个章节",
+                        )
+                    
+                    return True
+                    
+                except Exception as e:
+                    failed += 1
+                    logger.error(f"[{index+1}/{total}] 填充失败: {node_title} - {e}", exc_info=True)
+                    return False
+        
+        # 并行执行所有填充任务
+        tasks = [autofill_one(node, i) for i, node in enumerate(nodes)]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 统计结果
+        success_count = sum(1 for r in results if r is True)
+        
+        return {
+            "success": success_count,
+            "failed": failed,
+            "total": total,
+        }
     
     async def generate_document(
         self,
@@ -375,4 +575,66 @@ class DeclareService:
                     result_json={"error": str(e), "error_type": type(e).__name__},
                 )
             raise
+    
+    def _parse_image_description_excel(self, file_bytes: bytes) -> Dict[str, str]:
+        """
+        解析图片说明Excel文件
+        
+        Args:
+            file_bytes: Excel文件字节内容
+        
+        Returns:
+            {图片文件名: 图片说明}
+        """
+        import pandas as pd
+        from io import BytesIO
+        
+        try:
+            df = pd.read_excel(BytesIO(file_bytes))
+            
+            # 检查列数
+            if df.shape[1] < 2:
+                logger.warning("[DeclareService] Image description Excel has less than 2 columns")
+                return {}
+            
+            result = {}
+            # 使用前两列：第一列是文件名，第二列是说明
+            for idx, row in df.iterrows():
+                filename = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+                description = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
+                
+                if filename and description:
+                    result[filename] = description
+            
+            return result
+        except Exception as e:
+            logger.error(f"[DeclareService] Failed to parse image description Excel: {e}")
+            return {}
+    
+    def _determine_asset_type(self, filename: str, kind: str) -> str:
+        """
+        判断资产类型
+        
+        Args:
+            filename: 文件名
+            kind: 上传时指定的kind
+        
+        Returns:
+            asset_type: document | image | image_description
+        """
+        ext = filename.lower().split('.')[-1] if '.' in filename else ''
+        
+        # 图片扩展名
+        image_exts = {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff', 'svg'}
+        
+        # Excel扩展名
+        excel_exts = {'xlsx', 'xls'}
+        
+        if kind == "image":
+            if ext in excel_exts:
+                return "image_description"
+            elif ext in image_exts:
+                return "image"
+        
+        return "document"
 

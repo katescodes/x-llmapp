@@ -74,6 +74,58 @@ class DeclareDAO:
                 row = cur.fetchone()
                 return _serialize_row(row) if row else None
 
+    def update_project(
+        self,
+        project_id: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """更新项目信息"""
+        with self.pool.connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                updates = []
+                params = []
+                
+                if name is not None:
+                    updates.append("name = %s")
+                    params.append(name)
+                if description is not None:
+                    updates.append("description = %s")
+                    params.append(description)
+                
+                if not updates:
+                    # 没有更新，直接返回当前项目
+                    return self.get_project(project_id)
+                
+                updates.append("updated_at = NOW()")
+                params.append(project_id)
+                
+                cur.execute(
+                    f"UPDATE declare_projects SET {', '.join(updates)} WHERE project_id = %s RETURNING *",
+                    tuple(params)
+                )
+                row = cur.fetchone()
+                conn.commit()
+                return _serialize_row(row) if row else None
+
+    def delete_project(self, project_id: str):
+        """删除项目及所有关联数据"""
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                # 删除章节
+                cur.execute("DELETE FROM declare_sections WHERE project_id = %s", (project_id,))
+                # 删除目录节点
+                cur.execute("DELETE FROM declare_directory_nodes WHERE project_id = %s", (project_id,))
+                # 删除申报要求
+                cur.execute("DELETE FROM declare_requirements WHERE project_id = %s", (project_id,))
+                # 删除运行记录
+                cur.execute("DELETE FROM declare_runs WHERE project_id = %s", (project_id,))
+                # 删除资产
+                cur.execute("DELETE FROM declare_assets WHERE project_id = %s", (project_id,))
+                # 删除项目
+                cur.execute("DELETE FROM declare_projects WHERE project_id = %s", (project_id,))
+                conn.commit()
+
     # ==================== Assets ====================
 
     def create_asset(
@@ -81,6 +133,7 @@ class DeclareDAO:
         project_id: str,
         kind: str,
         filename: str,
+        asset_type: str = "document",  # 新增参数
         storage_path: Optional[str] = None,
         file_size: Optional[int] = None,
         mime_type: Optional[str] = None,
@@ -95,15 +148,16 @@ class DeclareDAO:
                 cur.execute(
                     """
                     INSERT INTO declare_assets (
-                        asset_id, project_id, kind, filename, storage_path, file_size, mime_type,
+                        asset_id, project_id, kind, asset_type, filename, storage_path, file_size, mime_type,
                         document_id, doc_version_id, meta_json, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW())
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW())
                     RETURNING *
                     """,
                     (
                         asset_id,
                         project_id,
                         kind,
+                        asset_type,  # 新增
                         filename,
                         storage_path,
                         file_size,
@@ -130,6 +184,15 @@ class DeclareDAO:
                         (project_id,),
                     )
                 return [_serialize_row(row) for row in cur.fetchall()]
+    
+    def update_asset_meta(self, asset_id: str, meta_json: Dict) -> None:
+        """更新资产的meta_json"""
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE declare_assets SET meta_json=%s::jsonb, updated_at=NOW() WHERE asset_id=%s",
+                    (json.dumps(meta_json), asset_id),
+                )
 
     # ==================== Runs ====================
 

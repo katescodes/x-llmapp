@@ -19,15 +19,21 @@ type Step = 1 | 2 | 3 | 4 | 5;
 
 type RightPanelTab = 'requirements' | 'directory' | 'section';
 
+type ViewMode = 'projectList' | 'projectDetail';
+
 // ==================== 主组件 ====================
 
 export default function DeclareWorkspace() {
+  // -------------------- 视图模式 --------------------
+  const [viewMode, setViewMode] = useState<ViewMode>('projectList');
+  
   // -------------------- 项目管理 --------------------
   const [projects, setProjects] = useState<DeclareProject[]>([]);
   const [currentProject, setCurrentProject] = useState<DeclareProject | null>(null);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDesc, setNewProjectDesc] = useState('');
   const [creatingProject, setCreatingProject] = useState(false);
+  const [showCreateForm, setShowCreateForm] = useState(false);
 
   // -------------------- 文件上传 --------------------
   const [noticeFiles, setNoticeFiles] = useState<File[]>([]);
@@ -104,9 +110,9 @@ export default function DeclareWorkspace() {
         description: newProjectDesc || undefined,
       });
       setProjects([project, ...projects]);
-      setCurrentProject(project);
       setNewProjectName('');
       setNewProjectDesc('');
+      setShowCreateForm(false);
       showToast('success', '项目创建成功');
     } catch (err: any) {
       showToast('error', '创建项目失败: ' + err.message);
@@ -117,6 +123,7 @@ export default function DeclareWorkspace() {
 
   const handleSelectProject = async (project: DeclareProject) => {
     setCurrentProject(project);
+    setViewMode('projectDetail');
     // 重置状态
     setActiveStep(1);
     setAssets([]);
@@ -552,61 +559,262 @@ export default function DeclareWorkspace() {
         </div>
       )}
 
-      {/* 左侧：项目列表 */}
+      {/* 左侧：导航菜单 */}
       <div className="sidebar">
-        <div style={{ padding: '16px', borderBottom: '1px solid rgba(148, 163, 184, 0.2)' }}>
-          <div className="sidebar-title">📋 申报书项目</div>
-          <div className="sidebar-subtitle">AI辅助生成申报文档</div>
+        <div className="sidebar-title">申报书工作台</div>
+        <div className="sidebar-subtitle">项目管理 + 智能生成</div>
+        
+        <div style={{ flex: 1, overflow: 'auto', padding: '16px' }}>
+          {/* 导航菜单 */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <button
+              onClick={() => setViewMode("projectList")}
+              className="sidebar-btn"
+              style={{ 
+                width: '100%',
+                padding: '12px 16px',
+                background: viewMode === "projectList" ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' : 'rgba(255, 255, 255, 0.05)',
+                border: viewMode === "projectList" ? 'none' : '1px solid rgba(148, 163, 184, 0.25)',
+                borderLeft: viewMode === "projectList" ? '4px solid #667eea' : '4px solid transparent',
+                borderRadius: '8px',
+                color: '#ffffff',
+                fontSize: '14px',
+                fontWeight: viewMode === "projectList" ? '600' : '500',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'flex-start',
+                gap: '12px',
+                boxShadow: viewMode === "projectList" ? '0 2px 8px rgba(102, 126, 234, 0.3)' : 'none',
+                transition: 'all 0.2s ease',
+              }}
+            >
+              <span style={{ fontSize: '18px' }}>📂</span>
+              <span>项目管理</span>
+            </button>
+          </div>
+        </div>
         </div>
 
-        {/* 新建项目 */}
-        <div className="kb-create-form" style={{ padding: '16px', borderBottom: '1px solid rgba(148, 163, 184, 0.2)' }}>
+      {/* 中间：主内容区 */}
+      <div className="main-panel">
+        {viewMode === 'projectList' && (
+          <div className="kb-detail" style={{ padding: '32px' }}>
+            {/* 页面标题 */}
+            <div style={{ marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h2 style={{ margin: 0, color: '#e2e8f0', fontSize: '28px', fontWeight: '600' }}>项目管理</h2>
+                <p style={{ margin: '8px 0 0 0', color: '#94a3b8', fontSize: '14px' }}>管理您的申报书项目</p>
+              </div>
+              <button
+                onClick={() => setShowCreateForm(!showCreateForm)}
+                className="sidebar-btn"
+                style={{
+                  padding: '12px 24px',
+                  background: showCreateForm ? 'rgba(255, 255, 255, 0.1)' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  border: 'none',
+                  borderRadius: '8px',
+                  color: '#ffffff',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  boxShadow: showCreateForm ? 'none' : '0 2px 8px rgba(102, 126, 234, 0.3)',
+                }}
+              >
+                <span style={{ fontSize: '18px' }}>{showCreateForm ? '✕' : '+'}</span>
+                <span>{showCreateForm ? '取消' : '新建项目'}</span>
+              </button>
+            </div>
+
+            {/* 创建项目表单（可折叠） */}
+            {showCreateForm && (
+              <div style={{
+                background: 'rgba(30, 41, 59, 0.6)',
+                border: '1px solid rgba(148, 163, 184, 0.25)',
+                borderRadius: '12px',
+                padding: '24px',
+                marginBottom: '32px',
+              }}>
+                <h3 style={{ margin: '0 0 16px 0', color: '#e2e8f0', fontSize: '18px', fontWeight: '600' }}>创建新项目</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '8px', color: '#cbd5e1', fontSize: '14px', fontWeight: '500' }}>
+                      项目名称 <span style={{ color: '#f87171' }}>*</span>
+                    </label>
           <input
             type="text"
-            placeholder="项目名称"
+                      placeholder="请输入项目名称"
             value={newProjectName}
-            onChange={(e) => setNewProjectName(e.target.value)}
-          />
+                      onChange={e => setNewProjectName(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        background: 'rgba(15, 23, 42, 0.6)',
+                        border: '1px solid rgba(148, 163, 184, 0.25)',
+                        borderRadius: '8px',
+                        color: '#e2e8f0',
+                        fontSize: '14px',
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '8px', color: '#cbd5e1', fontSize: '14px', fontWeight: '500' }}>
+                      项目描述（可选）
+                    </label>
           <textarea
-            placeholder="项目描述（可选）"
+                      placeholder="请输入项目描述"
             value={newProjectDesc}
-            onChange={(e) => setNewProjectDesc(e.target.value)}
-            style={{ minHeight: '50px' }}
+                      onChange={e => setNewProjectDesc(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        background: 'rgba(15, 23, 42, 0.6)',
+                        border: '1px solid rgba(148, 163, 184, 0.25)',
+                        borderRadius: '8px',
+                        color: '#e2e8f0',
+                        fontSize: '14px',
+                        minHeight: '80px',
+                        resize: 'vertical',
+                      }}
           />
+                  </div>
+                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                    <button
+                      onClick={() => {
+                        setShowCreateForm(false);
+                        setNewProjectName('');
+                        setNewProjectDesc('');
+                      }}
+                      style={{
+                        padding: '10px 20px',
+                        background: 'rgba(148, 163, 184, 0.2)',
+                        border: '1px solid rgba(148, 163, 184, 0.3)',
+                        borderRadius: '8px',
+                        color: '#cbd5e1',
+                        fontSize: '14px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      取消
+                    </button>
           <button
             onClick={handleCreateProject}
-            disabled={creatingProject}
+                      disabled={creatingProject || !newProjectName.trim()}
+                      style={{
+                        padding: '10px 20px',
+                        background: creatingProject || !newProjectName.trim() 
+                          ? 'rgba(148, 163, 184, 0.3)' 
+                          : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                        border: 'none',
+                        borderRadius: '8px',
+                        color: '#ffffff',
+                        fontSize: '14px',
+                        cursor: creatingProject || !newProjectName.trim() ? 'not-allowed' : 'pointer',
+                        opacity: creatingProject || !newProjectName.trim() ? 0.6 : 1,
+                      }}
           >
-            {creatingProject ? '创建中...' : '+ 新建项目'}
+                      {creatingProject ? '创建中...' : '创建项目'}
           </button>
         </div>
+                </div>
+              </div>
+            )}
 
         {/* 项目列表 */}
-        <div className="kb-list-panel" style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
-            {projects.map((proj) => (
+            <div>
+              <h3 style={{ margin: '0 0 16px 0', color: '#cbd5e1', fontSize: '18px', fontWeight: '600' }}>
+                现有项目 ({projects.length})
+              </h3>
+              {projects.length > 0 ? (
+                <div style={{ 
+                  display: 'grid', 
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', 
+                  gap: '20px' 
+                }}>
+                  {projects.map((project) => (
               <div
-                key={proj.project_id}
-                onClick={() => handleSelectProject(proj)}
-                className={`kb-row ${currentProject?.project_id === proj.project_id ? 'active' : ''}`}
+                      key={project.project_id}
+                      onClick={() => handleSelectProject(project)}
+                      style={{
+                        background: 'rgba(30, 41, 59, 0.6)',
+                        border: '1px solid rgba(148, 163, 184, 0.25)',
+                        borderRadius: '12px',
+                        padding: '20px',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = 'rgba(102, 126, 234, 0.5)';
+                        e.currentTarget.style.boxShadow = '0 4px 12px rgba(102, 126, 234, 0.2)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.25)';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
               >
-              <div className="kb-name">{proj.name}</div>
-              {proj.description && (
-                <div className="kb-meta">{proj.description}</div>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '12px' }}>
+                        <div style={{ 
+                          fontSize: '18px', 
+                          fontWeight: '600', 
+                          color: '#e2e8f0',
+                          flex: 1,
+                          wordBreak: 'break-word',
+                        }}>
+                          {project.name}
+                        </div>
+                        <div style={{
+                          fontSize: '24px',
+                          opacity: 0.6,
+                        }}>
+                          📋
+                        </div>
+                      </div>
+                      {project.description && (
+                        <div style={{
+                          fontSize: '14px',
+                          color: '#94a3b8',
+                          marginBottom: '12px',
+                          lineHeight: '1.5',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}>
+                          {project.description}
+                        </div>
               )}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: '#64748b', marginTop: '6px' }}>
-                <span>{new Date(proj.created_at).toLocaleDateString()}</span>
+                      <div style={{
+                        fontSize: '12px',
+                        color: '#64748b',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                      }}>
+                        <span>📅</span>
+                        <span>{new Date(project.created_at).toLocaleDateString('zh-CN')}</span>
               </div>
             </div>
           ))}
-          {projects.length === 0 && (
-            <div className="kb-empty">还没有项目，请先创建一个</div>
+                </div>
+              ) : (
+                <div style={{
+                  textAlign: 'center',
+                  padding: '60px 20px',
+                  background: 'rgba(30, 41, 59, 0.4)',
+                  borderRadius: '12px',
+                  border: '2px dashed rgba(148, 163, 184, 0.3)',
+                }}>
+                  <div style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.5 }}>📋</div>
+                  <div style={{ fontSize: '16px', color: '#94a3b8', marginBottom: '8px' }}>还没有项目</div>
+                  <div style={{ fontSize: '14px', color: '#64748b' }}>点击右上角"新建项目"按钮创建第一个项目</div>
+                </div>
           )}
         </div>
       </div>
+        )}
 
-      {/* 中间：工作区 */}
-      <div className="main-panel">
-        {currentProject ? (
+        {viewMode === 'projectDetail' && currentProject && (
           <>
             {/* 项目头部 */}
             <div className="header-bar">
@@ -933,13 +1141,6 @@ export default function DeclareWorkspace() {
               )}
             </div>
           </>
-        ) : (
-          <div className="kb-detail" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <div className="kb-empty-state">
-              <div style={{ fontSize: '64px', marginBottom: '16px', textAlign: 'center' }}>📋</div>
-              <div>请在左侧选择或创建项目</div>
-            </div>
-          </div>
         )}
       </div>
 

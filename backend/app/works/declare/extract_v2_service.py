@@ -175,4 +175,124 @@ class DeclareExtractV2Service:
             "evidence_spans": result.evidence_spans,
             "retrieval_trace": result.retrieval_trace.__dict__ if result.retrieval_trace else {}
         }
+    
+    async def autofill_section_unified(
+        self,
+        project_id: str,
+        model_id: Optional[str],
+        node_title: str,
+        node_level: int,
+        requirements_summary: str = "",
+        run_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        自动填充单个章节（使用统一组件）
+        
+        Args:
+            project_id: 项目ID
+            model_id: 模型ID
+            node_title: 章节标题
+            node_level: 章节层级
+            requirements_summary: 申报要求摘要
+            run_id: 运行记录ID
+        
+        Returns:
+            {
+                "data": {"content_md": "...", "confidence": "...", ...},
+                "evidence_chunk_ids": [...],
+                "quality_metrics": {...}
+            }
+        """
+        from app.services.generation import (
+            DocumentRetriever,
+            RetrievalContext,
+            PromptBuilder,
+            PromptContext,
+            ContentGenerator,
+            GenerationContext,
+            QualityAssessor
+        )
+        from app.services.ingest_v2_service import IngestV2Service
+        from app.services.dao.declare_dao import DeclareDAO
+        
+        logger.info(f"DeclareExtractV2: autofill_section_unified start project_id={project_id} node_title={node_title}")
+        
+        # Step 1: 获取项目信息
+        dao = DeclareDAO(self.pool)
+        proj = dao.get_project(project_id)
+        if not proj:
+            raise ValueError(f"项目不存在: {project_id}")
+        
+        kb_id = proj.get("kb_id")
+        if not kb_id:
+            raise ValueError(f"项目未绑定知识库: {project_id}")
+        
+        # 获取申报要求
+        requirements_dict = {}
+        if requirements_summary:
+            requirements_dict = {"summary": requirements_summary}
+        
+        # Step 2: 检索相关资料（使用统一组件）
+        retriever = DocumentRetriever(IngestV2Service(self.pool))
+        retrieval_context = RetrievalContext(
+            kb_id=kb_id,
+            section_title=node_title,
+            section_level=node_level,
+            document_type="declare",
+            requirements=requirements_dict
+        )
+        retrieval_result = await retriever.retrieve(retrieval_context, top_k=5)
+        
+        # Step 3: 构建Prompt（使用统一组件）
+        prompt_builder = PromptBuilder()
+        prompt_context = PromptContext(
+            document_type="declare",
+            section_title=node_title,
+            section_level=node_level,
+            project_info={},  # Declare一般不需要project_info
+            requirements=requirements_dict,
+            retrieval_result=retrieval_result
+        )
+        prompt = prompt_builder.build(prompt_context)
+        
+        # Step 4: 生成内容（使用统一组件）
+        generator = ContentGenerator(self.llm)
+        gen_context = GenerationContext(
+            document_type="declare",
+            section_title=node_title,
+            prompt=prompt,
+            model_id=model_id
+        )
+        generation_result = await generator.generate(gen_context)
+        
+        # Step 5: 评估质量（使用统一组件）
+        assessor = QualityAssessor()
+        quality_metrics = assessor.assess(
+            generation_result,
+            retrieval_result,
+            node_level
+        )
+        
+        # Step 6: 记录质量指标
+        logger.info(
+            f"DeclareExtractV2: autofill_section_unified done "
+            f"content_length={generation_result.word_count} "
+            f"evidence={len(retrieval_result.chunks)} "
+            f"quality={quality_metrics.overall_score:.2f}"
+        )
+        
+        return {
+            "data": {
+                "content_md": generation_result.content,
+                "confidence": generation_result.confidence,
+                "word_count": generation_result.word_count
+            },
+            "evidence_chunk_ids": retrieval_result.get_chunk_ids(),
+            "quality_metrics": quality_metrics.to_dict(),
+            "retrieval_trace": {
+                "query_strategy": retrieval_result.retrieval_strategy,
+                "chunk_count": len(retrieval_result.chunks),
+                "quality_score": retrieval_result.quality_score
+            }
+        }
 

@@ -126,11 +126,6 @@ export default function TenderWorkspace() {
   const [deletingProject, setDeletingProject] = useState<TenderProject | null>(null);
   const [deletePlan, setDeletePlan] = useState<any>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-
-  // 搜索和批量操作
-  const [searchKeyword, setSearchKeyword] = useState('');
-  const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(new Set());
-  const [isBatchDeleting, setIsBatchDeleting] = useState(false);
   
   // 上传相关
   const [uploadKind, setUploadKind] = useState<TenderAssetKind>('tender');
@@ -1184,69 +1179,6 @@ export default function TenderWorkspace() {
       setIsDeleting(false);
     }
   };
-
-  // 批量删除
-  const handleBatchDelete = async () => {
-    if (selectedProjectIds.size === 0) {
-      alert('请先选择要删除的项目');
-      return;
-    }
-
-    if (!confirm(`确定要删除选中的 ${selectedProjectIds.size} 个项目吗？此操作不可撤销！`)) {
-      return;
-    }
-
-    setIsBatchDeleting(true);
-    try {
-      const deletePromises = Array.from(selectedProjectIds).map(async (projectId) => {
-        // 获取删除计划
-        const plan = await api.request(`/api/apps/tender/projects/${projectId}/delete-plan`);
-        
-        // 执行删除
-        await api.request(`/api/apps/tender/projects/${projectId}`, {
-          method: 'DELETE',
-          body: JSON.stringify({ confirm_token: plan.confirm_token }),
-          headers: { 'Content-Type': 'application/json' },
-        });
-      });
-
-      await Promise.all(deletePromises);
-      
-      setProjects(projects.filter(p => !selectedProjectIds.has(p.id)));
-      setSelectedProjectIds(new Set());
-      alert(`成功删除 ${selectedProjectIds.size} 个项目`);
-    } catch (err: any) {
-      alert(`批量删除失败: ${err.message || err}`);
-    } finally {
-      setIsBatchDeleting(false);
-    }
-  };
-
-  // 切换项目选择
-  const toggleProjectSelection = (projectId: string) => {
-    const newSet = new Set(selectedProjectIds);
-    if (newSet.has(projectId)) {
-      newSet.delete(projectId);
-    } else {
-      newSet.add(projectId);
-    }
-    setSelectedProjectIds(newSet);
-  };
-
-  // 全选/取消全选
-  const toggleSelectAll = () => {
-    if (selectedProjectIds.size === filteredProjects.length) {
-      setSelectedProjectIds(new Set());
-    } else {
-      setSelectedProjectIds(new Set(filteredProjects.map(p => p.id)));
-    }
-  };
-
-  // 过滤项目
-  const filteredProjects = projects.filter(p => 
-    p.name.toLowerCase().includes(searchKeyword.toLowerCase()) ||
-    (p.description && p.description.toLowerCase().includes(searchKeyword.toLowerCase()))
-  );
 
   // -------------------- 文件上传 --------------------
 
@@ -2391,266 +2323,142 @@ export default function TenderWorkspace() {
                 <div style={{ color: '#94a3b8', fontSize: '14px', marginBottom: '24px' }}>点击上方"新建项目"按钮开始创建您的第一个项目</div>
               </div>
             ) : (
-              <>
-                {/* 搜索和批量操作工具栏 */}
-                <div style={{ marginBottom: '20px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
-                  {/* 搜索框 */}
-                  <input
-                    type="text"
-                    placeholder="🔍 搜索项目名称或描述..."
-                    value={searchKeyword}
-                    onChange={(e) => setSearchKeyword(e.target.value)}
-                    style={{
-                      flex: 1,
-                      minWidth: '200px',
-                      padding: '10px 16px',
-                      background: 'rgba(15, 23, 42, 0.6)',
-                      border: '1px solid rgba(148, 163, 184, 0.25)',
-                      borderRadius: '8px',
-                      color: '#e2e8f0',
-                      fontSize: '14px',
-                    }}
-                  />
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '24px' }}>
+                {projects.map(proj => {
+                  // 计算项目进度（示例：基于state）
+                  const projectState = projectStatesRef.current.get(proj.id);
+                  const hasRequirements = projectState?.requirements && projectState.requirements.length > 0;
+                  const hasDirectory = projectState?.directoryNodes && projectState.directoryNodes.length > 0;
+                  const hasReview = projectState?.reviewItems && projectState.reviewItems.length > 0;
                   
-                  {/* 批量操作按钮 */}
-                  {selectedProjectIds.size > 0 && (
-                    <>
-                      <button
-                        onClick={handleBatchDelete}
-                        disabled={isBatchDeleting}
-                        style={{
-                          padding: '10px 16px',
-                          background: 'rgba(239, 68, 68, 0.2)',
-                          border: '1px solid rgba(239, 68, 68, 0.4)',
-                          borderRadius: '8px',
-                          color: '#fca5a5',
-                          fontSize: '14px',
-                          cursor: isBatchDeleting ? 'not-allowed' : 'pointer',
-                          opacity: isBatchDeleting ? 0.6 : 1,
-                        }}
-                      >
-                        {isBatchDeleting ? '删除中...' : `🗑️ 删除选中 (${selectedProjectIds.size})`}
-                      </button>
-                      <button
-                        onClick={() => setSelectedProjectIds(new Set())}
-                        style={{
-                          padding: '10px 16px',
-                          background: 'rgba(148, 163, 184, 0.2)',
-                          border: '1px solid rgba(148, 163, 184, 0.3)',
-                          borderRadius: '8px',
-                          color: '#cbd5e1',
-                          fontSize: '14px',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        ✕ 取消选择
-                      </button>
-                    </>
-                  )}
-
-                  {/* 全选按钮 */}
-                  {filteredProjects.length > 0 && (
-                    <button
-                      onClick={toggleSelectAll}
+                  let completedSteps = 0;
+                  if (hasRequirements) completedSteps++;
+                  if (hasDirectory) completedSteps++;
+                  if (hasReview) completedSteps++;
+                  
+                  const progressPercent = Math.round((completedSteps / 5) * 100);
+                  
+                  return (
+                    <div
+                      key={proj.id}
                       style={{
-                        padding: '10px 16px',
-                        background: 'rgba(148, 163, 184, 0.1)',
-                        border: '1px solid rgba(148, 163, 184, 0.3)',
-                        borderRadius: '8px',
-                        color: '#cbd5e1',
-                        fontSize: '14px',
+                        background: 'rgba(30, 41, 59, 0.6)',
+                        border: '1px solid rgba(148, 163, 184, 0.25)',
+                        borderRadius: '12px',
+                        padding: '20px',
                         cursor: 'pointer',
                       }}
                     >
-                      {selectedProjectIds.size === filteredProjects.length ? '☑ 取消全选' : '☐ 全选'}
-                    </button>
-                  )}
-                </div>
+                      {/* 项目名称和描述 */}
+                      <div style={{ marginBottom: '16px' }} onClick={() => selectProject(proj)}>
+                        <h3 style={{ margin: '0 0 8px 0', color: '#e2e8f0', fontSize: '18px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span>📦</span>
+                          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{proj.name}</span>
+                        </h3>
+                        {proj.description && (
+                          <p style={{ margin: 0, color: '#94a3b8', fontSize: '13px', lineHeight: '1.5', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                            {proj.description}
+                          </p>
+                        )}
+                      </div>
 
-                {/* 项目数量显示 */}
-                <div style={{ marginBottom: '16px', color: '#cbd5e1', fontSize: '14px' }}>
-                  共 {filteredProjects.length} 个项目{projects.length !== filteredProjects.length ? ` (已筛选 ${projects.length - filteredProjects.length} 个)` : ''}
-                </div>
+                      {/* 进度条 */}
+                      <div style={{ marginBottom: '16px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                          <span style={{ color: '#cbd5e1', fontSize: '12px', fontWeight: '500' }}>完成进度</span>
+                          <span style={{ color: '#667eea', fontSize: '12px', fontWeight: '600' }}>{progressPercent}%</span>
+                        </div>
+                        <div style={{ width: '100%', height: '6px', background: 'rgba(15, 23, 42, 0.6)', borderRadius: '3px', overflow: 'hidden' }}>
+                          <div style={{ width: `${progressPercent}%`, height: '100%', background: 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)', transition: 'width 0.3s ease' }} />
+                        </div>
+                      </div>
 
-                {filteredProjects.length === 0 ? (
-                  <div style={{
-                    background: 'rgba(30, 41, 59, 0.4)',
-                    border: '2px dashed rgba(148, 163, 184, 0.3)',
-                    borderRadius: '12px',
-                    padding: '64px 32px',
-                    textAlign: 'center',
-                  }}>
-                    <div style={{ fontSize: '64px', marginBottom: '16px' }}>🔍</div>
-                    <div style={{ color: '#e2e8f0', fontSize: '18px', fontWeight: '500', marginBottom: '8px' }}>没有找到匹配的项目</div>
-                    <div style={{ color: '#94a3b8', fontSize: '14px' }}>尝试使用不同的关键词搜索</div>
-                  </div>
-                ) : (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '24px' }}>
-                    {filteredProjects.map(proj => {
-                      // 计算项目进度（示例：基于state）
-                      const projectState = projectStatesRef.current.get(proj.id);
-                      const hasRequirements = projectState?.requirements && projectState.requirements.length > 0;
-                      const hasDirectory = projectState?.directoryNodes && projectState.directoryNodes.length > 0;
-                      const hasReview = projectState?.reviewItems && projectState.reviewItems.length > 0;
-                      
-                      let completedSteps = 0;
-                      if (hasRequirements) completedSteps++;
-                      if (hasDirectory) completedSteps++;
-                      if (hasReview) completedSteps++;
-                      
-                      const progressPercent = Math.round((completedSteps / 5) * 100);
-                      const isSelected = selectedProjectIds.has(proj.id);
-                      
-                      return (
-                        <div
-                          key={proj.id}
+                      {/* 状态标签 */}
+                      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                        {hasRequirements && (
+                          <span style={{ padding: '4px 10px', background: 'rgba(34, 197, 94, 0.15)', border: '1px solid rgba(34, 197, 94, 0.3)', borderRadius: '6px', color: '#86efac', fontSize: '11px', fontWeight: '500' }}>
+                            ✓ 要求已提取
+                          </span>
+                        )}
+                        {hasDirectory && (
+                          <span style={{ padding: '4px 10px', background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: '6px', color: '#93c5fd', fontSize: '11px', fontWeight: '500' }}>
+                            ✓ 目录已生成
+                          </span>
+                        )}
+                        {hasReview && (
+                          <span style={{ padding: '4px 10px', background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.3)', borderRadius: '6px', color: '#c4b5fd', fontSize: '11px', fontWeight: '500' }}>
+                            ✓ 已审核
+                          </span>
+                        )}
+                      </div>
+
+                      {/* 创建时间 */}
+                      <div style={{ color: '#64748b', fontSize: '12px', marginBottom: '16px' }}>
+                        创建时间：{proj.created_at ? new Date(proj.created_at).toLocaleString('zh-CN') : '未知'}
+                      </div>
+
+                      {/* 操作按钮 */}
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            selectProject(proj);
+                          }}
                           style={{
-                            background: 'rgba(30, 41, 59, 0.6)',
-                            border: isSelected ? '2px solid rgba(79, 70, 229, 0.8)' : '1px solid rgba(148, 163, 184, 0.25)',
-                            borderRadius: '12px',
-                            padding: '20px',
-                            position: 'relative',
+                            flex: 1,
+                            padding: '10px',
+                            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                            border: 'none',
+                            borderRadius: '8px',
+                            color: '#ffffff',
+                            fontSize: '13px',
+                            fontWeight: '500',
+                            cursor: 'pointer',
                           }}
                         >
-                          {/* Checkbox */}
-                          <div
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleProjectSelection(proj.id);
-                            }}
-                            style={{
-                              position: 'absolute',
-                              top: '12px',
-                              right: '12px',
-                              width: '24px',
-                              height: '24px',
-                              background: isSelected ? 'rgba(79, 70, 229, 0.8)' : 'rgba(30, 41, 59, 0.6)',
-                              border: '2px solid rgba(148, 163, 184, 0.5)',
-                              borderRadius: '4px',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              color: '#fff',
-                              fontSize: '14px',
-                              fontWeight: 'bold',
-                            }}
-                          >
-                            {isSelected && '✓'}
-                          </div>
-
-                          {/* 项目名称和描述 */}
-                          <div style={{ marginBottom: '16px', paddingRight: '32px' }} onClick={() => selectProject(proj)}>
-                            <h3 style={{ margin: '0 0 8px 0', color: '#e2e8f0', fontSize: '18px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                              <span>📦</span>
-                              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{proj.name}</span>
-                            </h3>
-                            {proj.description && (
-                              <p style={{ margin: 0, color: '#94a3b8', fontSize: '13px', lineHeight: '1.5', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', cursor: 'pointer' }}>
-                                {proj.description}
-                              </p>
-                            )}
-                          </div>
-
-                          {/* 进度条 */}
-                          <div style={{ marginBottom: '16px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                              <span style={{ color: '#cbd5e1', fontSize: '12px', fontWeight: '500' }}>完成进度</span>
-                              <span style={{ color: '#667eea', fontSize: '12px', fontWeight: '600' }}>{progressPercent}%</span>
-                            </div>
-                            <div style={{ width: '100%', height: '6px', background: 'rgba(15, 23, 42, 0.6)', borderRadius: '3px', overflow: 'hidden' }}>
-                              <div style={{ width: `${progressPercent}%`, height: '100%', background: 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)', transition: 'width 0.3s ease' }} />
-                            </div>
-                          </div>
-
-                          {/* 状态标签 */}
-                          <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
-                            {hasRequirements && (
-                              <span style={{ padding: '4px 10px', background: 'rgba(34, 197, 94, 0.15)', border: '1px solid rgba(34, 197, 94, 0.3)', borderRadius: '6px', color: '#86efac', fontSize: '11px', fontWeight: '500' }}>
-                                ✓ 要求已提取
-                              </span>
-                            )}
-                            {hasDirectory && (
-                              <span style={{ padding: '4px 10px', background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: '6px', color: '#93c5fd', fontSize: '11px', fontWeight: '500' }}>
-                                ✓ 目录已生成
-                              </span>
-                            )}
-                            {hasReview && (
-                              <span style={{ padding: '4px 10px', background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.3)', borderRadius: '6px', color: '#c4b5fd', fontSize: '11px', fontWeight: '500' }}>
-                                ✓ 已审核
-                              </span>
-                            )}
-                          </div>
-
-                          {/* 创建时间 */}
-                          <div style={{ color: '#64748b', fontSize: '12px', marginBottom: '16px' }}>
-                            创建时间：{proj.created_at ? new Date(proj.created_at).toLocaleString('zh-CN') : '未知'}
-                          </div>
-
-                          {/* 操作按钮 */}
-                          <div style={{ display: 'flex', gap: '8px' }}>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                selectProject(proj);
-                              }}
-                              style={{
-                                flex: 1,
-                                padding: '10px',
-                                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                                border: 'none',
-                                borderRadius: '8px',
-                                color: '#ffffff',
-                                fontSize: '13px',
-                                fontWeight: '500',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              进入项目
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openEditProject(proj);
-                              }}
-                              title="编辑项目"
-                              style={{
-                                padding: '10px 14px',
-                                background: 'rgba(255, 255, 255, 0.05)',
-                                border: '1px solid rgba(148, 163, 184, 0.25)',
-                                borderRadius: '8px',
-                                color: '#cbd5e1',
-                                fontSize: '16px',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openDeleteProject(proj);
-                              }}
-                              title="删除项目"
-                              style={{
-                                padding: '10px 14px',
-                                background: 'rgba(239, 68, 68, 0.1)',
-                                border: '1px solid rgba(239, 68, 68, 0.3)',
-                                borderRadius: '8px',
-                                color: '#fca5a5',
-                                fontSize: '16px',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              🗑️
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </>
+                          进入项目
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEditProject(proj);
+                          }}
+                          title="编辑项目"
+                          style={{
+                            padding: '10px 14px',
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            border: '1px solid rgba(148, 163, 184, 0.25)',
+                            borderRadius: '8px',
+                            color: '#cbd5e1',
+                            fontSize: '16px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openDeleteProject(proj);
+                          }}
+                          title="删除项目"
+                          style={{
+                            padding: '10px 14px',
+                            background: 'rgba(239, 68, 68, 0.1)',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            borderRadius: '8px',
+                            color: '#fca5a5',
+                            fontSize: '16px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         ) : viewMode === "formatTemplates" ? (
@@ -2871,17 +2679,18 @@ export default function TenderWorkspace() {
               {/* 五步工作流 Tabs */}
               <div style={{ display: 'flex', gap: '8px', marginTop: '24px', marginBottom: '16px', flexWrap: 'wrap' }}>
                 {[
-                  { id: 1, label: '1️⃣ 上传文档' },
-                  { id: 2, label: '2️⃣ 提取信息' },
-                  { id: 3, label: '3️⃣ AI生成标书' },
-                  { id: 4, label: '4️⃣ 审核' },
+                  { id: 1, label: 'Step 1: 项目信息' },
+                  { id: 2, label: 'Step 2: 招标要求提取' },
+                  { id: 3, label: '③ 目录生成' },
+                  { id: 4, label: '④ AI生成全文（预留）' },
+                  { id: 5, label: '⑤ 审核' },
                 ].map(tab => (
                   <button
                     key={tab.id}
                     onClick={() => {
                       setActiveTab(tab.id);
-                      // 切换到审核Tab时加载规则包列表
-                      if (tab.id === 4) {
+                      // 切换到审核Tab时加载规则包列表（全局共享）
+                      if (tab.id === 5) {
                         loadRulePacks();
                       }
                     }}

@@ -22,6 +22,12 @@ def map_doc_type_to_kb_category(doc_type: str, context: str = "") -> KbCategory:
         "bid": "bid_document",           # 投标文件
         "template": "format_template",   # 格式模板
         "custom_rule": "reference_rule", # 自定义规则 -> 规章制度
+        # 企业资料映射
+        "company_profile": "qualification_doc",  # 企业资料 -> 资质资料
+        "tech_doc": "technical_material",        # 技术文档 -> 技术资料
+        "case_study": "history_case",            # 案例证明 -> 历史案例
+        "finance_doc": "qualification_doc",      # 财务文档 -> 资质资料
+        "cert_doc": "qualification_doc",         # 证书资质 -> 资质资料
     }
     
     # 用户文档映射
@@ -34,10 +40,12 @@ def map_doc_type_to_kb_category(doc_type: str, context: str = "") -> KbCategory:
     
     # 申报应用映射
     declare_mapping = {
-        "declare_notice": "tender_notice",         # 申报通知 -> 招标文件（复用）
-        "declare_company": "qualification_doc",    # 企业信息 -> 资质资料
-        "declare_tech": "technical_material",      # 技术资料
-        "declare_other": "general_doc",            # 其他
+        "declare_notice": "tender_notice",          # 申报通知 -> 招标文件（复用）
+        "declare_company": "qualification_doc",     # 企业信息 -> 资质资料
+        "declare_tech": "technical_material",       # 技术资料
+        "declare_other": "general_doc",             # 其他
+        "declare_user_doc": "general_doc",          # 用户文档
+        "declare_image": "general_doc",             # 图片（说明文字）
     }
     
     # 合并所有映射

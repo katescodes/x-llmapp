@@ -251,12 +251,12 @@ export async function getProjects(): Promise<DeclareProject[]> {
 /**
  * 创建新项目
  */
-export async function createProject(name: string, description?: string): Promise<DeclareProject> {
+export async function createProject(input: { name: string; description?: string }): Promise<DeclareProject> {
   await delay(500);
   const newProject: DeclareProject = {
     id: `dp-${Date.now()}`,
-    name,
-    description,
+    name: input.name,
+    description: input.description,
     created_at: new Date().toISOString(),
     status: 'draft',
   };
@@ -270,7 +270,7 @@ export async function createProject(name: string, description?: string): Promise
  */
 export async function uploadAssets(
   projectId: string,
-  kind: 'notice' | 'company' | 'tech',
+  kind: 'notice' | 'user_doc' | 'image' | 'company' | 'tech',
   files: File[]
 ): Promise<DeclareAsset[]> {
   await delay(1500); // 模拟上传耗时

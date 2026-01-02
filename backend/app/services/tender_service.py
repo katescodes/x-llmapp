@@ -516,7 +516,7 @@ class TenderService:
         
         Args:
             project_id: 项目ID
-            kind: tender | bid | template | custom_rule
+            kind: tender | bid | template | custom_rule | company_profile | tech_doc | case_study | finance_doc | cert_doc
             files: 上传的文件列表
             bidder_name: 投标人名称（kind=bid 时必填）
         
@@ -559,8 +559,8 @@ class TenderService:
             # 只支持 NEW_ONLY 模式，删除OLD/SHADOW/PREFER_NEW分支
             ingest_v2_result = None
             
-            # ✅ 扩展：template 也需要入库到知识库
-            if kind in ("tender", "bid", "custom_rule", "template"):
+            # ✅ 扩展：template 和企业资料也需要入库到知识库
+            if kind in ("tender", "bid", "custom_rule", "template", "company_profile", "tech_doc", "case_study", "finance_doc", "cert_doc"):
                 from app.core.cutover import get_cutover_config
                 cutover = get_cutover_config()
                 ingest_mode = cutover.get_mode("ingest", project_id)
@@ -3976,3 +3976,468 @@ class TenderService:
             return None
         
         return self.get_semantic_outline(outline["outline_id"])
+    
+    async def _build_tender_project_context(self, project_id: str) -> str:
+        """构建招标项目上下文"""
+        context_parts = []
+        try:
+            project_info = self.dao.get_project_info(project_id)
+            if project_info and project_info.get("data_json"):
+                data = project_info.get("data_json", {})
+                if data.get("project_name"):
+                    context_parts.append(f"项目名称：{data['project_name']}")
+                if data.get("tenderee"):
+                    context_parts.append(f"招标人：{data['tenderee']}")
+                if data.get("budget"):
+                    context_parts.append(f"预算金额：{data['budget']}")
+                if data.get("project_overview"):
+                    context_parts.append(f"项目概况：{data['project_overview']}")
+        except Exception as e:
+            logger.warning(f"[TenderService] 获取项目信息失败: {e}")
+        if len(context_parts) < 3:
+            context_parts.append("（注：项目信息不足，请根据章节标题生成合理内容）")
+        return "\n".join(context_parts)
+    
+    async def _retrieve_context_for_section(
+        self, 
+        project_id: str, 
+        section_title: str,
+        top_k: int = 5
+    ) -> Dict[str, Any]:
+        """
+        为章节检索相关企业资料
+        
+        Args:
+            project_id: 项目ID
+            section_title: 章节标题
+            top_k: 返回的最相关片段数量
+            
+        Returns:
+            检索结果: {
+                "chunks": [...],  # 检索到的文档片段
+                "quality_score": float,  # 检索质量评分 (0-1)
+                "has_relevant": bool  # 是否有相关内容
+            }
+        """
+        from app.services.ingest_v2_service import IngestV2Service
+        from app.db.pool import get_pool
+        
+        result = {
+            "chunks": [],
+            "quality_score": 0.0,
+            "has_relevant": False
+        }
+        
+        try:
+            # 获取项目的知识库ID
+            proj = self.dao.get_project(project_id)
+            if not proj:
+                logger.warning(f"项目不存在: {project_id}")
+                return result
+            
+            kb_id = proj.get("kb_id")
+            if not kb_id:
+                logger.warning(f"项目未绑定知识库: {project_id}")
+                return result
+            
+            # 构建检索query
+            query = self._build_retrieval_query(section_title)
+            
+            # 从Milvus检索
+            ingest_service = IngestV2Service(get_pool())
+            search_results = await ingest_service.search_in_kb(
+                kb_id=kb_id,
+                query_text=query,
+                top_k=top_k,
+                filters={
+                    "doc_type": [
+                        "qualification_doc",  # company_profile, cert_doc
+                        "technical_material",  # tech_doc
+                        "history_case",       # case_study
+                        "financial_doc"       # finance_doc
+                    ]
+                }
+            )
+            
+            if not search_results:
+                return result
+            
+            # 评估检索质量
+            quality_score = self._assess_retrieval_quality(search_results)
+            has_relevant = quality_score > 0.4
+            
+            result = {
+                "chunks": search_results,
+                "quality_score": quality_score,
+                "has_relevant": has_relevant
+            }
+            
+            logger.info(
+                f"[检索] 章节={section_title}, "
+                f"返回={len(search_results)}条, "
+                f"质量={quality_score:.2f}"
+            )
+            
+        except Exception as e:
+            logger.error(f"检索失败: {e}", exc_info=True)
+        
+        return result
+    
+    def _build_retrieval_query(self, section_title: str) -> str:
+        """
+        根据章节标题构建检索query
+        
+        Args:
+            section_title: 章节标题
+            
+        Returns:
+            检索query字符串
+        """
+        # 章节标题 -> 检索意图映射
+        title_lower = section_title.lower()
+        
+        if any(kw in title_lower for kw in ["公司", "企业", "简介", "概况", "资质"]):
+            return f"{section_title} 企业简介 资质证书 荣誉奖项"
+        elif any(kw in title_lower for kw in ["技术", "方案", "实施", "设计"]):
+            return f"{section_title} 技术方案 实施方法 技术路线"
+        elif any(kw in title_lower for kw in ["案例", "业绩", "项目经验", "成功案例"]):
+            return f"{section_title} 项目案例 成功业绩 类似项目"
+        elif any(kw in title_lower for kw in ["财务", "报表", "审计"]):
+            return f"{section_title} 财务报表 审计报告"
+        else:
+            return section_title
+    
+    def _assess_retrieval_quality(self, search_results: List[Dict]) -> float:
+        """
+        评估检索质量
+        
+        Args:
+            search_results: 检索结果列表
+            
+        Returns:
+            质量评分 (0-1)
+        """
+        if not search_results:
+            return 0.0
+        
+        # 基于相似度分数和数量评估
+        scores = [chunk.get("score", 0.0) for chunk in search_results]
+        
+        # 平均相似度
+        avg_score = sum(scores) / len(scores)
+        
+        # 最高相似度
+        max_score = max(scores)
+        
+        # 综合评分 (权重: 最高0.6 + 平均0.4)
+        quality = max_score * 0.6 + avg_score * 0.4
+        
+        return min(quality, 1.0)
+    
+    async def _generate_section_content(
+        self,
+        project_id: str,
+        title: str,
+        level: int,
+        project_context: str,
+        model_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        为单个章节生成内容（使用统一组件）
+        
+        Returns:
+            {
+                "content": str,  # HTML格式的章节内容
+                "evidence_chunk_ids": List[str]  # 引用的资料片段ID
+                "quality_metrics": Dict  # 质量指标
+            }
+        """
+        from app.services.generation import (
+            DocumentRetriever,
+            RetrievalContext,
+            PromptBuilder,
+            PromptContext,
+            ContentGenerator,
+            GenerationContext,
+            QualityAssessor
+        )
+        from app.services.ingest_v2_service import IngestV2Service
+        from app.db.pool import get_pool
+        
+        # Step 1: 获取项目信息
+        proj = self.dao.get_project(project_id)
+        if not proj:
+            raise ValueError(f"项目不存在: {project_id}")
+        
+        kb_id = proj.get("kb_id")
+        if not kb_id:
+            raise ValueError(f"项目未绑定知识库: {project_id}")
+        
+        project_info_dict = {}
+        try:
+            proj_info = self.dao.get_project_info(project_id)
+            if proj_info and proj_info.get("data_json"):
+                project_info_dict = proj_info["data_json"]
+        except Exception as e:
+            logger.warning(f"获取项目信息失败: {e}")
+        
+        # Step 2: 检索相关资料（使用统一组件）
+        retriever = DocumentRetriever(IngestV2Service(get_pool()))
+        retrieval_context = RetrievalContext(
+            kb_id=kb_id,
+            section_title=title,
+            section_level=level,
+            document_type="tender",
+            project_info=project_info_dict
+        )
+        retrieval_result = await retriever.retrieve(retrieval_context, top_k=5)
+        
+        # Step 3: 构建Prompt（使用统一组件）
+        prompt_builder = PromptBuilder()
+        prompt_context = PromptContext(
+            document_type="tender",
+            section_title=title,
+            section_level=level,
+            project_info=project_info_dict,
+            retrieval_result=retrieval_result
+        )
+        prompt = prompt_builder.build(prompt_context)
+        
+        # Step 4: 生成内容（使用统一组件）
+        generator = ContentGenerator(self.llm)
+        gen_context = GenerationContext(
+            document_type="tender",
+            section_title=title,
+            prompt=prompt,
+            model_id=model_id
+        )
+        generation_result = await generator.generate(gen_context)
+        
+        # Step 5: 评估质量（使用统一组件）
+        assessor = QualityAssessor()
+        quality_metrics = assessor.assess(
+            generation_result,
+            retrieval_result,
+            level
+        )
+        
+        # Step 6: 记录质量指标
+        logger.info(
+            f"[生成] 章节={title}, "
+            f"字数={generation_result.word_count}, "
+            f"证据={len(retrieval_result.chunks)}条, "
+            f"质量={quality_metrics.overall_score:.2f}, "
+            f"等级={quality_metrics.get_grade()}"
+        )
+        
+        return {
+            "content": generation_result.content,
+            "evidence_chunk_ids": retrieval_result.get_chunk_ids(),
+            "quality_metrics": quality_metrics.to_dict()
+        }
+    
+    async def generate_full_content(
+        self,
+        project_id: str,
+        model_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        max_concurrent: int = 5,
+    ) -> Dict[str, Any]:
+        """
+        并行生成标书所有章节内容
+        
+        Args:
+            project_id: 项目ID
+            model_id: LLM模型ID
+            run_id: 运行记录ID
+            max_concurrent: 最大并发数（默认5）
+        
+        Returns:
+            生成结果统计
+        """
+        import asyncio
+        
+        try:
+            logger.info(f"[TenderService] 开始并行生成标书内容: project_id={project_id}, max_concurrent={max_concurrent}")
+            
+            # 更新 run 状态
+            if run_id:
+                self.dao.update_run(run_id, "running", progress=0.0, message="开始生成...")
+            
+            # 获取所有目录节点
+            nodes = self.dao.get_directory_nodes(project_id)
+            if not nodes:
+                raise ValueError("没有找到目录节点")
+            
+            # 构建项目上下文
+            project_context = await self._build_tender_project_context(project_id)
+            
+            # 筛选需要生成内容的节点（没有section或section为空）
+            nodes_to_generate = []
+            for node in nodes:
+                node_id = node.get("id")
+                section = self.dao.get_section_body(project_id, node_id)
+                
+                # 如果没有section或内容为空/占位符，则需要生成
+                if not section or self._is_empty_section(section):
+                    nodes_to_generate.append(node)
+            
+            total = len(nodes_to_generate)
+            logger.info(f"[TenderService] 需要生成内容的节点数: {total}")
+            
+            if total == 0:
+                if run_id:
+                    self.dao.update_run(
+                        run_id,
+                        "success",
+                        progress=1.0,
+                        message="所有章节已有内容，无需生成",
+                        result_json={"generated": 0, "total": len(nodes), "skipped": len(nodes)},
+                    )
+                return {"generated": 0, "total": len(nodes), "skipped": len(nodes)}
+            
+            # 创建信号量控制并发
+            semaphore = asyncio.Semaphore(max_concurrent)
+            
+            # 生成任务
+            completed = 0
+            failed = 0
+            
+            async def generate_one(node: Dict[str, Any], index: int) -> Tuple[bool, str]:
+                """生成单个节点的内容"""
+                nonlocal completed, failed
+                
+                async with semaphore:
+                    node_id = node.get("id")
+                    title = node.get("title", "")
+                    level = node.get("level", 1)
+                    
+                    try:
+                        logger.info(f"[{index+1}/{total}] 开始生成: {title}")
+                        
+                        # 生成内容（新版本返回字典）
+                        result = await self._generate_section_content(
+                            project_id=project_id,
+                            title=title,
+                            level=level,
+                            project_context=project_context,
+                            model_id=model_id,
+                        )
+                        
+                        # 提取内容和证据
+                        content = result.get("content", "")
+                        evidence_chunk_ids = result.get("evidence_chunk_ids", [])
+                        
+                        # 保存到数据库
+                        self.dao.upsert_section_body(
+                            project_id=project_id,
+                            node_id=node_id,
+                            source="AI",  # 标记为AI生成
+                            fragment_id=None,  # AI生成不关联模板片段
+                            content_html=content,
+                            content_json=None,
+                            evidence_chunk_ids=evidence_chunk_ids,  # 存储证据ID
+                        )
+                        
+                        completed += 1
+                        logger.info(
+                            f"[{index+1}/{total}] 生成成功: {title}, "
+                            f"字数={len(content)}, 证据={len(evidence_chunk_ids)}条"
+                        )
+                        
+                        # 更新进度
+                        if run_id:
+                            progress = completed / total
+                            self.dao.update_run(
+                                run_id,
+                                "running",
+                                progress=progress,
+                                message=f"已完成 {completed}/{total} 个章节",
+                            )
+                        
+                        return True, title
+                        
+                    except Exception as e:
+                        failed += 1
+                        error_msg = f"生成失败: {str(e)}"
+                        logger.error(f"[{index+1}/{total}] {title} - {error_msg}", exc_info=True)
+                        return False, title
+            
+            # 并行执行所有生成任务
+            tasks = [generate_one(node, i) for i, node in enumerate(nodes_to_generate)]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 统计结果
+            success_count = sum(1 for r in results if isinstance(r, tuple) and r[0])
+            
+            result_json = {
+                "generated": success_count,
+                "failed": failed,
+                "total": total,
+                "skipped": len(nodes) - total,
+            }
+            
+            # 更新 run 状态
+            if run_id:
+                if failed == 0:
+                    self.dao.update_run(
+                        run_id,
+                        "success",
+                        progress=1.0,
+                        message=f"生成完成！成功 {success_count} 个章节",
+                        result_json=result_json,
+                    )
+                else:
+                    self.dao.update_run(
+                        run_id,
+                        "partial",
+                        progress=1.0,
+                        message=f"部分完成：成功 {success_count}，失败 {failed}",
+                        result_json=result_json,
+                    )
+            
+            logger.info(f"[TenderService] 并行生成完成: {result_json}")
+            return result_json
+            
+        except Exception as e:
+            logger.error(f"[TenderService] 并行生成失败: {e}", exc_info=True)
+            if run_id:
+                self.dao.update_run(
+                    run_id,
+                    "failed",
+                    progress=0.0,
+                    message=str(e),
+                    result_json={"error": str(e)},
+                )
+            raise
+    
+    def _is_empty_section(self, section: Dict[str, Any]) -> bool:
+        """判断section是否为空或只有占位符"""
+        content_html = (section.get("content_html") or "").strip()
+        content_md = (section.get("content_md") or "").strip()
+        
+        # 如果都为空
+        if not content_html and not content_md:
+            return True
+        
+        # 检查是否只有占位符
+        placeholders = [
+            "【填写】", "【待补】", "【待填写】", "[填写]", "[待补]",
+            "待填写", "待补充", "TODO", "TBD", "（待补充）",
+        ]
+        
+        content = content_html or content_md
+        content = content.strip()
+        
+        # 移除HTML标签检查
+        import re
+        text_only = re.sub(r'<[^>]+>', '', content).strip()
+        
+        if not text_only or text_only in placeholders:
+            return True
+        
+        # 内容太短也认为需要生成
+        if len(text_only) < 10:
+            return True
+        
+        return False

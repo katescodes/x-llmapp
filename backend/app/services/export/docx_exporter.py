@@ -1235,6 +1235,8 @@ async def render_directory_tree_to_docx(
     auto_write_cfg: Optional[AutoWriteCfg] = None,
     project_context: str = "",
     model_id: Optional[str] = None,
+    parallel_generation: bool = True,
+    max_concurrent: int = 5,
 ) -> None:
     """
     将目录树渲染为 Word 文档（使用模板母版）
@@ -1254,8 +1256,10 @@ async def render_directory_tree_to_docx(
         auto_write_cfg: 自动写作配置（如果未提供则使用默认值）
         project_context: 项目上下文信息（用于自动生成内容）
         model_id: LLM模型ID（用于自动生成内容）
+        parallel_generation: 是否并行生成内容（默认True）
+        max_concurrent: 最大并发数（默认5）
     """
-    logger.info(f"开始渲染文档: template={template_path}, output={output_path}, auto_generate={auto_generate_content}")
+    logger.info(f"开始渲染文档: template={template_path}, output={output_path}, auto_generate={auto_generate_content}, parallel={parallel_generation}")
     
     # ✅ 提取模板中的图片（资质、证书类）
     template_images = _extract_template_images(template_path)
@@ -1265,6 +1269,18 @@ async def render_directory_tree_to_docx(
         auto_write_cfg = AutoWriteCfg()
     
     content_cache = {} if auto_generate_content else None
+    
+    # ✅ 如果启用并行生成，预先收集所有需要生成的节点并并行生成
+    if auto_generate_content and parallel_generation:
+        logger.info("启用并行内容生成")
+        await _parallel_generate_all_content(
+            roots=roots,
+            project_context=project_context,
+            cfg=auto_write_cfg,
+            cache=content_cache,
+            model_id=model_id,
+            max_concurrent=max_concurrent,
+        )
     
     # 1. 加载模板（保留页眉页脚）
     doc = Document(template_path)
@@ -1360,40 +1376,48 @@ async def render_directory_tree_to_docx(
         
         # 如果启用了自动生成且当前节点没有实质内容（空或占位符），则自动生成
         if auto_generate_content and _is_empty_or_placeholder(content_to_add):
-            try:
-                logger.info(f"自动生成内容: title={node.title}, level={node.level}")
-                generated_text = await generate_section_text_by_title(
-                    title=node.title,
-                    level=node.level,
-                    project_context=project_context,
-                    cfg=auto_write_cfg,
-                    cache=content_cache,
-                    model_id=model_id,
-                )
-                
-                # 将生成的文本按空行分段，写入多个段落
-                # 这样保持了 docx 的段落结构，更美观
-                paragraphs = [
-                    p.strip() 
-                    for p in re.split(r"\n{2,}|\r\n{2,}", generated_text) 
-                    if p.strip()
-                ]
-                
-                for para in paragraphs:
-                    if normal_style_name:
-                        try:
-                            doc.add_paragraph(para, style=normal_style_name)
-                        except Exception as e:
-                            logger.warning(f"样式 {normal_style_name} 不存在，使用默认段落: {e}")
-                            doc.add_paragraph(para)
-                    else:
+            # 如果启用了并行生成，从缓存中获取（已预先生成）
+            if parallel_generation:
+                key = f"L{node.level}:{node.title.strip()}"
+                generated_text = content_cache.get(key, "")
+                if not generated_text:
+                    logger.warning(f"并行生成的内容未找到: {key}")
+                    generated_text = "【内容生成失败】"
+            else:
+                # 串行生成（原有逻辑）
+                try:
+                    logger.info(f"自动生成内容: title={node.title}, level={node.level}")
+                    generated_text = await generate_section_text_by_title(
+                        title=node.title,
+                        level=node.level,
+                        project_context=project_context,
+                        cfg=auto_write_cfg,
+                        cache=content_cache,
+                        model_id=model_id,
+                    )
+                except Exception as e:
+                    logger.error(f"自动生成内容失败: title={node.title}, error={e}", exc_info=True)
+                    generated_text = f"【自动生成内容失败：{str(e)}】"
+            
+            # 将生成的文本按空行分段，写入多个段落
+            # 这样保持了 docx 的段落结构，更美观
+            paragraphs = [
+                p.strip() 
+                for p in re.split(r"\n{2,}|\r\n{2,}", generated_text) 
+                if p.strip()
+            ]
+            
+            for para in paragraphs:
+                if normal_style_name:
+                    try:
+                        doc.add_paragraph(para, style=normal_style_name)
+                    except Exception as e:
+                        logger.warning(f"样式 {normal_style_name} 不存在，使用默认段落: {e}")
                         doc.add_paragraph(para)
-                
-                logger.info(f"自动生成完成: {len(paragraphs)} 个段落, 总字符数 {len(generated_text)}")
-                
-            except Exception as e:
-                logger.error(f"自动生成内容失败: title={node.title}, error={e}", exc_info=True)
-                doc.add_paragraph(f"【自动生成内容失败：{str(e)}】")
+                else:
+                    doc.add_paragraph(para)
+            
+            logger.info(f"添加生成内容: {len(paragraphs)} 个段落, 总字符数 {len(generated_text)}")
         
         # 否则，添加原有内容（如果有的话）
         elif content_to_add and not _is_empty_or_placeholder(content_to_add):
@@ -1453,6 +1477,96 @@ async def render_directory_tree_to_docx(
     
     doc.save(output_path)
     logger.info(f"文档渲染完成: {output_path}")
+
+
+async def _parallel_generate_all_content(
+    roots: List[DirNode],
+    project_context: str,
+    cfg: AutoWriteCfg,
+    cache: dict,
+    model_id: Optional[str],
+    max_concurrent: int,
+) -> None:
+    """
+    并行生成所有需要生成内容的节点
+    
+    Args:
+        roots: 根节点列表
+        project_context: 项目上下文
+        cfg: 自动写作配置
+        cache: 内容缓存字典
+        model_id: LLM模型ID
+        max_concurrent: 最大并发数
+    """
+    import asyncio
+    
+    # 收集所有需要生成的节点
+    nodes_to_generate = []
+    
+    def collect_nodes(node: DirNode):
+        """递归收集节点"""
+        # 过滤目录节点
+        if is_toc_title(node.title):
+            for child in node.children:
+                collect_nodes(child)
+            return
+        
+        if node.meta_json.get("is_toc") or node.meta_json.get("type") == "toc":
+            for child in node.children:
+                collect_nodes(child)
+            return
+        
+        # 如果节点需要生成内容
+        if _is_empty_or_placeholder(node.summary):
+            nodes_to_generate.append(node)
+        
+        # 递归子节点
+        for child in node.children:
+            collect_nodes(child)
+    
+    for root in roots:
+        collect_nodes(root)
+    
+    total = len(nodes_to_generate)
+    if total == 0:
+        logger.info("没有需要生成内容的节点")
+        return
+    
+    logger.info(f"开始并行生成 {total} 个节点的内容，最大并发数: {max_concurrent}")
+    
+    # 创建信号量控制并发
+    semaphore = asyncio.Semaphore(max_concurrent)
+    completed = 0
+    
+    async def generate_one(node: DirNode, index: int):
+        """生成单个节点的内容"""
+        nonlocal completed
+        
+        async with semaphore:
+            try:
+                logger.info(f"[{index+1}/{total}] 开始生成: {node.title}")
+                
+                # 生成内容（会自动使用缓存）
+                await generate_section_text_by_title(
+                    title=node.title,
+                    level=node.level,
+                    project_context=project_context,
+                    cfg=cfg,
+                    cache=cache,
+                    model_id=model_id,
+                )
+                
+                completed += 1
+                logger.info(f"[{index+1}/{total}] 生成成功: {node.title}")
+                
+            except Exception as e:
+                logger.error(f"[{index+1}/{total}] 生成失败: {node.title} - {e}", exc_info=True)
+    
+    # 并行执行所有生成任务
+    tasks = [generate_one(node, i) for i, node in enumerate(nodes_to_generate)]
+    await asyncio.gather(*tasks, return_exceptions=True)
+    
+    logger.info(f"并行生成完成: 成功 {completed}/{total} 个节点")
 
 
 def render_simple_outline_to_docx(

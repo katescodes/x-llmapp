@@ -139,7 +139,7 @@ export async function getProject(projectId: string): Promise<DeclareProject> {
  */
 export async function uploadAssets(
   projectId: string,
-  kind: 'notice' | 'company' | 'tech' | 'other',
+  kind: 'notice' | 'user_doc' | 'image' | 'company' | 'tech' | 'other',
   files: File[]
 ): Promise<{ assets: DeclareAsset[] }> {
   const formData = new FormData();

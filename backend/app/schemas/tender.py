@@ -13,7 +13,7 @@ from .evidence import SpanRef
 
 
 # 类型定义
-TenderAssetKind = Literal["tender", "bid", "template", "custom_rule"]
+TenderAssetKind = Literal["tender", "bid", "template", "custom_rule", "company_profile", "tech_doc", "case_study", "finance_doc", "cert_doc"]
 TenderRunStatus = Literal["pending", "running", "success", "failed"]
 
 

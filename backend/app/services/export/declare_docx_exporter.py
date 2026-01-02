@@ -163,11 +163,8 @@ class DeclareDocxExporter:
             
             # 已有内容直接写入（不覆盖）
             elif content_md and not _is_empty_or_placeholder(content_md):
-                # 简单的 Markdown 转换（这里简化处理，只处理段落）
-                paragraphs = content_md.split("\n\n")
-                for para in paragraphs:
-                    if para.strip():
-                        doc.add_paragraph(para.strip())
+                # 处理 Markdown 内容，支持图片占位符
+                self._render_markdown_with_images(doc, content_md, project_id)
             
             # 完全没有内容时的占位符
             else:
@@ -205,4 +202,102 @@ class DeclareDocxExporter:
             "filename": filename,
             "file_size": file_size,
         }
+    
+    def _render_markdown_with_images(self, doc: Document, content_md: str, project_id: str):
+        """
+        渲染 Markdown 内容到 DOCX，支持图片占位符 {image:filename}
+        
+        Args:
+            doc: DOCX Document 对象
+            content_md: Markdown 内容
+            project_id: 项目ID（用于查找图片）
+        """
+        # 按行处理，检测图片占位符
+        lines = content_md.split("\n")
+        current_para = []
+        
+        image_pattern = re.compile(r'\{image:([^}]+)\}')
+        
+        for line in lines:
+            stripped = line.strip()
+            
+            # 检测图片占位符
+            match = image_pattern.search(stripped)
+            if match:
+                # 先写入当前段落（如果有）
+                if current_para:
+                    doc.add_paragraph("\n".join(current_para).strip())
+                    current_para = []
+                
+                # 插入图片
+                image_filename = match.group(1).strip()
+                self._insert_image(doc, project_id, image_filename)
+                
+                # 图片占位符行的其他文本（如果有）
+                remaining_text = image_pattern.sub('', stripped).strip()
+                if remaining_text:
+                    current_para.append(remaining_text)
+                
+                continue
+            
+            # 空行分段
+            if not stripped:
+                if current_para:
+                    doc.add_paragraph("\n".join(current_para).strip())
+                    current_para = []
+                continue
+            
+            # 普通文本行
+            current_para.append(line)
+        
+        # 写入最后的段落
+        if current_para:
+            doc.add_paragraph("\n".join(current_para).strip())
+    
+    def _insert_image(self, doc: Document, project_id: str, filename: str):
+        """
+        插入图片到 DOCX
+        
+        Args:
+            doc: DOCX Document 对象
+            project_id: 项目ID
+            filename: 图片文件名
+        """
+        try:
+            # 查找图片资产
+            assets = self.dao.list_assets(project_id, kind="image")
+            image_asset = None
+            
+            for asset in assets:
+                if asset.get("filename") == filename:
+                    image_asset = asset
+                    break
+            
+            if not image_asset:
+                logger.warning(f"[DeclareDocxExporter] Image not found: {filename}")
+                doc.add_paragraph(f"【图片未找到：{filename}】")
+                return
+            
+            storage_path = image_asset.get("storage_path")
+            if not storage_path or not os.path.exists(storage_path):
+                logger.warning(f"[DeclareDocxExporter] Image file not exists: {storage_path}")
+                doc.add_paragraph(f"【图片文件不存在：{filename}】")
+                return
+            
+            # 插入图片
+            doc.add_picture(storage_path, width=Inches(5))
+            
+            # 添加图片说明（如果有）
+            meta_json = image_asset.get("meta_json", {})
+            description = meta_json.get("description", "")
+            if description:
+                caption_para = doc.add_paragraph(description)
+                caption_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                caption_para.style = 'Caption'
+            
+            logger.info(f"[DeclareDocxExporter] Inserted image: {filename}")
+            
+        except Exception as e:
+            logger.error(f"[DeclareDocxExporter] Failed to insert image {filename}: {e}", exc_info=True)
+            doc.add_paragraph(f"【图片插入失败：{filename}】")
 

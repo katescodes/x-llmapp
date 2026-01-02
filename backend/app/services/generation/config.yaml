@@ -1,0 +1,169 @@
+# 统一文档生成框架 - 配置文件
+
+# 全局配置
+global:
+  # 默认温度参数
+  default_temperature: 0.7
+  # 默认最大token数
+  default_max_tokens: 2000
+  # 默认并发数
+  default_concurrency: 5
+
+# 检索配置
+retrieval:
+  # 默认检索数量
+  default_top_k: 5
+  # 检索质量阈值（低于此值认为无相关资料）
+  quality_threshold: 0.4
+  # 检索策略
+  strategies:
+    - name: "semantic"
+      description: "语义检索"
+      enabled: true
+    - name: "keyword"
+      description: "关键词检索"
+      enabled: true
+    - name: "hybrid"
+      description: "混合检索"
+      enabled: true
+
+# Tender（招投标）配置
+tender:
+  # 模板文件
+  templates:
+    system: "tender_system.md"
+    user: "tender_user.md"
+  
+  # LLM参数
+  llm:
+    temperature: 0.7
+    max_tokens: 2000
+  
+  # 最小字数要求（按层级）
+  min_words:
+    level_1: 800
+    level_2: 500
+    level_3: 300
+    level_4: 200
+  
+  # 文档类型过滤
+  doc_type_filters:
+    - "qualification_doc"    # 企业资质
+    - "technical_material"   # 技术文档
+    - "history_case"         # 案例证明
+    - "financial_doc"        # 财务文档
+  
+  # 关键词映射
+  keyword_mappings:
+    company:
+      keywords: ["公司", "企业", "简介", "概况", "资质"]
+      expanded_query: "{title} 企业简介 资质证书 荣誉奖项"
+    
+    technical:
+      keywords: ["技术", "方案", "实施", "设计"]
+      expanded_query: "{title} 技术方案 实施方法 技术路线"
+    
+    case:
+      keywords: ["案例", "业绩", "项目经验", "成功案例"]
+      expanded_query: "{title} 项目案例 成功业绩 类似项目"
+    
+    financial:
+      keywords: ["财务", "报表", "审计"]
+      expanded_query: "{title} 财务报表 审计报告"
+
+# Declare（申报书）配置
+declare:
+  # 模板文件
+  templates:
+    system: "declare_system.md"
+    user: "declare_user.md"
+  
+  # LLM参数
+  llm:
+    temperature: 0.6  # 申报书更严谨
+    max_tokens: 2500
+  
+  # 文档类型过滤
+  doc_type_filters:
+    - "declare_user_doc"     # 用户文档
+    - "technical_material"   # 技术材料
+    - "qualification_doc"    # 资质文档
+  
+  # 关键词映射
+  keyword_mappings:
+    background:
+      keywords: ["项目背景", "研究背景", "立项依据"]
+      expanded_query: "{title} 项目背景 研究现状 技术难点"
+    
+    technical_plan:
+      keywords: ["技术方案", "研究方案", "实施方案"]
+      expanded_query: "{title} 技术路线 实施方法 创新点"
+    
+    innovation:
+      keywords: ["创新点", "技术创新", "特色"]
+      expanded_query: "{title} 创新特色 技术优势 突破点"
+    
+    team:
+      keywords: ["团队", "人员", "组织"]
+      expanded_query: "{title} 团队介绍 人员配置 项目组"
+    
+    budget:
+      keywords: ["预算", "经费", "资金"]
+      expanded_query: "{title} 经费预算 资金计划 成本明细"
+
+# 质量评估配置
+quality_assessment:
+  # 评分权重
+  weights:
+    completeness: 0.4   # 完整度
+    evidence: 0.3       # 证据充分度
+    format: 0.3         # 格式规范度
+  
+  # 质量等级划分
+  grades:
+    excellent: 0.9      # 优秀
+    good: 0.75          # 良好
+    qualified: 0.6      # 合格
+    # 低于0.6为待改进
+
+# 监控配置
+monitoring:
+  # 是否启用性能监控
+  enabled: true
+  
+  # 日志级别
+  log_level: "INFO"
+  
+  # 指标收集
+  metrics:
+    - "retrieval_time"        # 检索耗时
+    - "generation_time"       # 生成耗时
+    - "quality_score"         # 质量评分
+    - "chunk_count"           # 检索片段数
+    - "word_count"            # 生成字数
+  
+  # 慢查询阈值（秒）
+  slow_query_threshold: 5.0
+
+# 缓存配置
+cache:
+  # 是否启用缓存
+  enabled: false
+  
+  # 缓存过期时间（秒）
+  ttl: 3600
+  
+  # 缓存类型
+  backend: "memory"  # memory | redis
+
+# 实验性功能
+experimental:
+  # 是否启用多轮生成
+  multi_round_generation: false
+  
+  # 是否启用风格迁移
+  style_transfer: false
+  
+  # 是否启用内容审核
+  content_moderation: false
+

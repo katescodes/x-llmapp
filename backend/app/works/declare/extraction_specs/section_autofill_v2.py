@@ -44,7 +44,7 @@ def build_section_autofill_spec(node_title: str, requirements_summary: str = "")
         queries=queries,
         topk_per_query=top_k_per_query,
         topk_total=top_k_total,
-        doc_types=["declare_company", "declare_tech", "declare_other"],
+        doc_types=["declare_company", "declare_tech", "declare_other", "declare_user_doc", "declare_image"],  # 添加user_doc和image
         temperature=0.3,  # 稍高温度以获得更自然的内容
         schema_model=SectionResultV2
     )
