@@ -270,14 +270,8 @@ class PromptBuilder:
         if has_materials:
             materials_text = context.retrieval_result.format_for_prompt()
         
-        # 提取章节说明（来自申报指南）
-        section_notes = ""
-        if context.section_metadata and isinstance(context.section_metadata, dict):
-            section_notes = context.section_metadata.get("notes", "")
-        
         template_context = {
             "section_title": context.section_title,
-            "section_notes": section_notes,
             "has_requirements": has_requirements,
             "requirements": requirements_text,
             "has_materials": has_materials,

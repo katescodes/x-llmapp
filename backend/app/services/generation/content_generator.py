@@ -102,9 +102,13 @@ class ContentGenerator:
             # Step 2: 提取元信息
             confidence = self._extract_confidence(raw_content)
             
-            # Step 3: 清理和格式化（统一使用HTML格式）
-            content = self._format_html_content(raw_content)
-            format_type = "html"
+            # Step 3: 清理和格式化
+            if context.document_type == "tender":
+                content = self._format_html_content(raw_content)
+                format_type = "html"
+            else:
+                content = self._format_markdown_content(raw_content)
+                format_type = "markdown"
             
             # Step 4: 计算指标
             word_count = len(content)

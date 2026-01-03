@@ -350,13 +350,29 @@ class DeclareDAO:
             conn.commit()
 
     def set_active_directory_version(self, project_id: str, version_id: str):
-        """设置活跃目录版本"""
+        """设置活跃目录版本（同一项目类型只保留一个活跃版本）"""
         with self.pool.connection() as conn:
-            with conn.cursor() as cur:
-                # 禁用旧版本
+            with conn.cursor(row_factory=dict_row) as cur:
+                # 获取新版本的项目类型
                 cur.execute(
-                    "UPDATE declare_directory_versions SET is_active=FALSE WHERE project_id=%s AND version_id!=%s",
-                    (project_id, version_id),
+                    "SELECT project_type FROM declare_directory_versions WHERE version_id=%s",
+                    (version_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return
+                project_type = row["project_type"]
+                
+                # 禁用同一项目下、同一项目类型的其他版本
+                cur.execute(
+                    """
+                    UPDATE declare_directory_versions 
+                    SET is_active=FALSE 
+                    WHERE project_id=%s 
+                    AND project_type=%s 
+                    AND version_id!=%s
+                    """,
+                    (project_id, project_type, version_id),
                 )
                 # 激活新版本
                 cur.execute(
@@ -382,7 +398,7 @@ class DeclareDAO:
                 return [_serialize_row(row) for row in cur.fetchall()]
     
     def get_all_directory_versions(self, project_id: str) -> List[Dict[str, Any]]:
-        """获取项目的所有目录版本（按项目类型分组）"""
+        """获取项目的所有活跃目录版本（每个项目类型只返回一个活跃版本）"""
         with self.pool.connection() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
@@ -397,6 +413,7 @@ class DeclareDAO:
                         created_at
                     FROM declare_directory_versions
                     WHERE project_id=%s
+                    AND is_active = TRUE
                     ORDER BY created_at DESC, project_type
                     """,
                     (project_id,),

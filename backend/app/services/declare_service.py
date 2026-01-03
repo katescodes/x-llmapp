@@ -302,11 +302,11 @@ class DeclareService:
                 if not nodes:
                     logger.warning(f"Project type '{project_type}' has no nodes, skipping")
                     continue
-            
-            # 后处理：排序 + 构建树
-            nodes_sorted = sorted(nodes, key=lambda n: (n.get("level", 99), n.get("order_no", 0)))
-            nodes_with_tree = self._build_directory_tree(nodes_sorted)
-            
+                
+                # 后处理：排序 + 构建树
+                nodes_sorted = sorted(nodes, key=lambda n: (n.get("level", 99), n.get("order_no", 0)))
+                nodes_with_tree = self._build_directory_tree(nodes_sorted)
+                
                 # 保存（版本化，关联项目类型）
                 version_id = self.dao.create_directory_version(
                     project_id, 
@@ -315,7 +315,7 @@ class DeclareService:
                     project_type=project_type,
                     project_description=project_description
                 )
-            self.dao.upsert_directory_nodes(version_id, project_id, nodes_with_tree)
+                self.dao.upsert_directory_nodes(version_id, project_id, nodes_with_tree)
                 
                 version_ids.append(version_id)
                 total_nodes += len(nodes_with_tree)
@@ -325,9 +325,9 @@ class DeclareService:
                     f"nodes={len(nodes_with_tree)} version_id={version_id}"
                 )
             
-            # 设置第一个项目类型为活跃版本（默认显示）
-            if version_ids:
-                self.dao.set_active_directory_version(project_id, version_ids[0])
+            # 设置所有新版本为活跃状态（每个项目类型都应该可见）
+            for version_id in version_ids:
+                self.dao.set_active_directory_version(project_id, version_id)
             
             # 更新 run 状态
             if run_id:

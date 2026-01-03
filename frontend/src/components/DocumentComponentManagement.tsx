@@ -14,6 +14,7 @@ interface DocumentNode {
   orderNo?: string;
   level: number;
   children?: DocumentNode[];
+  notes?: string;  // 章节说明（来自申报指南）
 }
 
 interface DocumentContent {
@@ -38,6 +39,7 @@ const convertTenderDirectoryToDocNodes = (tenderNodes: any[]): DocumentNode[] =>
       orderNo: node.numbering || '',
       level: node.level || 1,
       children: [],
+      notes: node.meta_json?.notes || node.notes || '',  // 提取章节说明
     };
     idMap.set(docNode.id, docNode);
   });
@@ -1444,6 +1446,62 @@ export default function DocumentComponentManagement({
                           {hasContent ? '🔄 重新生成' : '🤖 生成内容'}
                         </button>
                       </div>
+
+                      {/* 📋 章节说明（来自申报指南） */}
+                      {node.notes && node.notes.trim() && (
+                        <div
+                          style={{
+                            marginBottom: 16,
+                            padding: '12px 16px',
+                            background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(139, 92, 246, 0.08))',
+                            border: '1px solid rgba(59, 130, 246, 0.2)',
+                            borderLeft: '4px solid #3b82f6',
+                            borderRadius: 8,
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'flex-start',
+                              gap: 8,
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: 16,
+                                flexShrink: 0,
+                                marginTop: 2,
+                              }}
+                            >
+                              📋
+                            </span>
+                            <div style={{ flex: 1 }}>
+                              <div
+                                style={{
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                  color: '#3b82f6',
+                                  marginBottom: 4,
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.5px',
+                                }}
+                              >
+                                填写要求（来自申报指南）
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: 14,
+                                  lineHeight: 1.6,
+                                  color: '#475569',
+                                  whiteSpace: 'pre-wrap',
+                                }}
+                              >
+                                {node.notes}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
                       {/* 章节内容（可编辑） */}
                       <div

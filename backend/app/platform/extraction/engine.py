@@ -228,39 +228,109 @@ class ExtractionEngine:
         
         parse_ms = int((time.time() - parse_start) * 1000)
         
-        # 6. 提取数据和证据
-        # 处理两种格式：dict（project-info）或 list（risks）
-        if isinstance(obj, dict):
-            data = obj.get("data") or obj
-            evidence_chunk_ids = obj.get("evidence_chunk_ids") or []
-            logger.info(
-                f"[ExtractionEngine] EXTRACT_DATA project_id={project_id} "
-                f"obj_has_data_key={'data' in obj} "
-                f"data_type={type(data).__name__} "
-                f"data_keys={list(data.keys()) if isinstance(data, dict) else 'NOT_DICT'} "
-                f"data_len={len(data) if data else 0}"
-            )
-        elif isinstance(obj, list):
-            # risks等返回list，每个元素可能有自己的evidence_chunk_ids
-            data = obj
-            # 收集所有evidence_chunk_ids
-            evidence_chunk_ids = []
-            for item in obj:
-                if isinstance(item, dict):
-                    item_evidence = item.get("evidence_chunk_ids") or []
-                    evidence_chunk_ids.extend(item_evidence)
-        else:
-            logger.warning(f"ExtractionEngine: unexpected obj type {type(obj)}")
-            data = obj
-            evidence_chunk_ids = []
+        # 6. Schema验证（如果提供了schema_model）
+        validation_start = time.time()
+        validation_passed = False
+        validation_error_msg = None
         
-        # 7. 生成 evidence_spans
+        if spec.schema_model:
+            try:
+                logger.info(f"[ExtractionEngine] SCHEMA_VALIDATION_START project_id={project_id} schema={spec.schema_model.__name__}")
+                
+                # 使用Pydantic验证
+                validated_obj = spec.schema_model(**obj)
+                
+                # 获取验证后的数据
+                if isinstance(obj, dict):
+                    data = validated_obj.data if hasattr(validated_obj, 'data') else validated_obj.model_dump()
+                    # 如果schema有data字段，取data的内容
+                    if hasattr(validated_obj, 'data'):
+                        data = validated_obj.data.model_dump() if hasattr(validated_obj.data, 'model_dump') else validated_obj.data
+                    else:
+                        data = validated_obj.model_dump()
+                    
+                    # 获取evidence_chunk_ids
+                    evidence_chunk_ids = validated_obj.evidence_chunk_ids if hasattr(validated_obj, 'evidence_chunk_ids') else obj.get("evidence_chunk_ids", [])
+                else:
+                    # 对于list类型
+                    data = [item.model_dump() if hasattr(item, 'model_dump') else item for item in validated_obj]
+                    evidence_chunk_ids = []
+                    for item in data:
+                        if isinstance(item, dict):
+                            evidence_chunk_ids.extend(item.get("evidence_chunk_ids", []))
+                
+                validation_passed = True
+                validation_ms = int((time.time() - validation_start) * 1000)
+                
+                logger.info(
+                    f"[ExtractionEngine] SCHEMA_VALIDATION_PASSED project_id={project_id} "
+                    f"schema={spec.schema_model.__name__} ms={validation_ms}"
+                )
+                
+            except Exception as validation_error:
+                validation_ms = int((time.time() - validation_start) * 1000)
+                validation_error_msg = str(validation_error)
+                
+                logger.warning(
+                    f"[ExtractionEngine] SCHEMA_VALIDATION_FAILED project_id={project_id} "
+                    f"schema={spec.schema_model.__name__} ms={validation_ms} error={validation_error_msg[:200]}"
+                )
+                
+                # Schema验证失败，使用原始数据
+                if isinstance(obj, dict):
+                    data = obj.get("data") or obj
+                    evidence_chunk_ids = obj.get("evidence_chunk_ids") or []
+                elif isinstance(obj, list):
+                    data = obj
+                    evidence_chunk_ids = []
+                    for item in obj:
+                        if isinstance(item, dict):
+                            evidence_chunk_ids.extend(item.get("evidence_chunk_ids", []))
+                else:
+                    data = obj
+                    evidence_chunk_ids = []
+        else:
+            # 没有提供schema_model，使用原始逻辑
+            validation_ms = 0
+            logger.info(f"[ExtractionEngine] NO_SCHEMA_VALIDATION project_id={project_id}")
+            
+            # 7. 提取数据和证据（原始逻辑）
+            # 处理两种格式：dict（project-info）或 list（risks）
+            if isinstance(obj, dict):
+                data = obj.get("data") or obj
+                evidence_chunk_ids = obj.get("evidence_chunk_ids") or []
+                logger.info(
+                    f"[ExtractionEngine] EXTRACT_DATA project_id={project_id} "
+                    f"obj_has_data_key={'data' in obj} "
+                    f"data_type={type(data).__name__} "
+                    f"data_keys={list(data.keys()) if isinstance(data, dict) else 'NOT_DICT'} "
+                    f"data_len={len(data) if data else 0}"
+                )
+            elif isinstance(obj, list):
+                # risks等返回list，每个元素可能有自己的evidence_chunk_ids
+                data = obj
+                # 收集所有evidence_chunk_ids
+                evidence_chunk_ids = []
+                for item in obj:
+                    if isinstance(item, dict):
+                        item_evidence = item.get("evidence_chunk_ids") or []
+                        evidence_chunk_ids.extend(item_evidence)
+            else:
+                logger.warning(f"ExtractionEngine: unexpected obj type {type(obj)}")
+                data = obj
+                evidence_chunk_ids = []
+        
+        # 8. 生成 evidence_spans
         evidence_spans = self._generate_evidence_spans(all_chunks, evidence_chunk_ids)
         
-        # 8. 构建追踪信息
+        # 9. 构建追踪信息
         trace = self._build_trace(query_trace, spec, len(all_chunks), trace_enabled)
         
-        logger.info(f"[ExtractionEngine] AFTER_PARSE project_id={project_id} run_id={run_id} ms={parse_ms} evidence_count={len(evidence_chunk_ids)}")
+        logger.info(
+            f"[ExtractionEngine] AFTER_PARSE project_id={project_id} run_id={run_id} "
+            f"parse_ms={parse_ms} validation_ms={validation_ms} validation_passed={validation_passed} "
+            f"evidence_count={len(evidence_chunk_ids)}"
+        )
         
         overall_ms = int((time.time() - overall_start) * 1000)
         logger.info(

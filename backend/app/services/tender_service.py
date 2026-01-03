@@ -4321,7 +4321,7 @@ class TenderService:
                             title=title,
                             level=level,
                             project_context=project_context,
-            model_id=model_id,
+                            model_id=model_id,
                         )
                         
                         # 提取内容和证据
@@ -4387,7 +4387,7 @@ class TenderService:
                         message=f"生成完成！成功 {success_count} 个章节",
                         result_json=result_json,
                     )
-        else:
+                else:
                     self.dao.update_run(
                         run_id,
                         "partial",

@@ -48,6 +48,42 @@ class ContactInfo(BaseModel):
         return self.model_dump(exclude_none=True)
 
 
+class EvaluationCriterion(BaseModel):
+    """评审标准/评分细则"""
+    criterion: str = Field(..., min_length=1, description="评审项名称（如'技术创新'）")
+    score: Optional[float] = Field(None, description="分值")
+    description: Optional[str] = Field(None, description="评分细则说明")
+    evidence_chunk_ids: List[str] = Field(default_factory=list, description="证据chunk IDs")
+
+    def to_dict_exclude_none(self) -> Dict[str, Any]:
+        return self.model_dump(exclude_none=True)
+
+
+class FieldDefinition(BaseModel):
+    """申报书字段定义"""
+    field_name: str = Field(..., min_length=1, description="字段名称（如'enterprise_name'）")
+    field_label: str = Field(..., min_length=1, description="字段标签（如'企业全称'）")
+    is_required: bool = Field(True, description="是否必填")
+    field_type: Optional[str] = Field(None, description="字段类型（text/number/date/file等）")
+    constraints: Optional[str] = Field(None, description="填写要求或约束说明")
+    max_length: Optional[int] = Field(None, description="最大长度")
+    evidence_chunk_ids: List[str] = Field(default_factory=list, description="证据chunk IDs")
+
+    def to_dict_exclude_none(self) -> Dict[str, Any]:
+        return self.model_dump(exclude_none=True)
+
+
+class SpecialRequirement(BaseModel):
+    """特殊要求/注意事项"""
+    requirement: str = Field(..., min_length=1, description="特殊要求内容")
+    category: Optional[str] = Field(None, description="要求分类（禁止事项/注意事项等）")
+    severity: Optional[str] = Field(None, description="严重程度（必须/建议/禁止）")
+    evidence_chunk_ids: List[str] = Field(default_factory=list, description="证据chunk IDs")
+
+    def to_dict_exclude_none(self) -> Dict[str, Any]:
+        return self.model_dump(exclude_none=True)
+
+
 class RequirementsDataV2(BaseModel):
     """申报要求数据"""
     eligibility_conditions: List[EligibilityCondition] = Field(
@@ -56,6 +92,15 @@ class RequirementsDataV2(BaseModel):
     materials_required: List[MaterialRequired] = Field(default_factory=list, description="材料清单")
     deadlines: List[Deadline] = Field(default_factory=list, description="时间节点")
     contact_info: List[ContactInfo] = Field(default_factory=list, description="咨询方式")
+    evaluation_criteria: List[EvaluationCriterion] = Field(
+        default_factory=list, description="评审标准/评分细则"
+    )
+    field_definitions: List[FieldDefinition] = Field(
+        default_factory=list, description="申报书字段定义"
+    )
+    special_requirements: List[SpecialRequirement] = Field(
+        default_factory=list, description="特殊要求/注意事项"
+    )
     summary: Optional[str] = Field(None, description="申报要求摘要")
 
     def to_dict_exclude_none(self) -> Dict[str, Any]:
@@ -86,6 +131,15 @@ class RequirementsResultV2(BaseModel):
             for ci in data.get("contact_info", []):
                 if isinstance(ci, dict):
                     all_ids.update(ci.get("evidence_chunk_ids", []))
+            for ec in data.get("evaluation_criteria", []):
+                if isinstance(ec, dict):
+                    all_ids.update(ec.get("evidence_chunk_ids", []))
+            for fd in data.get("field_definitions", []):
+                if isinstance(fd, dict):
+                    all_ids.update(fd.get("evidence_chunk_ids", []))
+            for sr in data.get("special_requirements", []):
+                if isinstance(sr, dict):
+                    all_ids.update(sr.get("evidence_chunk_ids", []))
             values["evidence_chunk_ids"] = sorted(list(all_ids))
         return values
 
