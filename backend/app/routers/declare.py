@@ -375,34 +375,6 @@ def get_all_directory_versions(project_id: str, user=Depends(get_current_user_sy
 
 # ==================== Sections ====================
 
-@router.post("/projects/{project_id}/sections/autofill", response_model=RunOut)
-def autofill_sections(
-    project_id: str,
-    bg: BackgroundTasks,
-    req: Request,
-    sync: int = 0,
-    model_id: Optional[str] = None,
-    user=Depends(get_current_user_sync),
-):
-    """自动填充章节"""
-    dao = _get_dao()
-    service = _get_service(req)
-    
-    # 创建 run
-    run_id = dao.create_run(project_id, "sections")
-    
-    if sync == 1:
-        # 同步执行
-        service.autofill_sections(project_id, model_id, run_id)
-        run = dao.get_run(run_id)
-        return run
-    else:
-        # 异步执行
-        bg.add_task(service.autofill_sections, project_id, model_id, run_id)
-        run = dao.get_run(run_id)
-        return run
-
-
 @router.get("/projects/{project_id}/sections")
 def get_sections(
     project_id: str,

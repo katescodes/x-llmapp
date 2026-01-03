@@ -12,7 +12,6 @@ from app.platform.retrieval.facade import RetrievalFacade
 from app.services.embedding_provider_store import get_embedding_store
 from app.works.declare.extraction_specs.requirements_v2 import build_requirements_spec
 from app.works.declare.extraction_specs.directory_v2 import build_directory_spec
-from app.works.declare.extraction_specs.section_autofill_v2 import build_section_autofill_spec
 
 logger = logging.getLogger(__name__)
 
