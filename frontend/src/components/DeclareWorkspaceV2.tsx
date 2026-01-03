@@ -210,6 +210,8 @@ export default function DeclareWorkspaceV2() {
   const [step2Tab, setStep2Tab] = useState<Step2Tab>('requirements');
   const [requirements, setRequirements] = useState<DeclareRequirements | null>(null);
   const [directoryByNotice, setDirectoryByNotice] = useState<Record<string, DeclareDirectoryNode[]>>({});
+  const [directoryVersions, setDirectoryVersions] = useState<any[]>([]);  // 所有项目类型的目录版本
+  const [selectedProjectType, setSelectedProjectType] = useState<string | null>(null);  // 当前选择的项目类型
   const [extracting, setExtracting] = useState(false);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [selectedNoticeId, setSelectedNoticeId] = useState<string | null>(null);
@@ -446,13 +448,18 @@ export default function DeclareWorkspaceV2() {
         setRequirements(req);
       }
       
-      // 加载目录
-      const nodes = await declareApi.getDirectoryNodes(project.project_id);
-      if (nodes && nodes.length > 0) {
-        setDirectoryByNotice({ default: nodes });
+      // 加载所有项目类型的目录
+      const versions = await declareApi.getAllDirectoryVersions(project.project_id);
+      setDirectoryVersions(versions);
+      
+      if (versions && versions.length > 0) {
+        // 设置默认选中第一个项目类型
+        const firstVersion = versions[0];
+        setSelectedProjectType(firstVersion.project_type);
+        setDirectoryByNotice({ [firstVersion.project_type]: firstVersion.nodes });
         
         // 展开一级节点
-        const level1Ids = nodes.filter((n: any) => n.level === 1).map((n: any) => n.id);
+        const level1Ids = firstVersion.nodes.filter((n: any) => n.level === 1).map((n: any) => n.id);
         setExpandedNodes(new Set(level1Ids));
       }
       
@@ -587,12 +594,20 @@ export default function DeclareWorkspaceV2() {
             console.log('[DeclareWorkspace] 申报目录状态:', dirRun.status);
             
             if (dirRun.status === 'success') {
-              const nodes = await declareApi.getDirectoryNodes(currentProject.project_id);
-              setDirectoryByNotice({ default: nodes });
+              // 加载所有项目类型的目录
+              const versions = await declareApi.getAllDirectoryVersions(currentProject.project_id);
+              setDirectoryVersions(versions);
               
-              // 展开一级节点
-              const level1Ids = nodes.filter((n: any) => n.level === 1).map((n: any) => n.id);
-              setExpandedNodes(new Set(level1Ids));
+              if (versions && versions.length > 0) {
+                // 设置默认选中第一个项目类型
+                const firstVersion = versions[0];
+                setSelectedProjectType(firstVersion.project_type);
+                setDirectoryByNotice({ [firstVersion.project_type]: firstVersion.nodes });
+                
+                // 展开一级节点
+                const level1Ids = firstVersion.nodes.filter((n: any) => n.level === 1).map((n: any) => n.id);
+                setExpandedNodes(new Set(level1Ids));
+              }
               
               dirDone = true;
               dirSuccess = true;
@@ -1589,16 +1604,59 @@ export default function DeclareWorkspaceV2() {
 
                       {step2Tab === 'directory' && (
                         <div>
-                          {directoryByNotice['default'] && directoryByNotice['default'].length > 0 ? (
-                            <div
-                              style={{
-                                background: 'rgba(30, 41, 59, 0.6)',
-                                border: '1px solid rgba(148, 163, 184, 0.25)',
-                                borderRadius: '12px',
-                                overflow: 'hidden',
-                              }}
-                            >
-                              {renderDirectoryTree(buildTree(directoryByNotice['default']))}
+                          {directoryVersions && directoryVersions.length > 0 ? (
+                            <div>
+                              {/* 项目类型选择器 */}
+                              {directoryVersions.length > 1 && (
+                                <div style={{
+                                  marginBottom: '16px',
+                                  padding: '12px 16px',
+                                  background: 'rgba(59, 130, 246, 0.1)',
+                                  border: '1px solid rgba(59, 130, 246, 0.3)',
+                                  borderRadius: '8px',
+                                }}>
+                                  <label style={{ display: 'flex', alignItems: 'center', gap: '12px', color: '#e2e8f0', fontSize: '14px' }}>
+                                    <span style={{ fontWeight: 600 }}>📂 选择项目类型：</span>
+                                    <select
+                                      value={selectedProjectType || ''}
+                                      onChange={(e) => setSelectedProjectType(e.target.value)}
+                                      style={{
+                                        flex: 1,
+                                        padding: '8px 12px',
+                                        background: 'rgba(30, 41, 59, 0.8)',
+                                        color: '#e2e8f0',
+                                        border: '1px solid rgba(148, 163, 184, 0.3)',
+                                        borderRadius: '6px',
+                                        fontSize: '14px',
+                                        cursor: 'pointer',
+                                      }}
+                                    >
+                                      {directoryVersions.map((v: any) => (
+                                        <option key={v.version_id} value={v.project_type}>
+                                          {v.project_type}
+                                          {v.project_description ? ` - ${v.project_description}` : ''}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                </div>
+                              )}
+                              
+                              {/* 显示选中项目类型的目录 */}
+                              {selectedProjectType && directoryVersions.find((v: any) => v.project_type === selectedProjectType) && (
+                                <div
+                                  style={{
+                                    background: 'rgba(30, 41, 59, 0.6)',
+                                    border: '1px solid rgba(148, 163, 184, 0.25)',
+                                    borderRadius: '12px',
+                                    overflow: 'hidden',
+                                  }}
+                                >
+                                  {renderDirectoryTree(buildTree(
+                                    directoryVersions.find((v: any) => v.project_type === selectedProjectType)?.nodes || []
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <div style={{
@@ -1628,18 +1686,68 @@ export default function DeclareWorkspaceV2() {
                     overflow: 'hidden'
                   }}>
                     <h3 style={{ marginBottom: '20px', color: '#e2e8f0', flexShrink: 0 }}>🤖 AI生成申报书内容</h3>
-                    {directoryByNotice['default'] && directoryByNotice['default'].length > 0 ? (
+                    
+                    {directoryVersions && directoryVersions.length > 0 ? (
                       <div style={{ 
                         flex: 1,
-                        position: 'relative',
-                        overflow: 'hidden'
+                        display: 'flex',
+                        flexDirection: 'column',
+                        overflow: 'hidden',
+                        gap: '16px'
                       }}>
-                        <DocumentComponentManagement
-                          embedded={true}
-                          initialDirectory={directoryByNotice['default']}
-                          projectId={currentProject?.project_id}
-                          moduleType="declare"
-                        />
+                        {/* 项目类型选择器 */}
+                        {directoryVersions.length > 1 && (
+                          <div style={{
+                            flexShrink: 0,
+                            padding: '12px 16px',
+                            background: 'rgba(59, 130, 246, 0.1)',
+                            border: '1px solid rgba(59, 130, 246, 0.3)',
+                            borderRadius: '8px',
+                          }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '12px', color: '#e2e8f0', fontSize: '14px' }}>
+                              <span style={{ fontWeight: 600 }}>📂 选择项目类型：</span>
+                              <select
+                                value={selectedProjectType || ''}
+                                onChange={(e) => setSelectedProjectType(e.target.value)}
+                                style={{
+                                  flex: 1,
+                                  padding: '8px 12px',
+                                  background: 'rgba(30, 41, 59, 0.8)',
+                                  color: '#e2e8f0',
+                                  border: '1px solid rgba(148, 163, 184, 0.3)',
+                                  borderRadius: '6px',
+                                  fontSize: '14px',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {directoryVersions.map((v: any) => (
+                                  <option key={v.version_id} value={v.project_type}>
+                                    {v.project_type}
+                                    {v.project_description ? ` - ${v.project_description}` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                        )}
+                        
+                        {/* 文档生成界面 */}
+                        {selectedProjectType && directoryVersions.find((v: any) => v.project_type === selectedProjectType) && (
+                          <div style={{ 
+                            flex: 1,
+                            position: 'relative',
+                            overflow: 'hidden'
+                          }}>
+                            <DocumentComponentManagement
+                              embedded={true}
+                              initialDirectory={
+                                directoryVersions.find((v: any) => v.project_type === selectedProjectType)?.nodes || []
+                              }
+                              projectId={currentProject?.project_id}
+                              moduleType="declare"
+                            />
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="kb-empty">

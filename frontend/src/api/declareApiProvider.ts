@@ -25,6 +25,7 @@ export const {
   getRequirements,
   generateDirectory,
   getDirectoryNodes,
+  getAllDirectoryVersions,
   autofillSections,
   getSections,
   generateDocument,
@@ -42,5 +43,6 @@ export type {
   DeclareRequirements,
   DeclareDirectoryNode,
   DeclareSection,
+  DirectoryVersion,
 } from './declareApi';
 

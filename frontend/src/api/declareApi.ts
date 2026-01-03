@@ -209,6 +209,23 @@ export async function getDirectoryNodes(projectId: string): Promise<DeclareDirec
 }
 
 /**
+ * 获取所有项目类型的目录版本
+ */
+export interface DirectoryVersion {
+  version_id: string;
+  project_type: string;
+  project_description?: string;
+  is_active: boolean;
+  created_at?: string;
+  nodes: DeclareDirectoryNode[];
+}
+
+export async function getAllDirectoryVersions(projectId: string): Promise<DirectoryVersion[]> {
+  const result = await api.get(`/api/apps/declare/projects/${projectId}/directory/all-versions`);
+  return result?.versions || [];
+}
+
+/**
  * 自动填充章节
  */
 export async function autofillSections(

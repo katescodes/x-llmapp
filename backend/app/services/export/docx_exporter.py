@@ -1385,38 +1385,38 @@ async def render_directory_tree_to_docx(
                     generated_text = "【内容生成失败】"
             else:
                 # 串行生成（原有逻辑）
-                try:
-                    logger.info(f"自动生成内容: title={node.title}, level={node.level}")
-                    generated_text = await generate_section_text_by_title(
-                        title=node.title,
-                        level=node.level,
-                        project_context=project_context,
-                        cfg=auto_write_cfg,
-                        cache=content_cache,
-                        model_id=model_id,
-                    )
+            try:
+                logger.info(f"自动生成内容: title={node.title}, level={node.level}")
+                generated_text = await generate_section_text_by_title(
+                    title=node.title,
+                    level=node.level,
+                    project_context=project_context,
+                    cfg=auto_write_cfg,
+                    cache=content_cache,
+                    model_id=model_id,
+                )
                 except Exception as e:
                     logger.error(f"自动生成内容失败: title={node.title}, error={e}", exc_info=True)
                     generated_text = f"【自动生成内容失败：{str(e)}】"
-            
-            # 将生成的文本按空行分段，写入多个段落
-            # 这样保持了 docx 的段落结构，更美观
-            paragraphs = [
-                p.strip() 
-                for p in re.split(r"\n{2,}|\r\n{2,}", generated_text) 
-                if p.strip()
-            ]
-            
-            for para in paragraphs:
-                if normal_style_name:
-                    try:
-                        doc.add_paragraph(para, style=normal_style_name)
-                    except Exception as e:
-                        logger.warning(f"样式 {normal_style_name} 不存在，使用默认段落: {e}")
+                
+                # 将生成的文本按空行分段，写入多个段落
+                # 这样保持了 docx 的段落结构，更美观
+                paragraphs = [
+                    p.strip() 
+                    for p in re.split(r"\n{2,}|\r\n{2,}", generated_text) 
+                    if p.strip()
+                ]
+                
+                for para in paragraphs:
+                    if normal_style_name:
+                        try:
+                            doc.add_paragraph(para, style=normal_style_name)
+                        except Exception as e:
+                            logger.warning(f"样式 {normal_style_name} 不存在，使用默认段落: {e}")
+                            doc.add_paragraph(para)
+                    else:
                         doc.add_paragraph(para)
-                else:
-                    doc.add_paragraph(para)
-            
+                
             logger.info(f"添加生成内容: {len(paragraphs)} 个段落, 总字符数 {len(generated_text)}")
         
         # 否则，添加原有内容（如果有的话）

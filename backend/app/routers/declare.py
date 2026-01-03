@@ -12,6 +12,7 @@ from app.utils.auth import get_current_user_sync, get_current_user
 from app.services.db.postgres import _get_pool
 from app.services.dao.declare_dao import DeclareDAO
 from app.services.declare_service import DeclareService
+from app.works.declare.extract_v2_service import DeclareExtractV2Service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/apps/declare", tags=["declare"])
@@ -320,10 +321,56 @@ def generate_directory(
 
 @router.get("/projects/{project_id}/directory/nodes")
 def get_directory_nodes(project_id: str, user=Depends(get_current_user_sync)):
-    """获取目录节点"""
+    """获取目录节点（活跃版本）"""
     dao = _get_dao()
     nodes = dao.get_active_directory_nodes(project_id)
     return {"nodes": nodes}
+
+
+@router.get("/projects/{project_id}/directory/all-versions")
+def get_all_directory_versions(project_id: str, user=Depends(get_current_user_sync)):
+    """
+    获取所有项目类型的目录版本
+    返回格式：
+    {
+        "versions": [
+            {
+                "version_id": "...",
+                "project_type": "头雁型",
+                "project_description": "...",
+                "is_active": true,
+                "nodes": [...]
+            },
+            ...
+        ]
+    }
+    """
+    dao = _get_dao()
+    versions = dao.get_all_directory_versions(project_id)
+    
+    # 为每个版本加载对应的nodes
+    result = []
+    for version in versions:
+        nodes = dao.get_directory_nodes_by_version(version["version_id"])
+        
+        # 处理created_at字段（可能是datetime对象或字符串）
+        created_at = version.get("created_at")
+        if created_at:
+            if hasattr(created_at, 'isoformat'):
+                created_at = created_at.isoformat()
+            else:
+                created_at = str(created_at)
+        
+        result.append({
+            "version_id": version["version_id"],
+            "project_type": version["project_type"],
+            "project_description": version.get("project_description"),
+            "is_active": version["is_active"],
+            "created_at": created_at,
+            "nodes": nodes
+        })
+    
+    return {"versions": result}
 
 
 # ==================== Sections ====================
@@ -389,33 +436,42 @@ async def generate_section_content(
     request_data = GenerateSectionRequest(**body)
     
     dao = _get_dao()
-    service = _get_service(req)
+    pool = _get_pool()
+    llm = _get_llm(req)
     
     # 获取申报要求（用于生成上下文）
-    requirements = dao.get_active_requirements(project_id)
+    requirements = dao.get_requirements(project_id)
     requirements_summary = ""
     if requirements:
-        req_data = requirements[0].get("data_json", {})
+        req_data = requirements.get("data_json", {})
         requirements_summary = req_data.get("summary", "") if isinstance(req_data, dict) else ""
     
     # 如果有用户自定义要求，添加到上下文
     if request_data.requirements:
         requirements_summary += f"\n\n【用户要求】\n{request_data.requirements}"
     
-    # 调用extract_v2的autofill_section方法生成内容
-    extract_v2 = service._get_extract_v2_service()
+    # 创建extract_v2实例并生成内容
+    extract_v2 = DeclareExtractV2Service(pool, llm)
     model_id = None  # 使用默认模型
     
-    result = await extract_v2.autofill_section(
+    result = await extract_v2.autofill_section_unified(
         project_id=project_id,
         model_id=model_id,
         node_title=request_data.title,
+        node_level=request_data.level,  # 使用前端传来的level
         requirements_summary=requirements_summary,
         run_id=None,
     )
     
     # 返回生成的内容
-    content = result.get("result", {}).get("content", "")
+    # autofill_section 返回格式: {"data": {"content_md": "..."}, "evidence_chunk_ids": [...], ...}
+    data = result.get("data", {})
+    if isinstance(data, dict):
+        content = data.get("content_md", "")
+    else:
+        content = ""
+    
+    logger.info(f"[sections/generate] 返回内容长度: {len(content)}")
     
     return {"content": content}
 

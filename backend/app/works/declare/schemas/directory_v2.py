@@ -19,12 +19,30 @@ class DirectoryNodeV2(BaseModel):
         return self.model_dump(exclude_none=True)
 
 
-class DirectoryDataV2(BaseModel):
-    """目录数据"""
-    nodes: List[DirectoryNodeV2] = Field(..., min_items=1, description="目录节点列表")
+class ProjectDirectoryV2(BaseModel):
+    """单个项目的目录"""
+    project_type: str = Field(..., min_length=1, description="项目类型名称（如：头雁型、链主型、未来工厂等）")
+    project_description: Optional[str] = Field(None, description="项目类型简要说明")
+    nodes: List[DirectoryNodeV2] = Field(..., min_items=1, description="该项目的目录节点列表")
 
     def to_dict_exclude_none(self) -> Dict[str, Any]:
         return self.model_dump(exclude_none=True)
+
+
+class DirectoryDataV2(BaseModel):
+    """目录数据（支持多项目）"""
+    projects: List[ProjectDirectoryV2] = Field(..., min_items=1, description="申报项目列表")
+
+    def to_dict_exclude_none(self) -> Dict[str, Any]:
+        return self.model_dump(exclude_none=True)
+    
+    # 兼容性：如果只有一个项目，提供直接访问 nodes 的属性
+    @property
+    def nodes(self) -> List[DirectoryNodeV2]:
+        """兼容性属性：返回第一个项目的nodes"""
+        if self.projects:
+            return self.projects[0].nodes
+        return []
 
 
 class DirectoryResultV2(BaseModel):
@@ -34,14 +52,25 @@ class DirectoryResultV2(BaseModel):
 
     @root_validator(pre=True)
     def collect_all_evidence_chunk_ids(cls, values):
-        """自动收集所有节点的 evidence_chunk_ids 到顶层"""
+        """自动收集所有节点的 evidence_chunk_ids 到顶层（支持多项目结构）"""
         data = values.get("data")
-        if data and isinstance(data, dict) and "nodes" in data:
-            all_ids = set()
-            for node in data["nodes"]:
-                if isinstance(node, dict) and "evidence_chunk_ids" in node:
-                    all_ids.update(node["evidence_chunk_ids"])
-            values["evidence_chunk_ids"] = sorted(list(all_ids))
+        all_ids = set()
+        
+        if data and isinstance(data, dict):
+            # 新格式：支持多项目
+            if "projects" in data:
+                for project in data["projects"]:
+                    if isinstance(project, dict) and "nodes" in project:
+                        for node in project["nodes"]:
+                            if isinstance(node, dict) and "evidence_chunk_ids" in node:
+                                all_ids.update(node["evidence_chunk_ids"])
+            # 旧格式兼容：单项目
+            elif "nodes" in data:
+                for node in data["nodes"]:
+                    if isinstance(node, dict) and "evidence_chunk_ids" in node:
+                        all_ids.update(node["evidence_chunk_ids"])
+        
+        values["evidence_chunk_ids"] = sorted(list(all_ids))
         return values
 
     def to_dict_exclude_none(self) -> Dict[str, Any]:

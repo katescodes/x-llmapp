@@ -39,7 +39,7 @@
 ```python
 from app.services.generation import DocumentRetriever, RetrievalContext
 
-retriever = DocumentRetriever(ingest_service)
+retriever = DocumentRetriever(pool)
 context = RetrievalContext(
     kb_id="kb_123",
     section_title="公司简介",
@@ -135,7 +135,7 @@ async def generate_section(project_id: str, section_title: str):
     """完整的章节生成流程"""
     
     # 1. 检索相关文档
-    retriever = DocumentRetriever(IngestV2Service(get_pool()))
+    retriever = DocumentRetriever(get_pool())
     retrieval_context = RetrievalContext(
         kb_id="kb_123",
         section_title=section_title,

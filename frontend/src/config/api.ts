@@ -18,6 +18,7 @@ function getToken(): string {
 
 interface RequestOptions extends RequestInit {
   skipAuth?: boolean;
+  timeout?: number; // 超时时间（毫秒），默认5分钟
 }
 
 async function request(path: string, options: RequestOptions = {}): Promise<any> {
@@ -38,46 +39,66 @@ async function request(path: string, options: RequestOptions = {}): Promise<any>
   // 确保路径以 / 开头
   const url = path.startsWith('/') ? path : `/${path}`;
   
-  const res = await fetch(`${API_BASE_URL}${url}`, { 
-    ...options, 
-    headers 
-  });
-
-  // 统一处理认证错误
-  if (res.status === 401) {
-    // 可选：清除 token 并跳转登录
-    localStorage.removeItem('auth_token');
-    throw new Error('未授权，请重新登录');
-  }
+  // 设置超时（默认5分钟，AI生成需要较长时间）
+  const timeout = options.timeout || 300000; // 5分钟
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
   
-  if (res.status === 403) {
-    throw new Error('权限不足');
-  }
+  try {
+    const res = await fetch(`${API_BASE_URL}${url}`, { 
+      ...options, 
+      headers,
+      signal: controller.signal
+    });
+    
+    clearTimeout(timeoutId);
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status}: ${text}`);
-  }
+    // 统一处理认证错误
+    if (res.status === 401) {
+      // 可选：清除 token 并跳转登录
+      localStorage.removeItem('auth_token');
+      throw new Error('未授权，请重新登录');
+    }
+    
+    if (res.status === 403) {
+      throw new Error('权限不足');
+    }
 
-  // 204 No Content - 不尝试解析响应体
-  if (res.status === 204) {
-    return null;
-  }
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`${res.status}: ${text}`);
+    }
 
-  // 根据 Content-Type 返回不同格式
-  const contentType = res.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    return res.json();
+    // 204 No Content - 不尝试解析响应体
+    if (res.status === 204) {
+      return null;
+    }
+
+    // 根据 Content-Type 返回不同格式
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      return res.json();
+    }
+    if (
+        contentType.includes('application/octet-stream') ||
+        contentType.includes('application/vnd.openxmlformats') ||
+        contentType.includes('application/pdf') ||
+        contentType.startsWith('image/')
+    ) {
+      return res.blob();
+    }
+    return res.text();
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    
+    // 处理超时错误
+    if (error.name === 'AbortError') {
+      throw new Error(`请求超时（${timeout / 1000}秒），请稍后重试`);
+    }
+    
+    // 重新抛出其他错误
+    throw error;
   }
-  if (
-      contentType.includes('application/octet-stream') ||
-      contentType.includes('application/vnd.openxmlformats') ||
-      contentType.includes('application/pdf') ||
-      contentType.startsWith('image/')
-  ) {
-    return res.blob();
-  }
-  return res.text();
 }
 
 // 导出便捷方法

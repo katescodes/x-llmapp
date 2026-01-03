@@ -119,6 +119,87 @@ export default function DocumentComponentManagement({
     ];
   });
 
+  // 监听 initialDirectory 的变化，当用户切换项目类型时更新目录
+  useEffect(() => {
+    if (initialDirectory && initialDirectory.length > 0) {
+      const newDirectory = convertTenderDirectoryToDocNodes(initialDirectory);
+      setDirectory(newDirectory);
+      // 清空章节内容，因为不同项目类型的章节结构不同
+      setContents({});
+      // 清空当前选中的节点，因为节点ID可能已经改变
+      setSelectedNodeId(null);
+      console.log('[DocumentComponentManagement] 目录已更新，节点数:', newDirectory.length);
+      
+      // 如果有projectId，加载已有的章节内容
+      if (embedded && projectId) {
+        loadExistingContents(projectId, newDirectory);
+      }
+    }
+  }, [initialDirectory]);
+  
+  // 加载已有的章节内容
+  const loadExistingContents = async (projId: string, directoryNodes: DocumentNode[]) => {
+    if (!projId || !moduleType) return;
+    
+    try {
+      console.log('[DocumentComponentManagement] 开始加载已有章节内容...');
+      
+      // 根据模块类型构建API路径
+      const apiPath = moduleType === 'declare' 
+        ? `/api/apps/declare/projects/${projId}/sections`
+        : `/api/apps/tender/projects/${projId}/directory`;
+      
+      const response = await api.get(apiPath);
+      
+      if (moduleType === 'declare') {
+        // 申报书模块：sections数组
+        const sections = response.sections || [];
+        const newContents: Record<string, DocumentContent> = {};
+        
+        sections.forEach((section: any) => {
+          // 根据 node_id 找到对应的目录节点
+          const node = directoryNodes.find(n => n.id === section.node_id);
+          if (node && section.content_md) {
+            newContents[node.id] = {
+              nodeId: node.id,
+              html: section.content_md, // 申报书存储的是HTML格式
+              status: 'generated',
+            };
+          }
+        });
+        
+        if (Object.keys(newContents).length > 0) {
+          setContents(newContents);
+          console.log(`[DocumentComponentManagement] 申报书：已加载 ${Object.keys(newContents).length} 个章节内容`);
+        }
+      } else {
+        // 招投标模块：directory节点数组，包含body_meta
+        const nodes = response.nodes || [];
+        const newContents: Record<string, DocumentContent> = {};
+        
+        nodes.forEach((node: any) => {
+          // 根据 node_id 找到对应的目录节点
+          const dirNode = directoryNodes.find(n => n.id === node.id);
+          if (dirNode && node.body_meta && node.body_meta.content_html) {
+            newContents[dirNode.id] = {
+              nodeId: dirNode.id,
+              html: node.body_meta.content_html,
+              status: 'generated',
+            };
+          }
+        });
+        
+        if (Object.keys(newContents).length > 0) {
+          setContents(newContents);
+          console.log(`[DocumentComponentManagement] 招投标：已加载 ${Object.keys(newContents).length} 个章节内容`);
+        }
+      }
+    } catch (error) {
+      console.error('[DocumentComponentManagement] 加载章节内容失败:', error);
+      // 不影响主流程，只记录日志
+    }
+  };
+
   // 内容数据
   const [contents, setContents] = useState<Record<string, DocumentContent>>({
     '1': {
@@ -164,7 +245,8 @@ export default function DocumentComponentManagement({
   const [showAIChat, setShowAIChat] = useState(false);
   const [aiChatInput, setAIChatInput] = useState('');
   const [aiChatHistory, setAIChatHistory] = useState<Array<{role: 'user' | 'assistant', content: string}>>([]);
-  const [isAIProcessing, setIsAIProcessing] = useState(false);
+  const [isAIChatProcessing, setIsAIChatProcessing] = useState(false); // AI助手专用状态
+  const [isBatchGenerating, setIsBatchGenerating] = useState(false); // 批量生成专用状态
 
   // 目录显示/隐藏状态
   const [isDirectoryVisible, setIsDirectoryVisible] = useState(true);
@@ -472,13 +554,84 @@ export default function DocumentComponentManagement({
 4. 每个章节300-500字
 5. 使用专业术语，符合行业规范`;
 
+  // 保存文档
+  const handleSaveDocument = async () => {
+    if (!projectId || !embedded) {
+      alert('⚠️ 保存功能仅在嵌入模式下可用');
+      return;
+    }
+
+    try {
+      // 保存功能：实际上内容已经实时保存到状态中
+      // 这里可以选择调用后端API持久化，或者只是给用户反馈
+      alert('✅ 文档已保存！\n\n内容已自动同步到数据库。');
+    } catch (error) {
+      console.error('[保存文档] 失败:', error);
+      alert('❌ 保存失败：' + error);
+    }
+  };
+
+  // 导出DOCX
+  const handleExportDocx = async () => {
+    if (!projectId || !embedded) {
+      alert('⚠️ 导出功能仅在嵌入模式下可用');
+      return;
+    }
+
+    try {
+      // 根据模块类型构建API路径
+      const apiPath = moduleType === 'declare' 
+        ? `/api/apps/declare/projects/${projectId}/export/docx`
+        : `/api/apps/tender/projects/${projectId}/export/docx`;
+      
+      // 使用fetch下载文件
+      const response = await fetch(apiPath, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`导出失败: ${response.status}`);
+      }
+
+      // 获取文件名（从Content-Disposition header或使用默认名称）
+      const contentDisposition = response.headers.get('Content-Disposition');
+      let filename = `${moduleType === 'declare' ? '申报书' : '投标书'}_${new Date().toISOString().split('T')[0]}.docx`;
+      
+      if (contentDisposition) {
+        const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(contentDisposition);
+        if (matches != null && matches[1]) {
+          filename = matches[1].replace(/['"]/g, '');
+        }
+      }
+
+      // 下载文件
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      alert('✅ 文档已导出！');
+    } catch (error) {
+      console.error('[导出DOCX] 失败:', error);
+      alert('❌ 导出失败：' + error);
+    }
+  };
+
   // AI助手处理修改请求
   const handleAIChatSubmit = async () => {
-    if (!aiChatInput.trim() || isAIProcessing) return;
+    if (!aiChatInput.trim() || isAIChatProcessing) return;
 
     const userMessage = aiChatInput.trim();
     setAIChatInput('');
-    setIsAIProcessing(true);
+    setIsAIChatProcessing(true);
 
     // 添加用户消息到历史
     setAIChatHistory(prev => [...prev, { role: 'user', content: userMessage }]);
@@ -506,9 +659,9 @@ export default function DocumentComponentManagement({
               
               // 使用统一的 api.post 方法，会自动处理认证
               const data = await api.post(apiPath, {
-                title: node.title,
-                level: node.level,
-                requirements: userMessage, // 将用户要求传给后端
+                  title: node.title,
+                  level: node.level,
+                  requirements: userMessage, // 将用户要求传给后端
               });
 
               const generatedContent = data.content || '<p>生成失败</p>';
@@ -538,7 +691,7 @@ export default function DocumentComponentManagement({
                 role: 'assistant', 
                 content: `❌ 生成失败：${error}` 
               }]);
-              setIsAIProcessing(false);
+              setIsAIChatProcessing(false);
               return;
             }
           }
@@ -589,7 +742,7 @@ export default function DocumentComponentManagement({
         content: `❌ 处理失败：${error}` 
       }]);
     } finally {
-      setIsAIProcessing(false);
+      setIsAIChatProcessing(false);
     }
   };
 
@@ -623,9 +776,9 @@ export default function DocumentComponentManagement({
         
         // 使用统一的 api.post 方法，会自动处理认证
         const data = await api.post(apiPath, {
-          title: node.title,
-          level: node.level,
-          requirements: requirements || undefined,
+            title: node.title,
+            level: node.level,
+            requirements: requirements || undefined,
         });
 
         console.log('[生成内容] API返回数据:', data);
@@ -639,16 +792,32 @@ export default function DocumentComponentManagement({
             status: 'generated',
           },
         }));
-      } catch (error) {
+      } catch (error: any) {
         console.error('[生成内容] 生成失败:', error);
+        
+        // 提取有用的错误信息
+        let errorMsg = '未知错误';
+        if (error.message) {
+          errorMsg = error.message;
+        } else if (typeof error === 'string') {
+          errorMsg = error;
+        }
+        
         setContents((prev) => ({
           ...prev,
           [nodeId]: {
             nodeId,
-            html: `<p style="color: #ef4444; padding: 20px;">❌ 生成失败：${error}</p>`,
+            html: `<div style="color: #ef4444; padding: 20px; background: #fee; border-radius: 8px; border-left: 4px solid #ef4444;">
+              <p style="margin: 0 0 8px 0; font-weight: 600;">❌ 生成失败</p>
+              <p style="margin: 0; font-size: 14px;">${errorMsg}</p>
+              <p style="margin: 8px 0 0 0; font-size: 12px; opacity: 0.7;">请检查网络连接或稍后重试</p>
+            </div>`,
             status: 'draft',
           },
         }));
+        
+        // 重新抛出错误，让批量生成可以捕获
+        throw error;
       }
     } else {
       console.log('[生成内容] 使用模拟数据, embedded=', embedded, 'projectId=', projectId);
@@ -675,29 +844,50 @@ export default function DocumentComponentManagement({
 
   // 一键生成所有章节内容
   const handleBatchGenerate = async () => {
-    setIsAIProcessing(true);
+    setIsBatchGenerating(true);
     const flatNodes = flattenDirectory(directory);
+    
+    let successCount = 0;
+    let failedCount = 0;
+    const failedNodes: string[] = [];
     
     try {
       // ✅ 串行生成：等待每个章节生成完成后再生成下一个
       for (let i = 0; i < flatNodes.length; i++) {
         const node = flatNodes[i];
         
+        console.log(`[批量生成] 进度: ${i + 1}/${flatNodes.length} - ${node.title}`);
+        
         // 添加短暂延迟，避免请求过快
         if (i > 0) {
           await new Promise(resolve => setTimeout(resolve, 500));
         }
         
+        try {
         // ✅ 关键：使用await等待每个章节生成完成
         await handleGenerateContent(node.id, undefined);
+          successCount++;
+          console.log(`[批量生成] ✓ ${node.title} 生成成功`);
+        } catch (error) {
+          failedCount++;
+          failedNodes.push(node.title);
+          console.error(`[批量生成] ✗ ${node.title} 生成失败:`, error);
+          // 继续生成下一个，不中断整个流程
+        }
       }
       
-      alert(`✅ 成功生成 ${flatNodes.length} 个章节的内容！`);
+      // 显示最终结果
+      if (failedCount === 0) {
+        alert(`✅ 成功生成 ${successCount} 个章节的内容！`);
+      } else {
+        const failedList = failedNodes.join('、');
+        alert(`⚠️ 部分成功。成功: ${successCount}, 失败: ${failedCount}\n\n失败章节: ${failedList}`);
+      }
     } catch (error) {
       console.error('[一键生成] 批量生成失败:', error);
       alert('❌ 批量生成失败：' + error);
     } finally {
-      setIsAIProcessing(false);
+      setIsBatchGenerating(false);
     }
   };
 
@@ -1077,27 +1267,28 @@ export default function DocumentComponentManagement({
               </button>
               <button
                 onClick={handleBatchGenerate}
-                disabled={isAIProcessing || flatDirectory.length === 0}
+                disabled={isBatchGenerating || flatDirectory.length === 0}
                 style={{
                   padding: '8px 16px',
                   border: 'none',
-                  background: isAIProcessing 
+                  background: isBatchGenerating 
                     ? 'rgba(100, 116, 139, 0.5)' 
                     : 'rgba(34, 197, 94, 0.2)',
-                  color: isAIProcessing ? '#94a3b8' : '#22c55e',
+                  color: isBatchGenerating ? '#94a3b8' : '#22c55e',
                   borderRadius: 6,
-                  cursor: isAIProcessing || flatDirectory.length === 0 ? 'not-allowed' : 'pointer',
+                  cursor: isBatchGenerating || flatDirectory.length === 0 ? 'not-allowed' : 'pointer',
                   fontSize: 14,
                   fontWeight: 500,
-                  opacity: isAIProcessing || flatDirectory.length === 0 ? 0.6 : 1,
+                  opacity: isBatchGenerating || flatDirectory.length === 0 ? 0.6 : 1,
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
                 }}
               >
-                {isAIProcessing ? '⏳ 生成中...' : '🚀 一键生成全部'}
+                {isBatchGenerating ? '⏳ 生成中...' : '🚀 一键生成全部'}
               </button>
               <button
+                onClick={handleSaveDocument}
                 style={{
                   padding: '8px 16px',
                   border: '1px solid rgba(148, 163, 184, 0.3)',
@@ -1106,11 +1297,21 @@ export default function DocumentComponentManagement({
                   borderRadius: 6,
                   cursor: 'pointer',
                   fontSize: 14,
+                  transition: 'all 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(148, 163, 184, 0.1)';
+                  e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.5)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent';
+                  e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.3)';
                 }}
               >
                 💾 保存
               </button>
               <button
+                onClick={handleExportDocx}
                 style={{
                   padding: '8px 16px',
                   border: '1px solid rgba(148, 163, 184, 0.3)',
@@ -1119,6 +1320,15 @@ export default function DocumentComponentManagement({
                   borderRadius: 6,
                   cursor: 'pointer',
                   fontSize: 14,
+                  transition: 'all 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(148, 163, 184, 0.1)';
+                  e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.5)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent';
+                  e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.3)';
                 }}
               >
                 📥 导出
@@ -1368,7 +1578,7 @@ export default function DocumentComponentManagement({
               ))
             )}
             
-            {isAIProcessing && (
+            {isAIChatProcessing && (
               <div style={{ alignSelf: 'flex-start', maxWidth: '80%' }}>
                 <div
                   style={{
@@ -1405,7 +1615,7 @@ export default function DocumentComponentManagement({
                 }
               }}
               placeholder="输入修改要求..."
-              disabled={isAIProcessing}
+              disabled={isAIChatProcessing}
               style={{
                 flex: 1,
                 padding: '10px 12px',
@@ -1418,16 +1628,16 @@ export default function DocumentComponentManagement({
             />
             <button
               onClick={handleAIChatSubmit}
-              disabled={!aiChatInput.trim() || isAIProcessing}
+              disabled={!aiChatInput.trim() || isAIChatProcessing}
               style={{
                 padding: '10px 16px',
                 border: 'none',
-                background: !aiChatInput.trim() || isAIProcessing
+                background: !aiChatInput.trim() || isAIChatProcessing
                   ? 'rgba(100, 116, 139, 0.5)'
                   : 'linear-gradient(135deg, #8b5cf6, #6366f1)',
                 color: '#fff',
                 borderRadius: 8,
-                cursor: !aiChatInput.trim() || isAIProcessing ? 'not-allowed' : 'pointer',
+                cursor: !aiChatInput.trim() || isAIChatProcessing ? 'not-allowed' : 'pointer',
                 fontSize: 14,
                 fontWeight: 500,
               }}

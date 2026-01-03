@@ -4019,8 +4019,8 @@ class TenderService:
                 "has_relevant": bool  # 是否有相关内容
             }
         """
-        from app.services.ingest_v2_service import IngestV2Service
-        from app.db.pool import get_pool
+        from app.platform.ingest.v2_service import IngestV2Service
+        from app.services.db.postgres import _get_pool
         
         result = {
             "chunks": [],
@@ -4044,7 +4044,7 @@ class TenderService:
             query = self._build_retrieval_query(section_title)
             
             # 从Milvus检索
-            ingest_service = IngestV2Service(get_pool())
+            ingest_service = IngestV2Service(_get_pool())
             search_results = await ingest_service.search_in_kb(
                 kb_id=kb_id,
                 query_text=query,
@@ -4161,8 +4161,8 @@ class TenderService:
             GenerationContext,
             QualityAssessor
         )
-        from app.services.ingest_v2_service import IngestV2Service
-        from app.db.pool import get_pool
+        from app.platform.ingest.v2_service import IngestV2Service
+        from app.services.db.postgres import _get_pool
         
         # Step 1: 获取项目信息
         proj = self.dao.get_project(project_id)
@@ -4182,7 +4182,7 @@ class TenderService:
             logger.warning(f"获取项目信息失败: {e}")
         
         # Step 2: 检索相关资料（使用统一组件）
-        retriever = DocumentRetriever(IngestV2Service(get_pool()))
+        retriever = DocumentRetriever(_get_pool())
         retrieval_context = RetrievalContext(
             kb_id=kb_id,
             section_title=title,
@@ -4321,7 +4321,7 @@ class TenderService:
                             title=title,
                             level=level,
                             project_context=project_context,
-                            model_id=model_id,
+            model_id=model_id,
                         )
                         
                         # 提取内容和证据
@@ -4387,7 +4387,7 @@ class TenderService:
                         message=f"生成完成！成功 {success_count} 个章节",
                         result_json=result_json,
                     )
-                else:
+        else:
                     self.dao.update_run(
                         run_id,
                         "partial",

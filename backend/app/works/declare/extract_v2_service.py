@@ -131,7 +131,7 @@ class DeclareExtractV2Service:
         run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        自动填充单个章节
+        自动填充单个章节（迁移到统一框架）
         
         Args:
             node_title: 章节标题
@@ -145,35 +145,24 @@ class DeclareExtractV2Service:
                 "retrieval_trace": {...}
             }
         """
-        logger.info(f"DeclareExtractV2: autofill_section start project_id={project_id} node_title={node_title}")
+        logger.info(f"DeclareExtractV2: autofill_section (unified) start project_id={project_id} node_title={node_title}")
         
-        embedding_provider = get_embedding_store().get_default()
-        if not embedding_provider:
-            raise ValueError("No embedding provider configured")
-        
-        spec = build_section_autofill_spec(node_title, requirements_summary)
-        
-        result = await self.engine.run(
-            spec=spec,
-            retriever=self.retriever,
-            llm=self.llm,
+        # 委托给统一框架的实现（默认level=3，可根据需要调整）
+        result = await self.autofill_section_unified(
             project_id=project_id,
             model_id=model_id,
+            node_title=node_title,
+            node_level=3,  # 默认层级
+            requirements_summary=requirements_summary,
             run_id=run_id,
-            embedding_provider=embedding_provider,
         )
         
-        logger.info(
-            f"DeclareExtractV2: autofill_section done "
-            f"content_length={len(result.data.get('content_md', '')) if isinstance(result.data, dict) else 0} "
-            f"evidence={len(result.evidence_chunk_ids)}"
-        )
-        
+        # 转换返回格式以保持向后兼容
         return {
-            "data": result.data,
-            "evidence_chunk_ids": result.evidence_chunk_ids,
-            "evidence_spans": result.evidence_spans,
-            "retrieval_trace": result.retrieval_trace.__dict__ if result.retrieval_trace else {}
+            "data": result["data"],
+            "evidence_chunk_ids": result.get("evidence_chunk_ids", []),
+            "evidence_spans": [],  # 统一框架不使用evidence_spans
+            "retrieval_trace": result.get("retrieval_trace", {})
         }
     
     async def autofill_section_unified(
@@ -212,7 +201,6 @@ class DeclareExtractV2Service:
             GenerationContext,
             QualityAssessor
         )
-        from app.services.ingest_v2_service import IngestV2Service
         from app.services.dao.declare_dao import DeclareDAO
         
         logger.info(f"DeclareExtractV2: autofill_section_unified start project_id={project_id} node_title={node_title}")
@@ -232,8 +220,23 @@ class DeclareExtractV2Service:
         if requirements_summary:
             requirements_dict = {"summary": requirements_summary}
         
+        # 获取节点元数据（包含notes等信息）
+        section_metadata = {}
+        try:
+            # 从活跃目录中查找该节点
+            nodes = dao.get_active_directory_nodes(project_id)
+            for node in nodes:
+                if node.get("title") == node_title and node.get("level") == node_level:
+                    meta_json = node.get("meta_json", {})
+                    if isinstance(meta_json, dict):
+                        section_metadata = meta_json
+                    break
+            logger.info(f"DeclareExtractV2: section_metadata={section_metadata}")
+        except Exception as e:
+            logger.warning(f"DeclareExtractV2: Failed to get section metadata: {e}")
+        
         # Step 2: 检索相关资料（使用统一组件）
-        retriever = DocumentRetriever(IngestV2Service(self.pool))
+        retriever = DocumentRetriever(self.pool)
         retrieval_context = RetrievalContext(
             kb_id=kb_id,
             section_title=node_title,
@@ -251,7 +254,8 @@ class DeclareExtractV2Service:
             section_level=node_level,
             project_info={},  # Declare一般不需要project_info
             requirements=requirements_dict,
-            retrieval_result=retrieval_result
+            retrieval_result=retrieval_result,
+            section_metadata=section_metadata  # 传递章节元数据（包含notes）
         )
         prompt = prompt_builder.build(prompt_context)
         

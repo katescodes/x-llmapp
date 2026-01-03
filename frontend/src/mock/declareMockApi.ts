@@ -368,3 +368,79 @@ export async function getSectionContent(nodeId: string): Promise<SectionContent 
   return mockSections[nodeId] || null;
 }
 
+// ==================== 新增：支持多项目类型的目录 ====================
+
+export async function listProjects(): Promise<any[]> {
+  await delay(300);
+  return [];
+}
+
+export async function getProject(projectId: string): Promise<any | null> {
+  await delay(200);
+  return null;
+}
+
+export async function listAssets(projectId: string): Promise<any[]> {
+  await delay(200);
+  return [];
+}
+
+export async function getRequirements(projectId: string): Promise<any | null> {
+  await delay(200);
+  return null;
+}
+
+export async function getDirectoryNodes(projectId: string): Promise<any[]> {
+  await delay(300);
+  return mockDirectoryNodes;
+}
+
+export async function getAllDirectoryVersions(projectId: string): Promise<any[]> {
+  await delay(300);
+  // 返回mock数据：包含一个默认项目类型
+  return [
+    {
+      version_id: 'mock_version_1',
+      project_type: '默认',
+      project_description: 'Mock项目类型',
+      is_active: true,
+      created_at: new Date().toISOString(),
+      nodes: mockDirectoryNodes,
+    }
+  ];
+}
+
+export async function getSections(projectId: string): Promise<any[]> {
+  await delay(200);
+  return [];
+}
+
+export async function getRun(runId: string): Promise<any> {
+  await delay(200);
+  return {
+    run_id: runId,
+    status: 'success',
+    progress: 1.0,
+    message: 'Mock run completed',
+  };
+}
+
+export async function pollDeclareRun(runId: string, interval?: number, timeout?: number): Promise<any> {
+  await delay(1000);
+  return {
+    run_id: runId,
+    status: 'success',
+    progress: 1.0,
+    message: 'Mock run completed',
+  };
+}
+
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+

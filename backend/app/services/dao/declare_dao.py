@@ -282,7 +282,12 @@ class DeclareDAO:
     # ==================== Directory (版本化) ====================
 
     def create_directory_version(
-        self, project_id: str, source: str = "notice", run_id: Optional[str] = None
+        self, 
+        project_id: str, 
+        source: str = "notice", 
+        run_id: Optional[str] = None,
+        project_type: str = "默认",
+        project_description: Optional[str] = None
     ) -> str:
         """创建目录版本"""
         version_id = _id("declare_dir_ver")
@@ -290,10 +295,11 @@ class DeclareDAO:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO declare_directory_versions (version_id, project_id, source, run_id, created_at, is_active)
-                    VALUES (%s, %s, %s, %s, NOW(), FALSE)
+                    INSERT INTO declare_directory_versions 
+                    (version_id, project_id, source, run_id, project_type, project_description, created_at, is_active)
+                    VALUES (%s, %s, %s, %s, %s, %s, NOW(), FALSE)
                     """,
-                    (version_id, project_id, source, run_id),
+                    (version_id, project_id, source, run_id, project_type, project_description),
                 )
             conn.commit()
         return version_id
@@ -308,6 +314,17 @@ class DeclareDAO:
                 cur.execute("DELETE FROM declare_directory_nodes WHERE version_id=%s", (version_id,))
                 # 批量插入
                 for node in nodes:
+                    # 构建 meta_json，包含 notes 等额外信息
+                    meta_json = node.get("meta_json", {})
+                    if isinstance(meta_json, dict):
+                        meta_json = meta_json.copy()
+                    else:
+                        meta_json = {}
+                    
+                    # 如果节点有 notes 字段，存入 meta_json
+                    if "notes" in node and node.get("notes"):
+                        meta_json["notes"] = node["notes"]
+                    
                     cur.execute(
                         """
                         INSERT INTO declare_directory_nodes (
@@ -327,7 +344,7 @@ class DeclareDAO:
                             node.get("required", node.get("is_required", True)),
                             node.get("source", "notice"),
                             json.dumps(node.get("evidence_chunk_ids", [])),
-                            json.dumps(node.get("meta_json", {})),
+                            json.dumps(meta_json),
                         ),
                     )
             conn.commit()
@@ -361,6 +378,43 @@ class DeclareDAO:
                     ORDER BY dn.order_no
                     """,
                     (project_id,),
+                )
+                return [_serialize_row(row) for row in cur.fetchall()]
+    
+    def get_all_directory_versions(self, project_id: str) -> List[Dict[str, Any]]:
+        """获取项目的所有目录版本（按项目类型分组）"""
+        with self.pool.connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT 
+                        version_id,
+                        project_id,
+                        project_type,
+                        project_description,
+                        source,
+                        is_active,
+                        created_at
+                    FROM declare_directory_versions
+                    WHERE project_id=%s
+                    ORDER BY created_at DESC, project_type
+                    """,
+                    (project_id,),
+                )
+                return [_serialize_row(row) for row in cur.fetchall()]
+    
+    def get_directory_nodes_by_version(self, version_id: str) -> List[Dict[str, Any]]:
+        """根据版本ID获取目录节点"""
+        with self.pool.connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM declare_directory_nodes
+                    WHERE version_id=%s
+                    ORDER BY order_no
+                    """,
+                    (version_id,),
                 )
                 return [_serialize_row(row) for row in cur.fetchall()]
 

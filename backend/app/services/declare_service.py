@@ -259,7 +259,7 @@ class DeclareService:
         model_id: Optional[str],
         run_id: Optional[str] = None,
     ):
-        """生成申报书目录（同步入口）"""
+        """生成申报书目录（同步入口，支持多项目类型）"""
         from app.services.db.postgres import _get_pool
         
         pool = _get_pool()
@@ -272,19 +272,62 @@ class DeclareService:
                 run_id=run_id,
             ))
             
-            # 提取 nodes
-            nodes = result.get("data", {}).get("nodes", [])
-            if not nodes:
-                raise ValueError("Directory nodes empty")
+            # 提取数据
+            data = result.get("data", {})
+            
+            # 支持新格式（多项目）和旧格式（单项目）
+            projects = data.get("projects", [])
+            if not projects:
+                # 兼容旧格式：如果没有 projects 字段，尝试提取 nodes
+                nodes = data.get("nodes", [])
+                if nodes:
+                    projects = [{
+                        "project_type": "默认",
+                        "project_description": None,
+                        "nodes": nodes
+                    }]
+            
+            if not projects:
+                raise ValueError("Directory projects empty")
+            
+            total_nodes = 0
+            version_ids = []
+            
+            # 为每个项目类型创建独立的目录版本
+            for project in projects:
+                project_type = project.get("project_type", "默认")
+                project_description = project.get("project_description")
+                nodes = project.get("nodes", [])
+                
+                if not nodes:
+                    logger.warning(f"Project type '{project_type}' has no nodes, skipping")
+                    continue
             
             # 后处理：排序 + 构建树
             nodes_sorted = sorted(nodes, key=lambda n: (n.get("level", 99), n.get("order_no", 0)))
             nodes_with_tree = self._build_directory_tree(nodes_sorted)
             
-            # 保存（版本化）
-            version_id = self.dao.create_directory_version(project_id, source="notice", run_id=run_id)
+                # 保存（版本化，关联项目类型）
+                version_id = self.dao.create_directory_version(
+                    project_id, 
+                    source="notice", 
+                    run_id=run_id,
+                    project_type=project_type,
+                    project_description=project_description
+                )
             self.dao.upsert_directory_nodes(version_id, project_id, nodes_with_tree)
-            self.dao.set_active_directory_version(project_id, version_id)
+                
+                version_ids.append(version_id)
+                total_nodes += len(nodes_with_tree)
+                
+                logger.info(
+                    f"[DeclareService] Saved directory for project_type='{project_type}' "
+                    f"nodes={len(nodes_with_tree)} version_id={version_id}"
+                )
+            
+            # 设置第一个项目类型为活跃版本（默认显示）
+            if version_ids:
+                self.dao.set_active_directory_version(project_id, version_ids[0])
             
             # 更新 run 状态
             if run_id:
@@ -292,11 +335,14 @@ class DeclareService:
                     run_id,
                     "success",
                     progress=1.0,
-                    message=f"Directory generated: {len(nodes_with_tree)} nodes",
+                    message=f"Directory generated: {len(projects)} project types, {total_nodes} nodes",
                     result_json=result,
                 )
             
-            logger.info(f"[DeclareService] generate_directory success project_id={project_id} nodes={len(nodes_with_tree)}")
+            logger.info(
+                f"[DeclareService] generate_directory success "
+                f"project_id={project_id} project_types={len(projects)} total_nodes={total_nodes}"
+            )
             
         except (ExtractionParseError, ExtractionSchemaError, ValueError) as e:
             logger.error(f"[DeclareService] generate_directory failed: {e}")
@@ -375,12 +421,12 @@ class DeclareService:
         try:
             # 使用异步方式并行生成
             result = run_async(self._autofill_sections_parallel(
-                project_id=project_id,
+                    project_id=project_id,
                 nodes=nodes,
                 version_id=version_id,
                 requirements_summary=requirements_summary,
-                model_id=model_id,
-                run_id=run_id,
+                    model_id=model_id,
+                    run_id=run_id,
                 max_concurrent=max_concurrent,
                 extract_v2=extract_v2,
             ))

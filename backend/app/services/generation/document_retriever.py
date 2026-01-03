@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
+from psycopg_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
 
@@ -66,14 +67,16 @@ class DocumentRetriever:
     4. 支持多种检索策略
     """
     
-    def __init__(self, ingest_service):
+    def __init__(self, pool: ConnectionPool):
         """
         初始化检索器
         
         Args:
-            ingest_service: IngestV2Service实例
+            pool: ConnectionPool实例
         """
-        self.ingest_service = ingest_service
+        from app.platform.retrieval.facade import RetrievalFacade
+        self.pool = pool
+        self.retrieval_facade = RetrievalFacade(pool)
     
     async def retrieve(
         self, 
@@ -99,13 +102,28 @@ class DocumentRetriever:
             # Step 2: 确定文档类型过滤
             doc_type_filters = self._get_doc_type_filters(context)
             
-            # Step 3: 从Milvus检索
-            search_results = await self.ingest_service.search_in_kb(
-                kb_id=context.kb_id,
-                query_text=query,
-                top_k=top_k,
-                filters={"doc_type": doc_type_filters} if doc_type_filters else None
+            # Step 3: 从Milvus检索（使用RetrievalFacade）
+            from app.services.embedding_provider_store import get_embedding_provider
+            embedding_provider = get_embedding_provider(self.pool)
+            
+            retrieved_chunks = await self.retrieval_facade.retrieve_from_kb(
+                query=query,
+                kb_ids=[context.kb_id],
+                kb_categories=doc_type_filters,
+                embedding_provider=embedding_provider,
+                top_k=top_k
             )
+            
+            # 转换为统一格式
+            search_results = [
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "text": chunk.text,
+                    "score": chunk.score,
+                    "metadata": chunk.metadata
+                }
+                for chunk in retrieved_chunks
+            ]
             
             # Step 4: 评估检索质量
             quality_score = self._assess_quality(search_results)

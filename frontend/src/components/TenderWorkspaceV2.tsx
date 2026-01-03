@@ -571,7 +571,7 @@ export default function TenderWorkspaceV2() {
     };
     assets.forEach(asset => {
       if (grouped[asset.kind]) {
-        grouped[asset.kind].push(asset);
+      grouped[asset.kind].push(asset);
       }
     });
     return grouped;
@@ -1464,18 +1464,18 @@ export default function TenderWorkspaceV2() {
 
         {/* 项目列表网格 */}
         {filteredProjects.length > 0 ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
             {filteredProjects.map(project => {
               const isSelected = selectedProjectIds.has(project.id);
               return (
-                <div
-                  key={project.id}
-                  style={{
-                    padding: '24px',
-                    background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.8) 100%)',
+            <div
+              key={project.id}
+              style={{
+                padding: '24px',
+                background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.8) 100%)',
                     border: isSelected ? '2px solid rgba(79, 70, 229, 0.8)' : '1px solid rgba(148, 163, 184, 0.25)',
-                    borderRadius: '12px',
-                    transition: 'all 0.3s ease',
+                borderRadius: '12px',
+                transition: 'all 0.3s ease',
                     position: 'relative',
                   }}
                 >
@@ -1513,44 +1513,44 @@ export default function TenderWorkspaceV2() {
                       setActiveTab(1);
                     }}
                     style={{ cursor: 'pointer', paddingRight: '32px' }}
-                  >
-                    <div style={{ 
-                      fontSize: '18px', 
-                      fontWeight: '600', 
-                      color: '#e2e8f0', 
-                      marginBottom: '12px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px'
-                    }}>
-                      <span style={{ fontSize: '20px' }}>📁</span>
-                      {project.name}
-                    </div>
-                    {project.description && (
-                      <div style={{ 
-                        fontSize: '14px', 
-                        color: '#94a3b8', 
-                        marginBottom: '16px',
-                        lineHeight: '1.5'
-                      }}>
-                        {project.description}
-                      </div>
-                    )}
-                    <div style={{ 
-                      fontSize: '12px', 
-                      color: '#64748b',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px'
-                    }}>
-                      <span>🕒</span>
-                      {project.created_at && new Date(project.created_at).toLocaleDateString('zh-CN', {
-                        year: 'numeric',
-                        month: '2-digit',
-                        day: '2-digit'
-                      })}
-                    </div>
-                  </div>
+            >
+              <div style={{ 
+                fontSize: '18px', 
+                fontWeight: '600', 
+                color: '#e2e8f0', 
+                marginBottom: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <span style={{ fontSize: '20px' }}>📁</span>
+                {project.name}
+              </div>
+              {project.description && (
+                <div style={{ 
+                  fontSize: '14px', 
+                  color: '#94a3b8', 
+                  marginBottom: '16px',
+                  lineHeight: '1.5'
+                }}>
+                  {project.description}
+                </div>
+              )}
+              <div style={{ 
+                fontSize: '12px', 
+                color: '#64748b',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <span>🕒</span>
+                {project.created_at && new Date(project.created_at).toLocaleDateString('zh-CN', {
+                  year: 'numeric',
+                  month: '2-digit',
+                  day: '2-digit'
+                })}
+              </div>
+            </div>
 
                   {/* 操作按钮 */}
                   <div style={{ 
@@ -1606,7 +1606,7 @@ export default function TenderWorkspaceV2() {
                     >
                       🗑️ 删除
                     </button>
-                  </div>
+        </div>
                 </div>
               );
             })}
