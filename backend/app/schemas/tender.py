@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, computed_field
 
 from .evidence import SpanRef
 
@@ -27,11 +27,18 @@ class ProjectCreateReq(BaseModel):
 
 class ProjectOut(BaseModel):
     """项目输出模型"""
-    id: str
+    project_id: str  # 统一使用project_id，与数据库字段名一致
     kb_id: str
     name: str
     description: Optional[str] = None
+    owner_id: Optional[str] = None
     created_at: Optional[datetime] = None
+    
+    # 为前端兼容性添加 id 字段（计算属性）
+    @computed_field
+    @property
+    def id(self) -> str:
+        return self.project_id
 
 
 # ==================== 运行任务相关 ====================

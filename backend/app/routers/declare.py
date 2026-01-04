@@ -456,11 +456,12 @@ async def generate_section_content(
     else:
         content = ""
     
-    logger.info(f"[sections/generate] 生成内容长度: {len(content)}, node_id={request_data.node_id}")
+    logger.info(f"[sections/generate] ✅ 生成完成: node_id={request_data.node_id}, title={request_data.title}, content_len={len(content)}")
     
     # ✅ 新增：自动保存到数据库（如果提供了node_id）
     if request_data.node_id and content:
         try:
+            logger.info(f"[sections/generate] 开始保存: node_id={request_data.node_id}")
             section_id = dao.save_section(
                 project_id=project_id,
                 node_id=request_data.node_id,
@@ -470,11 +471,16 @@ async def generate_section_content(
                 evidence_chunk_ids=result.get("evidence_chunk_ids"),
                 retrieval_trace=result.get("retrieval_trace"),
             )
-            logger.info(f"[sections/generate] 已保存到数据库: section_id={section_id}")
+            logger.info(f"[sections/generate] ✅ 已保存到数据库: section_id={section_id}, node_id={request_data.node_id}")
         except Exception as e:
-            logger.error(f"[sections/generate] 保存失败: {e}", exc_info=True)
+            logger.error(f"[sections/generate] ❌ 保存失败: node_id={request_data.node_id}, error={e}", exc_info=True)
             # 保存失败不影响返回生成的内容
+    elif not request_data.node_id:
+        logger.warning(f"[sections/generate] ⚠️ 未保存（缺少node_id）: title={request_data.title}")
+    elif not content:
+        logger.warning(f"[sections/generate] ⚠️ 未保存（内容为空）: node_id={request_data.node_id}, title={request_data.title}")
     
+    logger.info(f"[sections/generate] END: node_id={request_data.node_id}")
     return {"content": content}
 
 
@@ -743,47 +749,226 @@ async def export_docx(project_id: str, user=Depends(get_current_user_sync)):
         doc.add_heading(title, level=heading_level)
         
         # 5.2 添加正文内容
-        content = sections_dict.get(node_id, "")
+        content_html = sections_dict.get(node_id, "")
         
-        if content:
-            # 将 HTML 内容转换为纯文本（简单处理）
-            # 移除 HTML 标签
+        if content_html:
+            from bs4 import BeautifulSoup
+            from docx.shared import Inches, Pt
+            from PIL import Image
             import re
             
-            # 处理图片占位符 {image:filename}
-            def process_images(html_text):
-                # 暂时将图片占位符替换为文字说明
-                pattern = r'\{image:([^}]+)\}'
-                return re.sub(pattern, r'[图片: \1]', html_text)
+            # 第一步：处理HTML，提取文本和图片占位符
+            soup = BeautifulSoup(content_html, 'html.parser')
             
-            content = process_images(content)
+            # 提取Mermaid图表（支持两种格式）
+            mermaid_diagrams = []
             
-            # 移除 HTML 标签，保留文本
-            content = re.sub(r'<br\s*/?>', '\n', content)  # 换行符
-            content = re.sub(r'<p[^>]*>', '', content)  # 段落开始
-            content = re.sub(r'</p>', '\n', content)  # 段落结束
-            content = re.sub(r'<h[1-6][^>]*>', '\n', content)  # 标题开始
-            content = re.sub(r'</h[1-6]>', '\n', content)  # 标题结束
-            content = re.sub(r'<strong>', '', content)  # 加粗开始
-            content = re.sub(r'</strong>', '', content)  # 加粗结束
-            content = re.sub(r'<li[^>]*>', '\n• ', content)  # 列表项
-            content = re.sub(r'</li>', '', content)
-            content = re.sub(r'<ul[^>]*>', '', content)
-            content = re.sub(r'</ul>', '\n', content)
-            content = re.sub(r'<ol[^>]*>', '', content)
-            content = re.sub(r'</ol>', '\n', content)
-            content = re.sub(r'<[^>]+>', '', content)  # 移除其他标签
+            # 格式1: <div class="mermaid-diagram">
+            for mermaid_div in soup.find_all('div', class_='mermaid-diagram'):
+                mermaid_code = mermaid_div.get_text(strip=True)
+                
+                # 清理markdown代码围栏（如果存在）
+                # 格式：```mermaid\ngraph TD...\n```
+                if mermaid_code.startswith('```'):
+                    lines = mermaid_code.split('\n')
+                    # 去掉第一行的 ```mermaid 和最后一行的 ```
+                    if len(lines) >= 3:
+                        # 第一行可能是 ```mermaid 或 ```
+                        if lines[0].startswith('```'):
+                            lines = lines[1:]
+                        # 最后一行可能是 ```
+                        if lines and lines[-1].strip() == '```':
+                            lines = lines[:-1]
+                        mermaid_code = '\n'.join(lines).strip()
+                
+                mermaid_diagrams.append(mermaid_code)
+                # 替换为占位符
+                from bs4 import NavigableString
+                placeholder = NavigableString(f'{{MERMAID_{len(mermaid_diagrams)-1}}}')
+                mermaid_div.replace_with(placeholder)
             
-            # 清理多余的空行
-            content = re.sub(r'\n\s*\n', '\n\n', content)
-            content = content.strip()
+            # 格式2: <pre><code class="language-mermaid">
+            for code_tag in soup.find_all('code', class_='language-mermaid'):
+                mermaid_code = code_tag.get_text(strip=True)
+                mermaid_diagrams.append(mermaid_code)
+                # 替换整个<pre>标签为占位符
+                from bs4 import NavigableString
+                placeholder = NavigableString(f'{{MERMAID_{len(mermaid_diagrams)-1}}}')
+                # 找到父级<pre>标签并替换
+                pre_tag = code_tag.find_parent('pre')
+                if pre_tag:
+                    pre_tag.replace_with(placeholder)
+                else:
+                    code_tag.replace_with(placeholder)
             
-            # 添加段落
-            if content:
-                paragraphs = content.split('\n\n')
-                for para_text in paragraphs:
-                    if para_text.strip():
-                        doc.add_paragraph(para_text.strip())
+            # 获取纯文本
+            text_content = soup.get_text()
+            
+            # 第二步：按段落分割并处理
+            paragraphs = text_content.split('\n')
+            
+            for para_text in paragraphs:
+                para_text = para_text.strip()
+                if not para_text:
+                    continue
+                
+                # 检查是否是Mermaid占位符
+                mermaid_match = re.match(r'\{MERMAID_(\d+)\}', para_text)
+                if mermaid_match:
+                    idx = int(mermaid_match.group(1))
+                    if idx < len(mermaid_diagrams):
+                        try:
+                            # 使用Kroki.io在线服务渲染Mermaid为图片
+                            import tempfile
+                            import urllib.parse
+                            import urllib.request
+                            import zlib
+                            import base64
+                            
+                            logger.info(f"[export_docx] 开始渲染Mermaid图表 {idx}")
+                            
+                            # Kroki使用deflate+base64编码
+                            compressed = zlib.compress(mermaid_diagrams[idx].encode('utf-8'))
+                            encoded = base64.urlsafe_b64encode(compressed).decode('utf-8')
+                            
+                            # 构造Kroki URL (使用国内可访问的镜像或自建服务)
+                            kroki_url = f"https://kroki.io/mermaid/png/{encoded}"
+                            
+                            # 下载渲染后的图片
+                            logger.info(f"[export_docx] 请求Kroki渲染: {len(encoded)} bytes")
+                            
+                            # 创建临时输出文件
+                            output_png = tempfile.NamedTemporaryFile(
+                                suffix='.png', 
+                                delete=False
+                            )
+                            
+                            # 下载图片（添加超时和重试）
+                            try:
+                                req = urllib.request.Request(
+                                    kroki_url,
+                                    headers={'User-Agent': 'Mozilla/5.0'}
+                                )
+                                with urllib.request.urlopen(req, timeout=15) as response:
+                                    output_png.write(response.read())
+                                output_png.close()
+                            except Exception as e:
+                                logger.warning(f"[export_docx] Kroki下载失败: {e}")
+                                output_png.close()
+                                raise
+                            
+                            if Path(output_png.name).exists() and Path(output_png.name).stat().st_size > 0:
+                                # 成功渲染，嵌入图片
+                                img = Image.open(output_png.name)
+                                width, height = img.size
+                                
+                                # 计算显示尺寸（最大宽度6英寸）
+                                max_width_inches = 6.0
+                                width_inches = width / 96.0  # PNG通常是96 DPI
+                                display_width = min(max_width_inches, width_inches)
+                                
+                                # 添加标题
+                                doc.add_paragraph("【流程图/架构图】", style='Heading 4')
+                                
+                                # 嵌入图片
+                                pic_para = doc.add_paragraph()
+                                pic_para.alignment = 1  # 居中
+                                run = pic_para.add_run()
+                                run.add_picture(output_png.name, width=Inches(display_width))
+                                
+                                logger.info(f"[export_docx] Mermaid图表已渲染为图片: {width}x{height}px, 显示宽度: {display_width:.2f}英寸")
+                            else:
+                                # 渲染失败，fallback到代码块
+                                logger.warning(f"[export_docx] Mermaid渲染失败: 文件为空")
+                                doc.add_paragraph("【流程图/架构图】", style='Heading 4')
+                                doc.add_paragraph(mermaid_diagrams[idx], style='Normal')
+                                logger.info(f"[export_docx] Fallback: 添加Mermaid代码块")
+                            
+                            # 清理临时文件
+                            try:
+                                import os
+                                os.unlink(output_png.name)
+                            except:
+                                pass
+                                
+                        except Exception as e:
+                            logger.error(f"[export_docx] Mermaid渲染失败: {e}", exc_info=True)
+                            # Fallback: 添加代码块
+                            doc.add_paragraph("【流程图/架构图】", style='Heading 4')
+                            doc.add_paragraph(mermaid_diagrams[idx], style='Normal')
+                    continue
+                
+                # 检查是否包含图片占位符
+                image_matches = re.findall(r'\{image:([^}]+)\}', para_text)
+                if image_matches:
+                    # 分割文本和图片
+                    parts = re.split(r'(\{image:[^}]+\})', para_text)
+                    
+                    # 先添加文本部分
+                    text_parts = []
+                    for part in parts:
+                        if not part.startswith('{image:'):
+                            text_parts.append(part.strip())
+                    
+                    combined_text = ' '.join([p for p in text_parts if p])
+                    if combined_text:
+                        doc.add_paragraph(combined_text)
+                    
+                    # 然后添加图片
+                    for img_filename in image_matches:
+                        try:
+                            # 从数据库查询图片的storage_path
+                            with dao.pool.connection() as img_conn:
+                                with img_conn.cursor() as img_cur:
+                                    img_cur.execute("""
+                                        SELECT storage_path
+                                        FROM declare_assets
+                                        WHERE project_id = %s AND filename = %s AND asset_type = 'image'
+                                        LIMIT 1
+                                    """, [project_id, img_filename])
+                                    
+                                    img_row = img_cur.fetchone()
+                                    
+                                    if img_row and img_row['storage_path']:
+                                        storage_path = img_row['storage_path']
+                                        
+                                        if Path(storage_path).exists():
+                                            # 打开图片检查尺寸
+                                            img = Image.open(storage_path)
+                                            width, height = img.size
+                                            
+                                            # 计算显示尺寸（最大宽度6英寸，保持比例）
+                                            max_width_inches = 6.0
+                                            # 像素转英寸：假设72 DPI
+                                            width_inches = width / 72.0
+                                            display_width = min(max_width_inches, width_inches)
+                                            
+                                            # 添加图片
+                                            pic_para = doc.add_paragraph()
+                                            pic_para.alignment = 1  # 居中
+                                            run = pic_para.add_run()
+                                            run.add_picture(storage_path, width=Inches(display_width))
+                                            
+                                            # 添加图片说明
+                                            caption_para = doc.add_paragraph()
+                                            caption_para.alignment = 1
+                                            caption_run = caption_para.add_run(f"图：{img_filename}")
+                                            caption_run.font.size = Pt(10)
+                                            caption_run.font.italic = True
+                                            
+                                            logger.info(f"[export_docx] 嵌入用户图片: {img_filename}, 尺寸: {width}x{height}px, 显示宽度: {display_width:.2f}英寸")
+                                        else:
+                                            logger.warning(f"[export_docx] 图片文件不存在: {storage_path}")
+                                            doc.add_paragraph(f"[图片: {img_filename} - 文件不存在]")
+                                    else:
+                                        logger.warning(f"[export_docx] 数据库中未找到图片: {img_filename}")
+                                        doc.add_paragraph(f"[图片: {img_filename} - 未找到]")
+                        except Exception as e:
+                            logger.error(f"[export_docx] 处理图片失败: {img_filename}, error={e}", exc_info=True)
+                            doc.add_paragraph(f"[图片: {img_filename}]")
+                else:
+                    # 普通段落
+                    doc.add_paragraph(para_text)
         else:
             # 如果没有内容，添加提示
             doc.add_paragraph("（本章节内容待填写）", style='Normal')
@@ -794,17 +979,34 @@ async def export_docx(project_id: str, user=Depends(get_current_user_sync)):
     # 6. 保存文档到临时文件
     temp_dir = tempfile.gettempdir()
     filename = f"{project_name}.docx"
-    output_path = Path(temp_dir) / f"declare_{project_id}_{filename}"
+    # 使用项目ID确保文件名唯一
+    safe_filename = f"declare_{project_id}_{filename}"
+    output_path = Path(temp_dir) / safe_filename
     
     doc.save(str(output_path))
+    
+    # 设置文件权限（确保可读）
+    import os
+    os.chmod(str(output_path), 0o644)
     
     logger.info(f"[export_docx] 导出成功: {output_path}")
     
     # 7. 返回文件
+    # 对中文文件名进行URL编码以符合HTTP header规范
+    from urllib.parse import quote
+    encoded_filename = quote(filename)
+    
+    # 使用ASCII兼容的fallback文件名
+    ascii_filename = f"declare_{project_id[:8]}.docx"
+    
     return FileResponse(
         path=str(output_path),
         filename=filename,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{encoded_filename}',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        }
     )
 
 

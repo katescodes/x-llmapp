@@ -111,7 +111,7 @@ class PromptBuilder:
         
         # 参数配置
         temperature = 0.6  # 申报书更严谨，降低随机性
-        max_tokens = 2500
+        max_tokens = 4096  # ✅ 增加到4096，避免内容被截断
         
         return PromptOutput(
             system_prompt=system_prompt,
