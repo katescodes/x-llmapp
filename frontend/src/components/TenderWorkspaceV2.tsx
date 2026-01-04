@@ -975,25 +975,48 @@ export default function TenderWorkspaceV2() {
 
     const loadPreview = async () => {
       setFormatPreviewLoading(true);
+      console.log('[格式预览] 开始加载:', formatPreviewUrl);
+      
       try {
         const token = localStorage.getItem('auth_token');
-        const response = await fetch(formatPreviewUrl, {
+        
+        // 构建完整URL（如果是相对路径，浏览器会自动补全）
+        const fullUrl = formatPreviewUrl.startsWith('http') 
+          ? formatPreviewUrl 
+          : `${window.location.origin}${formatPreviewUrl}`;
+        
+        console.log('[格式预览] 请求URL:', fullUrl);
+        console.log('[格式预览] Token:', token ? `${token.substring(0, 20)}...` : 'none');
+        
+        const response = await fetch(fullUrl, {
           method: 'GET',
           headers: {
             'Authorization': token ? `Bearer ${token}` : '',
           },
         });
 
+        console.log('[格式预览] 响应状态:', response.status, response.statusText);
+
         if (!response.ok) {
+          const errorText = await response.text();
+          console.error('[格式预览] 错误响应:', errorText);
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
         const blob = await response.blob();
+        console.log('[格式预览] Blob大小:', blob.size, 'bytes');
+        
         const blobUrl = URL.createObjectURL(blob);
         setFormatPreviewBlobUrl(blobUrl);
-      } catch (err) {
-        console.error('Failed to load format preview:', err);
-        alert(`格式预览加载失败: ${err}`);
+        console.log('[格式预览] 加载成功');
+      } catch (err: any) {
+        console.error('[格式预览] 加载失败:', err);
+        console.error('[格式预览] 错误详情:', {
+          name: err.name,
+          message: err.message,
+          stack: err.stack
+        });
+        alert(`格式预览加载失败: ${err.message || err}\n\n请检查：\n1. 网络连接是否正常\n2. 是否已成功套用格式模板\n3. 查看浏览器控制台了解详细错误`);
         setFormatPreviewBlobUrl('');
       } finally {
         setFormatPreviewLoading(false);

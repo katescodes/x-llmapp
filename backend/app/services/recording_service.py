@@ -209,6 +209,24 @@ async def import_recording_to_kb(
             if not target_kb_id:
                 raise ValueError("必须提供知识库ID或新知识库名称")
             
+            # 如果之前已导入，先删除旧的文档
+            old_doc_id = row.get('doc_id')
+            if old_doc_id:
+                try:
+                    from app.services.kb_service import delete_document
+                    # 获取旧的知识库ID（可能和新的不同）
+                    old_kb_id = row.get('kb_id')
+                    if old_kb_id:
+                        delete_document(old_kb_id, old_doc_id, skip_asset_cleanup=True)
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.info(f"Deleted old document {old_doc_id} from kb {old_kb_id} before reimport")
+                except Exception as e:
+                    # 如果删除失败，记录日志但继续导入
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Failed to delete old document during reimport: {e}")
+            
             # 更新录音状态为"导入中"
             cur.execute("""
                 UPDATE voice_recordings
@@ -237,7 +255,11 @@ async def import_recording_to_kb(
                     kb_category=final_category
                 )
                 
-                doc_id = result["id"]
+                # 检查导入是否成功
+                if result.get("status") == "failed":
+                    raise ValueError(f"导入失败: {result.get('error', '未知错误')}")
+                
+                doc_id = result.get("doc_id") or result.get("id")
                 
                 # 更新录音记录
                 cur.execute("""

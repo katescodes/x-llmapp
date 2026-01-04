@@ -8,9 +8,12 @@ from datetime import datetime
 import json
 import uuid
 from typing import Any, Dict, List, Optional
+import logging
 
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
+
+logger = logging.getLogger(__name__)
 
 
 def _id(prefix: str) -> str:
@@ -184,6 +187,16 @@ class DeclareDAO:
                         (project_id,),
                     )
                 return [_serialize_row(row) for row in cur.fetchall()]
+
+    def delete_asset(self, asset_id: str) -> None:
+        """删除资产"""
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM declare_assets WHERE asset_id=%s",
+                    (asset_id,),
+                )
+                conn.commit()
     
     def update_asset_meta(self, asset_id: str, meta_json: Dict) -> None:
         """更新资产的meta_json"""
@@ -433,7 +446,25 @@ class DeclareDAO:
                     """,
                     (version_id,),
                 )
-                return [_serialize_row(row) for row in cur.fetchall()]
+                rows = cur.fetchall()
+                
+                # 序列化并展平 meta_json 中的 notes 字段
+                result = []
+                for row in rows:
+                    node = _serialize_row(row)
+                    # 将 meta_json.notes 提取到顶层
+                    if node.get("meta_json") and isinstance(node["meta_json"], dict):
+                        if "notes" in node["meta_json"]:
+                            node["notes"] = node["meta_json"]["notes"]
+                        # 兼容旧字段名 node_number
+                        if "node_number" in node["meta_json"]:
+                            node["node_number"] = node["meta_json"]["node_number"]
+                    # 兼容字段名：numbering -> node_number
+                    if not node.get("node_number") and node.get("numbering"):
+                        node["node_number"] = node["numbering"]
+                    result.append(node)
+                
+                return result
 
     # ==================== Sections (版本化) ====================
 
@@ -535,6 +566,169 @@ class DeclareDAO:
                         (project_id,),
                     )
                 return [_serialize_row(row) for row in cur.fetchall()]
+
+    # ==================== Sections (章节内容管理) ====================
+
+    def save_section(
+        self,
+        project_id: str,
+        node_id: str,
+        node_title: str,
+        content_html: str,
+        content_md: Optional[str] = None,
+        version_id: Optional[str] = None,
+        evidence_chunk_ids: Optional[List[str]] = None,
+        retrieval_trace: Optional[Dict] = None,
+    ) -> str:
+        """
+        保存章节内容（智能：存在则更新，不存在则插入）
+        
+        Args:
+            project_id: 项目ID
+            node_id: 目录节点ID
+            node_title: 节点标题
+            content_html: HTML内容
+            content_md: Markdown内容（可选）
+            version_id: 目录版本ID（可选）
+            evidence_chunk_ids: 证据分片ID列表
+            retrieval_trace: 检索轨迹
+            
+        Returns:
+            section_id: 章节ID
+        """
+        with self.pool.connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                # 1. 检查是否已存在该节点的内容
+                cur.execute(
+                    """
+                    SELECT section_id FROM declare_sections
+                    WHERE project_id = %s AND node_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    [project_id, node_id],
+                )
+                existing = cur.fetchone()
+                
+                if existing:
+                    # 2. 更新现有记录
+                    section_id = existing['section_id']
+                    cur.execute(
+                        """
+                        UPDATE declare_sections
+                        SET content_html = %s,
+                            content_md = %s,
+                            node_title = %s,
+                            evidence_chunk_ids = %s,
+                            retrieval_trace = %s::jsonb,
+                            updated_at = NOW()
+                        WHERE section_id = %s
+                        """,
+                        [
+                            content_html,
+                            content_md,
+                            node_title,
+                            evidence_chunk_ids or [],
+                            json.dumps(retrieval_trace or {}),
+                            section_id,
+                        ],
+                    )
+                    logger.info(f"[DeclareDAO] Updated section {section_id} for node {node_id}")
+                else:
+                    # 3. 插入新记录
+                    section_id = _id("declare_sec")
+                    
+                    # 如果没有提供version_id，获取活跃版本
+                    if not version_id:
+                        cur.execute(
+                            """
+                            SELECT version_id FROM declare_directory_versions
+                            WHERE project_id = %s AND is_active = TRUE
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                            """,
+                            [project_id],
+                        )
+                        version_row = cur.fetchone()
+                        version_id = version_row['version_id'] if version_row else None
+                    
+                    cur.execute(
+                        """
+                        INSERT INTO declare_sections (
+                            section_id, version_id, project_id, node_id, node_title,
+                            content_html, content_md, evidence_chunk_ids, retrieval_trace,
+                            meta_json, created_at, updated_at
+                        ) VALUES (
+                            %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s::jsonb,
+                            '{}'::jsonb, NOW(), NOW()
+                        )
+                        """,
+                        [
+                            section_id,
+                            version_id,
+                            project_id,
+                            node_id,
+                            node_title,
+                            content_html,
+                            content_md,
+                            evidence_chunk_ids or [],
+                            json.dumps(retrieval_trace or {}),
+                        ],
+                    )
+                    logger.info(f"[DeclareDAO] Created section {section_id} for node {node_id}")
+                
+            conn.commit()
+        return section_id
+
+    def get_section(self, project_id: str, node_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取指定节点的最新章节内容
+        
+        Args:
+            project_id: 项目ID
+            node_id: 目录节点ID
+            
+        Returns:
+            章节内容字典，如果不存在则返回None
+        """
+        with self.pool.connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM declare_sections
+                    WHERE project_id = %s AND node_id = %s
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    [project_id, node_id],
+                )
+                row = cur.fetchone()
+                return _serialize_row(row) if row else None
+
+    def get_all_sections(self, project_id: str) -> Dict[str, Dict[str, Any]]:
+        """
+        获取项目的所有章节内容（每个node_id只返回最新版本）
+        
+        Args:
+            project_id: 项目ID
+            
+        Returns:
+            Dict[node_id -> section_data]
+        """
+        with self.pool.connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (node_id) *
+                    FROM declare_sections
+                    WHERE project_id = %s
+                    ORDER BY node_id, updated_at DESC
+                    """,
+                    [project_id],
+                )
+                rows = cur.fetchall()
+                return {row['node_id']: _serialize_row(row) for row in rows}
 
     # ==================== Documents ====================
 

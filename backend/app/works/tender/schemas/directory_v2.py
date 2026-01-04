@@ -25,6 +25,7 @@ class DirectoryNodeV2(BaseModel):
     required: bool = Field(True, description="是否必填")
     volume: Optional[str] = Field(None, description="卷号")
     notes: Optional[str] = Field(None, description="备注说明")
+    template_chunk_ids: List[str] = Field(default_factory=list, description="模板/示例chunk IDs")
     evidence_chunk_ids: List[str] = Field(default_factory=list, description="证据 chunk IDs")
     
     @field_validator('title')

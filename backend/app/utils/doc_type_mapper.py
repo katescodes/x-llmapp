@@ -40,7 +40,7 @@ def map_doc_type_to_kb_category(doc_type: str, context: str = "") -> KbCategory:
     
     # 申报应用映射
     declare_mapping = {
-        "declare_notice": "tender_notice",          # 申报通知 -> 招标文件（复用）
+        "declare_notice": "declare_notice",         # ✅ 申报通知 -> declare_notice（不再复用tender_notice）
         "declare_company": "qualification_doc",     # 企业信息 -> 资质资料
         "declare_tech": "technical_material",       # 技术资料
         "declare_other": "general_doc",             # 其他

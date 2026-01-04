@@ -29,7 +29,8 @@ KbCategory = Literal[
     "format_template",
     "standard_spec",
     "technical_material",
-    "qualification_doc"
+    "qualification_doc",
+    "declare_notice"   # ✅ 申报通知（新）
 ]
 
 

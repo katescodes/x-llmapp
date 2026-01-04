@@ -4,6 +4,79 @@
  */
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { api } from '../config/api';
+import mermaid from 'mermaid';
+
+// ========== 工具函数 ==========
+
+/**
+ * 初始化Mermaid配置
+ */
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'default',
+  securityLevel: 'loose',
+  fontFamily: 'Arial, sans-serif',
+});
+
+/**
+ * 处理内容中的Mermaid图表
+ * 将 <div class="mermaid-diagram">```mermaid ... ```</div> 渲染为SVG
+ */
+async function processMermaidDiagrams(html: string): Promise<string> {
+  if (!html) return html;
+  
+  // 匹配 <div class="mermaid-diagram">```mermaid ... ```</div>
+  const mermaidRegex = /<div class="mermaid-diagram">\s*```mermaid\s*([\s\S]*?)```\s*<\/div>/g;
+  
+  let processedHtml = html;
+  const matches = [...html.matchAll(mermaidRegex)];
+  
+  for (let i = 0; i < matches.length; i++) {
+    const match = matches[i];
+    const mermaidCode = match[1].trim();
+    const uniqueId = `mermaid-${Date.now()}-${i}`;
+    
+    try {
+      // 使用mermaid渲染
+      const { svg } = await mermaid.render(uniqueId, mermaidCode);
+      
+      // 替换为渲染后的SVG，添加样式
+      const svgWithStyle = `<div class="mermaid-container" style="background: white; padding: 20px; margin: 20px 0; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow-x: auto;">${svg}</div>`;
+      processedHtml = processedHtml.replace(match[0], svgWithStyle);
+    } catch (error) {
+      console.error('Mermaid渲染失败:', error);
+      // 如果渲染失败，保留原始代码块
+      const errorBlock = `<div class="mermaid-error" style="background: #fee; padding: 15px; margin: 20px 0; border-left: 4px solid #f44336; border-radius: 4px;">
+        <p style="margin: 0; color: #c62828; font-weight: 600;">⚠️ 图表渲染失败</p>
+        <pre style="margin: 10px 0 0 0; padding: 10px; background: #fff; border-radius: 4px; overflow-x: auto; font-size: 12px;">${mermaidCode}</pre>
+      </div>`;
+      processedHtml = processedHtml.replace(match[0], errorBlock);
+    }
+  }
+  
+  return processedHtml;
+}
+
+/**
+ * 处理内容中的图片占位符，转换为实际的图片标签
+ * 将 {image:filename.png} 转换为 <img> 标签
+ */
+function processImagePlaceholders(html: string, projectId: string, moduleType: 'declare' | 'tender'): string {
+  if (!html) return html;
+  
+  // 匹配 {image:filename} 或 {image:filename.jpg} 等
+  const imageRegex = /\{image:([^}]+)\}/g;
+  
+  return html.replace(imageRegex, (match, filename) => {
+    // 构建图片URL
+    const imageUrl = moduleType === 'declare'
+      ? `/api/apps/declare/projects/${projectId}/assets/image/${encodeURIComponent(filename)}`
+      : `/api/apps/tender/projects/${projectId}/assets/image/${encodeURIComponent(filename)}`;
+    
+    // 返回img标签
+    return `<img src="${imageUrl}" alt="${filename}" style="max-width: 100%; height: auto; margin: 10px 0; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" />`;
+  });
+}
 
 // ========== 类型定义 ==========
 
@@ -14,13 +87,20 @@ interface DocumentNode {
   orderNo?: string;
   level: number;
   children?: DocumentNode[];
-  notes?: string;  // 章节说明（来自申报指南）
+  notes?: string;  // 章节说明（来自申报指南/招标书）
 }
 
 interface DocumentContent {
   nodeId: string;
   html: string;
   status: 'draft' | 'generated' | 'final';
+}
+
+interface TemplateData {
+  has_template: boolean;
+  template_html: string;
+  template_type: string;
+  source_chunks: Array<{chunk_id: string; text: string}>;
 }
 
 // ========== 辅助函数（组件外部）==========
@@ -203,26 +283,17 @@ export default function DocumentComponentManagement({
   };
 
   // 内容数据
-  const [contents, setContents] = useState<Record<string, DocumentContent>>({
-    '1': {
-      nodeId: '1',
-      html: '<p><strong>第一章 项目概述</strong></p><p>本章节介绍项目的整体情况，包括项目背景、研究意义等内容...</p>',
-      status: 'draft',
-    },
-    '1-1': {
-      nodeId: '1-1',
-      html: '<p>随着科技的快速发展，行业面临着诸多挑战。本项目旨在通过创新技术解决这些问题...</p>',
-      status: 'draft',
-    },
-    '1-2': {
-      nodeId: '1-2',
-      html: '<p>本项目的实施将带来显著的经济效益和社会效益，推动行业的技术进步...</p>',
-      status: 'draft',
-    },
-  });
+  const [contents, setContents] = useState<Record<string, DocumentContent>>({});
+
+  // 加载已保存的内容（从数据库）
+  const [isLoadingSavedContent, setIsLoadingSavedContent] = useState(false);
 
   // 当前选中的节点（用于高亮）
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>('1');
+
+  // 模板数据（招投标专用）
+  const [templateData, setTemplateData] = useState<TemplateData | null>(null);
+  const [loadingTemplate, setLoadingTemplate] = useState(false);
 
   // 编辑状态
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
@@ -253,44 +324,148 @@ export default function DocumentComponentManagement({
   // 目录显示/隐藏状态
   const [isDirectoryVisible, setIsDirectoryVisible] = useState(true);
 
+  // -------------------- 初始化：加载已保存的内容 --------------------
+
+  useEffect(() => {
+    // 如果是嵌入模式且有projectId和directory，加载已保存的内容
+    if (embedded && projectId && directory && directory.length > 0) {
+      const loadSavedContent = async () => {
+        setIsLoadingSavedContent(true);
+        console.log('[加载内容] 开始加载项目已保存的内容:', projectId);
+        
+        try {
+          const apiPath = moduleType === 'declare'
+            ? `/api/apps/declare/projects/${projectId}/sections/load`
+            : `/api/apps/tender/projects/${projectId}/sections/load`;
+          
+          const data = await api.get(apiPath);
+          console.log('[加载内容] 后端返回数据:', data);
+          
+          const sections = data.sections || {};
+          const loadedContents: Record<string, DocumentContent> = {};
+          
+          // 转换为前端格式
+          for (const [nodeId, sectionData] of Object.entries(sections)) {
+            const section = sectionData as any;
+            if (section.content_html) {
+              // ✅ 处理图片占位符
+              let processedHtml = section.content_html;
+              if (processedHtml.includes('{image:')) {
+                processedHtml = processImagePlaceholders(processedHtml, projectId, moduleType);
+              }
+              
+              // ✅ 处理Mermaid图表
+              if (processedHtml.includes('class="mermaid-diagram"')) {
+                try {
+                  processedHtml = await processMermaidDiagrams(processedHtml);
+                } catch (error) {
+                  console.error('Mermaid处理失败:', error);
+                }
+              }
+              
+              loadedContents[nodeId] = {
+                nodeId,
+                html: processedHtml,
+                status: 'generated',
+              };
+            }
+          }
+          
+          console.log('[加载内容] 已加载', Object.keys(loadedContents).length, '个章节');
+          setContents(loadedContents);
+        } catch (error: any) {
+          console.error('[加载内容] 加载失败:', error);
+          // 加载失败不影响使用，只是从空内容开始
+        } finally {
+          setIsLoadingSavedContent(false);
+        }
+      };
+      
+      loadSavedContent();
+    }
+  }, [embedded, projectId, moduleType]); // directory变化时不重新加载，避免覆盖用户正在编辑的内容
+
   // -------------------- 合并文档内容 --------------------
 
   // 将所有章节内容合并成一个 HTML
   useEffect(() => {
-    const flatDirectory = flattenDirectory(directory);
-    let combinedHtml = '';
+    const processCombinedContent = async () => {
+      const flatDirectory = flattenDirectory(directory);
+      let combinedHtml = '';
 
-    flatDirectory.forEach((node) => {
-      const content = contents[node.id];
-      const contentHtml = content?.html || '<p style="color: #64748b; font-style: italic;">（暂无内容，点击下方"生成"或直接编辑）</p>';
+      for (const node of flatDirectory) {
+        const content = contents[node.id];
+        let contentHtml = content?.html || '<p style="color: #64748b; font-style: italic;">（暂无内容，点击下方"生成"或直接编辑）</p>';
+        
+        // ✅ 处理Mermaid图表（异步）
+        if (embedded && projectId && contentHtml.includes('class="mermaid-diagram"')) {
+          try {
+            contentHtml = await processMermaidDiagrams(contentHtml);
+          } catch (error) {
+            console.error('Mermaid处理失败:', error);
+          }
+        }
+        
+        // ✅ 处理图片占位符
+        if (embedded && projectId) {
+          contentHtml = processImagePlaceholders(contentHtml, projectId, moduleType);
+        }
 
-      // 章节标题（带锚点 ID）
-      const headingLevel = Math.min(node.level, 6); // H1-H6
-      const headingStyle = `
-        font-size: ${24 - node.level * 2}px;
-        font-weight: ${node.level === 1 ? 700 : 600};
-        color: #f8fafc;
-        margin-top: ${node.level === 1 ? 40 : 24}px;
-        margin-bottom: 16px;
-        padding-bottom: 8px;
-        border-bottom: ${node.level === 1 ? '2px solid rgba(148, 163, 184, 0.3)' : 'none'};
-      `;
+        // 章节标题（带锚点 ID）
+        const headingLevel = Math.min(node.level, 6); // H1-H6
+        const headingStyle = `
+          font-size: ${24 - node.level * 2}px;
+          font-weight: ${node.level === 1 ? 700 : 600};
+          color: #f8fafc;
+          margin-top: ${node.level === 1 ? 40 : 24}px;
+          margin-bottom: 16px;
+          padding-bottom: 8px;
+          border-bottom: ${node.level === 1 ? '2px solid rgba(148, 163, 184, 0.3)' : 'none'};
+        `;
 
-      combinedHtml += `
-        <div id="section-${node.id}" style="margin-bottom: 32px;">
-          <h${headingLevel} style="${headingStyle}">
-            ${node.orderNo ? `<span style="color: #94a3b8; margin-right: 8px;">${node.orderNo}</span>` : ''}
-            ${node.title}
-          </h${headingLevel}>
-          <div style="color: #e5e7eb; line-height: 1.8; font-size: 15px;">
-            ${contentHtml}
+        combinedHtml += `
+          <div id="section-${node.id}" style="margin-bottom: 32px;">
+            <h${headingLevel} style="${headingStyle}">
+              ${node.orderNo ? `<span style="color: #94a3b8; margin-right: 8px;">${node.orderNo}</span>` : ''}
+              ${node.title}
+            </h${headingLevel}>
+            <div style="color: #e5e7eb; line-height: 1.8; font-size: 15px;">
+              ${contentHtml}
+            </div>
           </div>
-        </div>
-      `;
-    });
+        `;
+      }
 
-    setUnifiedContent(combinedHtml);
-  }, [directory, contents]);
+      setUnifiedContent(combinedHtml);
+    };
+    
+    processCombinedContent();
+  }, [directory, contents, embedded, projectId, moduleType]);
+
+  // 加载模板数据（仅招投标模块）
+  useEffect(() => {
+    if (!selectedNodeId || !projectId || !embedded || moduleType !== 'tender') {
+      setTemplateData(null);
+      return;
+    }
+    
+    const loadTemplate = async () => {
+      setLoadingTemplate(true);
+      try {
+        const response = await api.get(
+          `/api/apps/tender/projects/${projectId}/directory/${selectedNodeId}/template`
+        );
+        setTemplateData(response as TemplateData);
+      } catch (error) {
+        console.error('加载模板失败:', error);
+        setTemplateData(null);
+      } finally {
+        setLoadingTemplate(false);
+      }
+    };
+    
+    loadTemplate();
+  }, [selectedNodeId, projectId, embedded, moduleType]);
 
   // -------------------- 目录树操作 --------------------
 
@@ -581,21 +756,33 @@ export default function DocumentComponentManagement({
     }
 
     try {
-      // 根据模块类型构建API路径
+      // 根据模块类型构建API路径和方法
       const apiPath = moduleType === 'declare' 
         ? `/api/apps/declare/projects/${projectId}/export/docx`
         : `/api/apps/tender/projects/${projectId}/export/docx`;
       
+      // 注意：Declare使用GET，Tender使用POST
+      const method = moduleType === 'declare' ? 'GET' : 'POST';
+      
+      // 获取认证token
+      const token = localStorage.getItem('auth_token');
+      if (!token) {
+        throw new Error('未登录，请先登录');
+      }
+      
       // 使用fetch下载文件
       const response = await fetch(apiPath, {
-        method: 'GET',
+        method: method,
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
         },
+        ...(method === 'POST' ? { body: JSON.stringify({}) } : {}),
       });
 
       if (!response.ok) {
-        throw new Error(`导出失败: ${response.status}`);
+        const errorText = await response.text();
+        throw new Error(`导出失败: ${response.status} - ${response.statusText}`);
       }
 
       // 获取文件名（从Content-Disposition header或使用默认名称）
@@ -659,10 +846,11 @@ export default function DocumentComponentManagement({
                 ? `/api/apps/declare/projects/${projectId}/sections/generate`
                 : `/api/apps/tender/projects/${projectId}/sections/generate`;
               
-              // 使用统一的 api.post 方法，会自动处理认证
+              // ✅ 使用统一的 api.post 方法，会自动处理认证，并传递node_id以自动保存
               const data = await api.post(apiPath, {
                   title: node.title,
                   level: node.level,
+                  node_id: node.id,  // ✅ 添加node_id，后端会自动保存
                   requirements: userMessage, // 将用户要求传给后端
               });
 
@@ -758,6 +946,15 @@ export default function DocumentComponentManagement({
     // 如果是嵌入模式且有projectId，调用真实的后端API
     if (embedded && projectId) {
       console.log('[生成内容] 调用真实API');
+      
+      // 超时控制
+      let timeoutId: NodeJS.Timeout;
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error('生成超时（120秒），请稍后重试'));
+        }, 120000); // 120秒超时
+      });
+      
       try {
         // 标记为生成中
         setContents((prev) => ({
@@ -776,24 +973,64 @@ export default function DocumentComponentManagement({
         
         console.log('[生成内容] API URL:', apiPath);
         
-        // 使用统一的 api.post 方法，会自动处理认证
-        const data = await api.post(apiPath, {
+        // 使用统一的 api.post 方法，会自动处理认证，加上超时保护
+        const apiPromise = api.post(apiPath, {
             title: node.title,
             level: node.level,
+            node_id: nodeId,  // ✅ 传递node_id，后端会自动保存
             requirements: requirements || undefined,
         });
+        
+        // 竞速：API调用 vs 超时
+        const data = await Promise.race([apiPromise, timeoutPromise]) as any;
+        clearTimeout(timeoutId!); // 清除超时
 
         console.log('[生成内容] API返回数据:', data);
         const generatedHtml = data.content || '<p>生成失败</p>';
+        
+        console.log('[生成内容] 原始内容长度:', generatedHtml.length);
 
-        setContents((prev) => ({
-          ...prev,
-          [nodeId]: {
-            nodeId,
-            html: generatedHtml,
-            status: 'generated',
-          },
-        }));
+        // ✅ 处理Mermaid图表（异步）
+        let processedHtml = generatedHtml;
+        if (generatedHtml.includes('class="mermaid-diagram"')) {
+          try {
+            console.log('[生成内容] 检测到Mermaid图表，开始处理...');
+            processedHtml = await processMermaidDiagrams(generatedHtml);
+            console.log('[生成内容] Mermaid处理完成');
+          } catch (error) {
+            console.error('[生成内容] Mermaid处理失败:', error);
+            processedHtml = generatedHtml; // 使用原始HTML
+          }
+        }
+        
+        // ✅ 处理图片占位符
+        try {
+          console.log('[生成内容] 处理图片占位符...');
+          processedHtml = processImagePlaceholders(processedHtml, projectId, moduleType);
+          console.log('[生成内容] 图片处理完成');
+        } catch (error) {
+          console.error('[生成内容] 图片处理失败:', error);
+          // 如果图片处理失败，继续使用当前HTML
+        }
+        
+        console.log('[生成内容] 最终处理后的HTML长度:', processedHtml.length);
+
+        // ✅ 立即更新状态，确保UI响应
+        setContents((prev) => {
+          const newContents = {
+            ...prev,
+            [nodeId]: {
+              nodeId,
+              html: processedHtml,
+              status: 'generated',
+            },
+          };
+          console.log('[生成内容] ✅ 更新contents state:', nodeId, 'HTML长度:', processedHtml.length);
+          return newContents;
+        });
+        
+        console.log('[生成内容] ✅ 内容已生成并自动保存到数据库');
+        
       } catch (error: any) {
         console.error('[生成内容] 生成失败:', error);
         
@@ -1503,6 +1740,84 @@ export default function DocumentComponentManagement({
                         </div>
                       )}
 
+                      {/* 📄 招标书模板参考（招投标专用） */}
+                      {moduleType === 'tender' && templateData && templateData.has_template && (
+                        <div
+                          style={{
+                            marginBottom: 16,
+                            padding: '12px 16px',
+                            background: 'linear-gradient(135deg, rgba(107, 114, 128, 0.08), rgba(75, 85, 99, 0.08))',
+                            border: '1px solid rgba(107, 114, 128, 0.2)',
+                            borderLeft: '4px solid #6b7280',
+                            borderRadius: 8,
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'flex-start',
+                              gap: 8,
+                              marginBottom: 8,
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: 16,
+                                flexShrink: 0,
+                                marginTop: 2,
+                              }}
+                            >
+                              📄
+                            </span>
+                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <div
+                                style={{
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                  color: '#6b7280',
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.5px',
+                                }}
+                              >
+                                招标书模板参考
+                              </div>
+                              <span
+                                style={{
+                                  fontSize: 11,
+                                  background: '#6b7280',
+                                  color: 'white',
+                                  padding: '2px 8px',
+                                  borderRadius: 4,
+                                  fontWeight: 500,
+                                }}
+                              >
+                                {templateData.template_type === 'table' ? '表格' : 
+                                 templateData.template_type === 'format' ? '格式' : '示例'}
+                              </span>
+                            </div>
+                          </div>
+                          <div
+                            dangerouslySetInnerHTML={{__html: templateData.template_html}}
+                            style={{
+                              background: 'white',
+                              padding: 12,
+                              borderRadius: 4,
+                              maxHeight: 300,
+                              overflowY: 'auto',
+                              border: '1px solid #e5e7eb',
+                              fontSize: 13,
+                              lineHeight: 1.6,
+                              color: '#374151',
+                            }}
+                          />
+                          {loadingTemplate && (
+                            <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 8 }}>
+                              加载模板中...
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* 章节内容（可编辑） */}
                       <div
                         data-content="true"
@@ -1513,7 +1828,7 @@ export default function DocumentComponentManagement({
                         }}
                         dangerouslySetInnerHTML={{
                           __html: hasContent
-                            ? contentHtml
+                            ? processImagePlaceholders(contentHtml, projectId || '', moduleType)
                             : '<p style="color: #94a3b8; font-style: italic; padding: 20px; background: #f8fafc; border-radius: 8px;">（暂无内容，点击上方"生成内容"按钮使用 AI 生成，或直接在此处输入内容）</p>',
                         }}
                       />

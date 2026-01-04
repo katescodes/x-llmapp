@@ -290,7 +290,8 @@ class RetrievalFacade:
                 # 可选：按分类过滤
                 if kb_categories:
                     cat_placeholders = ",".join(["%s"] * len(kb_categories))
-                    sql += f" AND d.meta_json->>'kb_category' IN ({cat_placeholders})"
+                    # ✅ 修复：使用 d.doc_type 而不是 meta_json->>'kb_category'
+                    sql += f" AND d.doc_type IN ({cat_placeholders})"
                     params.extend(kb_categories)
                 
                 cur.execute(sql, params)
@@ -386,10 +387,9 @@ class RetrievalFacade:
         fused = rrf_fuse(dense_hits, lexical_hits, k=60, topn=top_k)
         
         # 4. 加载完整文本
-        chunk_ids = [hit["chunk_id"] for hit in fused]
         results = await asyncio.to_thread(
             self.new_retriever._load_chunks,
-            chunk_ids
+            fused  # ✅ 传递完整的 fused 列表，包含分数
         )
         
         logger.info(
@@ -434,6 +434,68 @@ class RetrievalFacade:
                 # ...
         
         return project_ids
+    
+    async def retrieve_by_chunk_ids(
+        self,
+        chunk_ids: List[str],
+        project_id: Optional[str] = None
+    ) -> List[RetrievedChunk]:
+        """
+        根据chunk_ids直接检索chunk内容
+        
+        Args:
+            chunk_ids: chunk ID列表
+            project_id: 项目ID（可选，用于过滤）
+            
+        Returns:
+            RetrievedChunk列表
+        """
+        if not chunk_ids:
+            return []
+        
+        try:
+            # 直接从document_segments表查询
+            with self.pool.connection() as conn:
+                from psycopg.rows import dict_row
+                with conn.cursor(row_factory=dict_row) as cur:
+                    # 构建查询
+                    placeholders = ','.join(['%s'] * len(chunk_ids))
+                    query = f"""
+                        SELECT 
+                            ds.chunk_id,
+                            ds.text,
+                            ds.metadata,
+                            dv.document_id,
+                            d.filename
+                        FROM document_segments ds
+                        LEFT JOIN document_versions dv ON ds.doc_version_id = dv.id
+                        LEFT JOIN documents d ON dv.document_id = d.id
+                        WHERE ds.chunk_id IN ({placeholders})
+                        ORDER BY ds.chunk_index
+                    """
+                    
+                    cur.execute(query, chunk_ids)
+                    rows = cur.fetchall()
+                    
+                    # 转换为RetrievedChunk对象
+                    chunks = []
+                    for row in rows:
+                        chunk = RetrievedChunk(
+                            chunk_id=row["chunk_id"],
+                            text=row["text"] or "",
+                            score=1.0,  # 直接检索，分数设为1
+                            metadata=row.get("metadata") or {},
+                            document_id=row.get("document_id"),
+                            filename=row.get("filename")
+                        )
+                        chunks.append(chunk)
+                    
+                    logger.info(f"Retrieved {len(chunks)} chunks by IDs from document_segments")
+                    return chunks
+                    
+        except Exception as e:
+            logger.error(f"Failed to retrieve by chunk IDs: {e}", exc_info=True)
+            return []
 
 
 async def retrieve(

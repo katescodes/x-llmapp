@@ -35,7 +35,7 @@ def build_requirements_spec() -> ExtractionSpec:
         queries=queries,
         topk_per_query=top_k_per_query,
         topk_total=top_k_total,
-        doc_types=["declare_notice"],
+        doc_types=["declare_notice"],  # ✅ 正确的类型
         temperature=0.0,
         schema_model=RequirementsResultV2
     )

@@ -150,6 +150,7 @@ class DeclareService:
                         doc_type=kb_category,
                         owner_id=user_id,
                         storage_path=None,
+                        kb_id=kb_id,  # ✅ 传递 kb_id
                     ))
                     # 更新asset的doc_version_id
                     self.dao.update_asset_meta(
@@ -177,6 +178,7 @@ class DeclareService:
                 doc_type=kb_category,
                 owner_id=user_id,
                 storage_path=file_path,
+                kb_id=kb_id,  # ✅ 传递 kb_id
             ))
             
             # 创建资产记录
@@ -357,25 +359,48 @@ class DeclareService:
             raise
     
     def _build_directory_tree(self, nodes: List[Dict]) -> List[Dict]:
-        """构建目录树：生成 parent_id 和 numbering"""
+        """
+        构建目录树：生成 parent_id 和 numbering
+        
+        优先使用 LLM 返回的 parent_ref 字段匹配父节点，
+        如果 parent_ref 不存在或匹配失败，则回退到基于层级的栈推断。
+        """
         import uuid
-        stack = {}
+        
+        # 第一步：为所有节点生成唯一 id
+        title_to_node = {}  # 用于通过 title 查找节点
+        for node in nodes:
+            node["id"] = f"declare_node_{uuid.uuid4().hex[:16]}"
+            title_to_node[node.get("title", "")] = node
+        
+        # 第二步：构建 parent_id 关系
+        stack = {}  # 栈：用于基于层级推断父节点（作为回退方案）
         result = []
         
         for i, node in enumerate(nodes):
             level = node.get("level", 1)
+            parent_ref = node.get("parent_ref")  # LLM 返回的父节点标题
             
-            # 生成 parent_id
-            if level > 1:
+            # 尝试通过 parent_ref 匹配父节点
+            parent_id = None
+            if parent_ref and parent_ref in title_to_node:
+                parent_node = title_to_node[parent_ref]
+                parent_id = parent_node.get("id")
+                logger.debug(f"[_build_directory_tree] Node '{node.get('title')}' matched parent by parent_ref='{parent_ref}'")
+            
+            # 回退方案：如果 parent_ref 不存在或匹配失败，使用栈推断
+            if parent_id is None and level > 1:
                 parent_node = stack.get(level - 1)
-                node["parent_id"] = parent_node.get("id") if parent_node else None
-            else:
-                node["parent_id"] = None
+                if parent_node:
+                    parent_id = parent_node.get("id")
+                    logger.warning(
+                        f"[_build_directory_tree] Node '{node.get('title')}' (level={level}) "
+                        f"using stack-based parent '{parent_node.get('title')}' (parent_ref='{parent_ref}' not matched)"
+                    )
             
-            # 生成唯一 id（使用 UUID 避免冲突）
-            node["id"] = f"declare_node_{uuid.uuid4().hex[:16]}"
+            node["parent_id"] = parent_id
             
-            # 更新栈
+            # 更新栈（用于后续节点的回退匹配）
             stack[level] = node
             for l in list(stack.keys()):
                 if l > level:
@@ -482,11 +507,15 @@ class DeclareService:
         # Excel扩展名
         excel_exts = {'xlsx', 'xls'}
         
-        if kind == "image":
-            if ext in excel_exts:
-                return "image_description"
-            elif ext in image_exts:
-                return "image"
+        # ✅ 修复：无论kind是什么，都要判断文件扩展名
+        # 如果是图片扩展名，返回image
+        if ext in image_exts:
+            return "image"
         
+        # 如果kind是image，Excel文件被认为是图片说明
+        if kind == "image" and ext in excel_exts:
+            return "image_description"
+        
+        # 其他都是文档
         return "document"
 

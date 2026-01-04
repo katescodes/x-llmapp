@@ -385,6 +385,11 @@ export async function listAssets(projectId: string): Promise<any[]> {
   return [];
 }
 
+export async function deleteAsset(projectId: string, assetId: string): Promise<void> {
+  await delay(200);
+  // Mock implementation - do nothing
+}
+
 export async function getRequirements(projectId: string): Promise<any | null> {
   await delay(200);
   return null;

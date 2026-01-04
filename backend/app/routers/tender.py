@@ -707,124 +707,28 @@ def update_section_body(project_id: str, node_id: str, body: Dict[str, Any], req
     return {"status": "success"}
 
 
-@router.post("/projects/{project_id}/directory/{node_id}/body/restore-sample")
-def restore_sample(project_id: str, node_id: str, request: Request):
-    """恢复章节的范本内容"""
-    svc = _svc(request)
-    svc.restore_sample_for_section(project_id, node_id)
-    
-    return {"status": "success"}
-
-
-@router.post("/projects/{project_id}/directory/auto-fill-samples")
-def auto_fill_samples(project_id: str, request: Request):
-    """自动填充所有章节的范本"""
-    svc = _svc(request)
-    logger = logging.getLogger(__name__)
-
-    # 永不抛 500：任何异常都收敛为 ok=false + warnings + debug
-    try:
-        result = svc.auto_fill_samples(project_id)
-        if not isinstance(result, dict):
-            result = {
-                "ok": False,
-                "project_id": project_id,
-                "warnings": ["auto_fill_samples returned non-dict result"],
-                "tender_asset_id": None,
-                "tender_filename": None,
-                "tender_storage_path": None,
-                "storage_path_exists": False,
-                "needs_reupload": False,
-                "tender_fragments_upserted": 0,
-                "tender_fragments_total": 0,
-                "attached_sections_template_sample": 0,
-                "attached_sections_builtin": 0,
-                # 兼容字段
-                "extracted_fragments": 0,
-                "attached_sections": 0,
-            }
-    except Exception as e:
-        logger.exception("auto_fill_samples failed project_id=%s", project_id)
-        result = {
-            "ok": False,
-            "project_id": project_id,
-            "warnings": [f"auto_fill_samples exception: {type(e).__name__}: {str(e)}"],
-            "tender_asset_id": None,
-            "tender_filename": None,
-            "tender_storage_path": None,
-            "storage_path_exists": False,
-            "needs_reupload": False,
-            "tender_fragments_upserted": 0,
-            "tender_fragments_total": 0,
-            "attached_sections_template_sample": 0,
-            "attached_sections_builtin": 0,
-            # 兼容字段
-            "extracted_fragments": 0,
-            "attached_sections": 0,
-        }
-
-    # 统一补齐 nodes（避免前端“没反应”）；这里也要兜底，不能二次抛错
-    try:
-        flat_nodes = svc.get_directory_with_body_meta(project_id)
-        result["nodes"] = _serialize_directory_nodes(flat_nodes)
-    except Exception as e:
-        logger.exception("auto_fill_samples nodes fetch failed project_id=%s", project_id)
-        warnings = result.get("warnings")
-        if not isinstance(warnings, list):
-            warnings = []
-        warnings.append(f"get_directory_with_body_meta exception: {type(e).__name__}: {str(e)}")
-        result["warnings"] = warnings
-        result["nodes"] = []
-
-    # 兼容补齐（service 内也会填，但这里确保永不缺字段）
-    result.setdefault("project_id", project_id)
-    result.setdefault("warnings", [])
-    result.setdefault("tender_asset_id", None)
-    result.setdefault("tender_filename", None)
-    result.setdefault("tender_storage_path", None)
-    result.setdefault("storage_path_exists", False)
-    result.setdefault("needs_reupload", False)
-    result.setdefault("tender_fragments_upserted", 0)
-    result.setdefault("tender_fragments_total", 0)
-    result.setdefault("attached_sections_template_sample", 0)
-    result.setdefault("attached_sections_builtin", 0)
-    result.setdefault("extracted_fragments", 0)
-    result.setdefault("attached_sections", 0)
-    result.setdefault("ok", False)
-    return result
-
-
-# ==================== 范本片段：列表 + 预览（目录页侧边栏） ====================
-
-@router.get("/projects/{project_id}/sample-fragments")
-def list_sample_fragments(project_id: str, request: Request):
-    """
-    列出本项目下抽取到的范本片段（轻量列表，不含大正文）。
-    """
-    svc = _svc(request)
-    return svc.list_sample_fragments(project_id)
-
-
-@router.get("/projects/{project_id}/sample-fragments/{fragment_id}/preview")
-def get_sample_fragment_preview(
+@router.get("/projects/{project_id}/sections/load")
+async def load_all_sections(
     project_id: str,
-    fragment_id: str,
     request: Request,
-    max_elems: int = 60,
 ):
     """
-    获取单条范本片段预览（懒加载）。
-    返回 preview_html（简化 HTML），用于前端只读展示，不跳转页面。
+    加载项目的所有章节内容
+    用于页面初始化时从数据库读取已保存的内容
+    
+    Returns:
+        {"sections": {node_id: {content_html: "...", ...}}}
     """
-    svc = _svc(request)
+    dao = TenderDAO(_get_pool(request))
+    
     try:
-        return svc.get_sample_fragment_preview(project_id=project_id, fragment_id=fragment_id, max_elems=max_elems)
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        # 获取所有章节内容
+        sections_dict = dao.get_all_section_bodies(project_id)
+        logger.info(f"[sections/load] 加载了 {len(sections_dict)} 个章节")
+        return {"sections": sections_dict}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"preview_failed: {type(e).__name__}: {str(e)}")
+        logger.error(f"[sections/load] 加载失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"加载失败: {str(e)}")
 
 
 class ApplyFormatTemplateReq(BaseModel):
@@ -989,121 +893,6 @@ async def apply_format_template(
         raise HTTPException(status_code=500, detail=f"套用格式失败: {str(e)}")
 
 
-@router.get("/files/temp")
-def get_temp_file(path: str, format: str = "pdf"):
-    """
-    获取临时文件（用于预览和下载）
-    
-    安全限制：仅允许访问 /tmp 目录下的文件
-    
-    Args:
-        path: 文件路径（必须在 /tmp 目录下）
-        format: 文件格式（pdf 或 docx）
-        
-    Returns:
-        FileResponse
-    """
-    import os
-    from fastapi.responses import FileResponse
-    
-    # ⚠️ 安全检查：仅允许 /tmp 下的文件，避免任意文件读取
-    if not path.startswith("/tmp/"):
-        raise HTTPException(status_code=400, detail="无效的临时文件路径")
-    
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="文件不存在")
-    
-    # 根据格式设置 MIME 类型
-    if format == "pdf":
-        media_type = "application/pdf"
-    else:
-        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    
-    return FileResponse(path, media_type=media_type)
-
-
-@router.get("/projects/{project_id}/directory/meta")
-def get_directory_meta(project_id: str, request: Request):
-    """
-    获取目录（带 bodyMeta）+ 套用的 format_template_id + style_hints
-    用于前端/脚本验证“套用格式”是否已持久化。
-    """
-    svc = _svc(request)
-    flat_nodes = svc.get_directory_with_body_meta(project_id)
-
-    applied_format_template_id = None
-    for n in flat_nodes:
-        meta = n.get("meta_json") or {}
-        if isinstance(meta, str):
-            try:
-                import json as _json
-                meta = _json.loads(meta)
-            except Exception:
-                meta = {}
-        if isinstance(meta, dict) and meta.get("format_template_id"):
-            applied_format_template_id = str(meta.get("format_template_id"))
-            break
-
-    style_hints = {}
-    if applied_format_template_id:
-        spec = svc.get_format_template_spec(applied_format_template_id)
-        if spec:
-            try:
-                style_hints = (spec.to_dict() or {}).get("style_hints") or {}
-            except Exception:
-                style_hints = {}
-
-    return {
-        "nodes": _serialize_directory_nodes(flat_nodes),
-        "style_hints": style_hints,
-        "applied_format_template_id": applied_format_template_id,
-    }
-
-
-@router.get("/projects/{project_id}/fragments")
-def list_fragments(project_id: str, request: Request):
-    """列出项目的所有范本片段（用于调试）"""
-    dao = TenderDAO(_get_pool(request))
-    fragments = dao.list_fragments("PROJECT", project_id)
-    return {"fragments": fragments}
-
-
-@router.put("/projects/{project_id}/directory")
-def save_directory(project_id: str, req: DirectorySaveReq, request: Request):
-    """保存目录（用户编辑后）"""
-    svc = _svc(request)
-    svc.save_directory(project_id, [n.dict() for n in req.nodes])
-    return {"ok": True}
-
-
-# 新增：模板预览和套用接口
-class TemplateDirReq(BaseModel):
-    template_asset_id: str
-
-@router.post("/projects/{project_id}/directory/preview-template")
-def preview_template_directory(project_id: str, req: TemplateDirReq, request: Request):
-    """预览模板目录（不写库），返回目录节点和样式提示"""
-    svc = _svc(request)
-    try:
-        result = svc.preview_directory_by_template(project_id, req.template_asset_id)
-        return result
-    except ValueError as e:
-        # 该接口历史上使用 template_asset_id，但前端也会传入格式模板ID（tpl_...）。
-        # 对“找不到模板”类错误返回 404，避免前端看到 500 空白错误。
-        raise HTTPException(status_code=404, detail=str(e))
-
-@router.post("/projects/{project_id}/directory/apply-template")
-def apply_template_directory(project_id: str, req: TemplateDirReq, request: Request):
-    """套用模板到目录（写库）"""
-    svc = _svc(request)
-    try:
-        n = svc.apply_template_to_directory(project_id, req.template_asset_id)
-        return {"ok": True, "count": n}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
-
 # ==================== 自定义规则（简化输入） ====================
 
 class SimpleRuleCreateReq(BaseModel):
@@ -1162,283 +951,6 @@ def create_rules_from_text_api(
     except Exception as e:
         logger.error(f"创建规则失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"创建规则失败: {str(e)}")
-
-
-# ==================== 投标响应提取 ====================
-
-@router.post("/projects/{project_id}/extract-bid-responses")
-def extract_bid_responses(
-    project_id: str,
-    bidder_name: str,
-    request: Request,
-    bg: BackgroundTasks,
-    sync: int = 0,
-    user=Depends(get_current_user_sync),
-):
-    """
-    抽取投标响应要素 (使用 V2: normalized_fields + evidence_segments)
-    
-    Args:
-        bidder_name: 投标人名称
-        sync: 同步执行模式，1=同步返回结果，0=后台任务（默认）
-    """
-    dao = TenderDAO(_get_pool(request))
-    run_id = dao.create_run(project_id, "extract_bid_responses")
-    dao.update_run(run_id, "running", progress=0.01, message=f"开始抽取投标人：{bidder_name}")
-    
-    # 检查是否同步执行
-    run_sync = sync == 1 or request.headers.get("X-Run-Sync") == "1"
-    
-    def job():
-        import asyncio
-        from app.platform.extraction.engine import ExtractionEngine
-        from app.platform.retrieval.facade import RetrievalFacade
-        from app.works.tender.bid_response_service import BidResponseService
-        
-        try:
-            pool = _get_pool(request)
-            llm = _get_llm(request)
-            engine = ExtractionEngine()
-            retriever = RetrievalFacade(pool)
-            
-            service = BidResponseService(
-                pool=pool,
-                engine=engine,
-                retriever=retriever,
-                llm=llm
-            )
-            
-            # 调用抽取服务
-            result = asyncio.run(service.extract_bid_response(
-                project_id=project_id,
-                bidder_name=bidder_name,
-                model_id=None,
-                run_id=run_id
-            ))
-            
-            # 更新运行状态
-            dao.update_run(
-                run_id, 
-                "success", 
-                progress=1.0,
-                message=f"成功抽取{result.get('added_count', 0)}条响应",
-                result_json={
-                    "bidder_name": result["bidder_name"],
-                    "total_responses": result.get("added_count", 0),
-                    "schema_version": result.get("schema_version", "v2")
-                }
-            )
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).exception(f"Extract bid responses failed: {e}")
-            dao.update_run(run_id, "failed", message=str(e))
-    
-    if run_sync:
-        # 同步执行
-        job()
-        # 返回最新状态
-        run = dao.get_run(run_id)
-        return {
-            "run_id": run_id,
-            "status": run.get("status") if run else "unknown",
-            "progress": run.get("progress") if run else 0,
-            "message": run.get("message") if run else "",
-        }
-    else:
-        # 异步执行
-        bg.add_task(job)
-        return {"run_id": run_id, "bidder_name": bidder_name}
-
-
-@router.post("/projects/{project_id}/extract-bid-responses-framework")
-async def extract_bid_responses_framework(
-    project_id: str,
-    bidder_name: str,
-    request: Request,
-    bg: BackgroundTasks,
-    sync: int = 0,
-    user=Depends(get_current_user_sync),
-):
-    """
-    使用框架式方法抽取投标响应（按维度分组批量提取）
-    
-    特性：
-    - 6次LLM调用 vs 原来52次
-    - 支持复杂对应关系
-    - 更强的语义理解
-    
-    Args:
-        bidder_name: 投标人名称
-        sync: 同步执行模式，1=同步返回结果，0=后台任务（默认）
-    """
-    dao = TenderDAO(_get_pool(request))
-    run_id = dao.create_run(project_id, "extract_bid_responses_framework")
-    dao.update_run(run_id, "running", progress=0.01, message=f"开始框架式提取：{bidder_name}")
-    
-    # 检查是否同步执行
-    run_sync = sync == 1 or request.headers.get("X-Run-Sync") == "1"
-    
-    async def job():
-        from app.platform.extraction.engine import ExtractionEngine
-        from app.platform.retrieval.facade import RetrievalFacade
-        from app.works.tender.bid_response_service import BidResponseService
-        
-        try:
-            pool = _get_pool(request)
-            llm = getattr(request.app.state, 'llm_orchestrator', None)
-            engine = ExtractionEngine()
-            retriever = RetrievalFacade(pool)
-            
-            service = BidResponseService(
-                pool=pool,
-                engine=engine,
-                retriever=retriever,
-                llm=llm
-            )
-            
-            # 调用框架式抽取服务
-            result = await service.extract_bid_response_framework(
-                project_id=project_id,
-                bidder_name=bidder_name,
-                model_id=None,
-                run_id=run_id
-            )
-            
-            # 更新运行状态
-            dao.update_run(
-                run_id, 
-                "success", 
-                progress=1.0,
-                message=f"框架式提取完成，共{result.get('added_count', 0)}条响应",
-                result_json={
-                    "bidder_name": result["bidder_name"],
-                    "total_responses": result.get("added_count", 0),
-                    "extraction_method": "framework",
-                    "schema_version": result.get("schema_version", "framework")
-                }
-            )
-            return result
-        except Exception as e:
-            logger.exception(f"Framework bid response extraction failed: {e}")
-            dao.update_run(run_id, "failed", message=str(e))
-            raise
-    
-    if run_sync:
-        # 同步执行
-        try:
-            result = await job()
-            return {
-                "run_id": run_id,
-                "status": "success",
-                "result": result
-            }
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-    else:
-        # 异步执行
-        bg.add_task(lambda: asyncio.run(job()))
-        return {"run_id": run_id, "bidder_name": bidder_name, "status": "running"}
-
-
-@router.get("/projects/{project_id}/bid-responses")
-def get_bid_responses(
-    project_id: str,
-    bidder_name: Optional[str] = None,
-    request: Request = None,
-    user=Depends(get_current_user_sync),
-):
-    """
-    获取投标响应数据
-    
-    Args:
-        project_id: 项目ID
-        bidder_name: 投标人名称（可选，不传则返回所有投标人）
-    """
-    pool = _get_pool(request)
-    
-    try:
-        import psycopg.rows
-        with pool.connection() as conn:
-            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-                if bidder_name:
-                    cur.execute("""
-                        SELECT 
-                            id,
-                            bidder_name,
-                            dimension,
-                            response_type,
-                            response_text,
-                            extracted_value_json,
-                            evidence_chunk_ids,
-                            created_at
-                        FROM tender_bid_response_items
-                        WHERE project_id = %s AND bidder_name = %s
-                        ORDER BY dimension, created_at
-                    """, (project_id, bidder_name))
-                else:
-                    cur.execute("""
-                        SELECT 
-                            id,
-                            bidder_name,
-                            dimension,
-                            response_type,
-                            response_text,
-                            extracted_value_json,
-                            evidence_chunk_ids,
-                            created_at
-                        FROM tender_bid_response_items
-                        WHERE project_id = %s
-                        ORDER BY bidder_name, dimension, created_at
-                    """, (project_id,))
-                
-                rows = cur.fetchall()
-                
-                responses = []
-                for row in rows:
-                    responses.append({
-                        "id": row['id'],
-                        "bidder_name": row['bidder_name'],
-                        "dimension": row['dimension'],
-                        "response_type": row['response_type'],
-                        "response_text": row['response_text'],
-                        "extracted_value_json": row['extracted_value_json'],
-                        "evidence_chunk_ids": row.get('evidence_chunk_ids') or [],
-                        "created_at": row['created_at'].isoformat() if row.get('created_at') else None
-                    })
-                
-                # 按维度统计
-                cur.execute("""
-                    SELECT 
-                        bidder_name,
-                        dimension,
-                        COUNT(*) as count
-                    FROM tender_bid_response_items
-                    WHERE project_id = %s
-                    """ + (" AND bidder_name = %s" if bidder_name else "") + """
-                    GROUP BY bidder_name, dimension
-                    ORDER BY bidder_name, dimension
-                """, (project_id, bidder_name) if bidder_name else (project_id,))
-                
-                stats_rows = cur.fetchall()
-                stats = [
-                    {
-                        "bidder_name": row['bidder_name'],
-                        "dimension": row['dimension'],
-                        "count": row['count']
-                    }
-                    for row in stats_rows
-                ]
-                
-                return {
-                    "count": len(responses),
-                    "responses": responses,
-                    "stats": stats
-                }
-    
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).exception(f"Get bid responses failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ==================== 审核 ====================
@@ -1694,6 +1206,7 @@ class GenerateSectionContentReq(BaseModel):
     """生成单个章节内容请求"""
     title: str = Field(..., description="章节标题")
     level: int = Field(..., description="章节层级")
+    node_id: Optional[str] = Field(None, description="节点ID（用于自动保存）")
     requirements: Optional[str] = Field(None, description="用户自定义要求")
 
 
@@ -1708,6 +1221,7 @@ async def generate_section_content(
     生成单个章节的内容
     - 根据章节标题和层级生成内容
     - 可选：传入用户自定义要求
+    - ✅ 新增：自动保存到数据库（如果提供node_id）
     """
     svc = _svc(request)
     dao = TenderDAO(_get_pool(request))
@@ -1732,7 +1246,116 @@ async def generate_section_content(
         model_id=model_id,
     )
     
-    return {"content": result.get("content", "")}
+    content = result.get("content", "")
+    
+    # ✅ 新增：自动保存到数据库（如果提供了node_id）
+    if req.node_id and content:
+        try:
+            svc.update_section_body(project_id, req.node_id, content)
+            logger.info(f"[sections/generate] 已自动保存到数据库: node_id={req.node_id}")
+        except Exception as e:
+            logger.error(f"[sections/generate] 保存失败: {e}", exc_info=True)
+            # 保存失败不影响返回生成的内容
+    
+    return {"content": content}
+
+
+@router.get("/projects/{project_id}/directory/{node_id}/template")
+async def get_node_template(
+    project_id: str,
+    node_id: str,
+    request: Request,
+):
+    """
+    获取章节的模板/示例原文
+    
+    Returns:
+        {
+            "has_template": bool,
+            "template_html": str,
+            "template_type": str,  # "table", "example", "format"
+            "source_chunks": [...]
+        }
+    """
+    dao = TenderDAO(_get_pool(request))
+    
+    # 1. 获取节点信息
+    nodes = dao.list_directory(project_id)
+    node = next((n for n in nodes if n.get("id") == node_id), None)
+    
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    # 2. 检查meta_json中是否有template_chunk_ids
+    meta_json = node.get("meta_json") or {}
+    template_chunk_ids = meta_json.get("template_chunk_ids") or []
+    
+    if not template_chunk_ids:
+        return {
+            "has_template": False,
+            "template_html": "",
+            "template_type": "",
+            "source_chunks": []
+        }
+    
+    # 3. 检索模板内容
+    from app.services.db.postgres import _get_pool
+    from app.platform.retrieval.facade import RetrievalFacade
+    
+    pool = _get_pool(request)
+    retrieval = RetrievalFacade(pool)
+    
+    try:
+        # 通过chunk_ids直接检索
+        chunks = await retrieval.retrieve_by_chunk_ids(
+            chunk_ids=template_chunk_ids,
+            project_id=project_id
+        )
+        
+        if not chunks:
+            return {
+                "has_template": False,
+                "template_html": "",
+                "template_type": "",
+                "source_chunks": []
+            }
+        
+        # 4. 合并chunk文本并转换为HTML
+        template_text = "\n\n".join([c.text for c in chunks])
+        
+        # 简单的文本到HTML转换（保留换行和格式）
+        import html
+        template_html = html.escape(template_text).replace("\n", "<br>")
+        
+        # 判断模板类型
+        template_type = "example"
+        if "表" in template_text or "|" in template_text:
+            template_type = "table"
+        elif "格式" in template_text or "模板" in template_text:
+            template_type = "format"
+        
+        return {
+            "has_template": True,
+            "template_html": template_html,
+            "template_type": template_type,
+            "source_chunks": [
+                {
+                    "chunk_id": c.chunk_id,
+                    "text": c.text[:200] + "..." if len(c.text) > 200 else c.text
+                }
+                for c in chunks
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"获取模板失败: {e}", exc_info=True)
+        return {
+            "has_template": False,
+            "template_html": "",
+            "template_type": "",
+            "source_chunks": [],
+            "error": str(e)
+        }
 
 
 @router.post("/projects/{project_id}/generate-full-content", response_model=RunOut)
@@ -1769,46 +1392,6 @@ async def generate_full_content(
 
 # ==================== 文档生成 ====================
 
-@router.get("/projects/{project_id}/docx")
-def gen_docx_get(
-    project_id: str,
-    request: Request,
-    template_asset_id: Optional[str] = None,
-):
-    """
-    生成 Word 文档（GET 请求）
-    
-    Args:
-        template_asset_id: 模板资产ID（可选，查询参数）
-    """
-    svc = _svc(request)
-    data = svc.generate_docx(project_id, template_asset_id)
-    return Response(
-        content=data,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    )
-
-@router.post("/projects/{project_id}/docx")
-def gen_docx_post(
-    project_id: str,
-    request: Request,
-    template_asset_id: Optional[str] = None,
-):
-    """
-    生成 Word 文档（POST 请求，兼容）
-    
-    Args:
-        template_asset_id: 模板资产ID（可选）
-    """
-    svc = _svc(request)
-    data = svc.generate_docx(project_id, template_asset_id)
-    return Response(
-        content=data,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    )
-
-
-# ==================== 文档生成（新接口） ====================
 
 class ExportDocxReq(BaseModel):
     format_template_id: Optional[str] = None
@@ -2345,146 +1928,6 @@ class SemanticOutlineGenerateReq(BaseModel):
     max_depth: int = 5
 
 
-@router.post("/projects/{project_id}/semantic-outline/generate")
-def generate_semantic_outline(
-    project_id: str,
-    req: SemanticOutlineGenerateReq,
-    request: Request,
-    user=Depends(get_current_user_sync),
-):
-    """
-    生成语义目录（从评分/要求推导）
-    
-    工作流：
-    1. 阶段A：从chunks抽取结构化要求项（RequirementItem）
-    2. 阶段B：用要求项合成多级目录（SemanticOutlineNode）
-    3. 阶段C：计算覆盖率、保存结果
-    
-    Returns:
-        {
-            "success": bool,
-            "message": str,
-            "result": {
-                "outline_id": str,
-                "status": "SUCCESS|LOW_COVERAGE|FAILED",
-                "outline": [...],  # 树形目录
-                "requirements": [...],  # 要求项列表
-                "diagnostics": {
-                    "coverage_rate": float,
-                    "total_req_count": int,
-                    "covered_req_count": int,
-                    ...
-                }
-            }
-        }
-    """
-    # 权限检查
-    dao = TenderDAO(_get_pool(request))
-    project = dao.get_project(project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    # 这里可以加权限检查：project["owner_id"] == user.user_id
-    
-    # 使用 works/tender/outline 的统一入口
-    from app.works.tender.outline.outline_v2_service import generate_outline_v2
-    from app.services.llm.llm_orchestrator_service import get_llm_orchestrator
-    
-    try:
-        pool = _get_pool(request)
-        llm = get_llm_orchestrator()
-        
-        result = generate_outline_v2(
-            pool=pool,
-            project_id=project_id,
-            owner_id=project.get("owner_id"),
-            mode=req.mode,
-            max_depth=req.max_depth,
-            llm_orchestrator=llm,
-        )
-        
-        return {
-            "success": True,
-            "message": "Semantic outline generated successfully",
-            "result": result,
-        }
-    except Exception as e:
-        import logging
-        logging.error(f"生成语义目录失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to generate semantic outline: {str(e)}")
-
-
-@router.get("/projects/{project_id}/semantic-outline/latest")
-def get_latest_semantic_outline(
-    project_id: str,
-    request: Request,
-    user=Depends(get_current_user_sync),
-):
-    """
-    获取项目最新的语义目录
-    
-    Returns:
-        {
-            "outline_id": str,
-            "status": str,
-            "outline": [...],  # 树形目录
-            "requirements": [...],  # 要求项列表
-            "diagnostics": {...},
-            "created_at": datetime
-        }
-    """
-    # 权限检查
-    dao = TenderDAO(_get_pool(request))
-    project = dao.get_project(project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    # 获取最新语义目录
-    svc = _svc(request)
-    result = svc.get_latest_semantic_outline(project_id)
-    
-    if not result:
-        raise HTTPException(status_code=404, detail="No semantic outline found for this project")
-    
-    return result
-
-
-@router.get("/projects/{project_id}/semantic-outline/list")
-def list_semantic_outlines(
-    project_id: str,
-    request: Request,
-    user=Depends(get_current_user_sync),
-):
-    """
-    列出项目的所有语义目录（摘要）
-    
-    Returns:
-        {
-            "outlines": [
-                {
-                    "outline_id": str,
-                    "status": str,
-                    "mode": str,
-                    "coverage_rate": float,
-                    "created_at": datetime
-                },
-                ...
-            ]
-        }
-    """
-    # 权限检查
-    dao = TenderDAO(_get_pool(request))
-    project = dao.get_project(project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    # 获取语义目录列表
-    outlines = dao.list_semantic_outlines(project_id)
-    
-    return {
-        "outlines": outlines
-    }
-
 
 # ==================== 投标文件格式/样表抽取 ====================
 
@@ -2680,3 +2123,110 @@ def get_latest_bid_templates(
 # ==================== 一键审核流水线 (P3新增) ====================
 
 # 已删除 run_full_audit 接口（改用一体化审核 unified_audit）
+
+
+# ==================== 资源访问 ====================
+
+@router.get("/projects/{project_id}/assets/image/{filename}")
+async def get_project_image(
+    project_id: str,
+    filename: str,
+):
+    """
+    获取项目上传的图片资源
+    用于在文档预览中显示图片
+    
+    注意：此接口不需要认证，因为图片通过<img>标签加载，无法携带Authorization header
+    安全性由项目ID和文件名的复杂性保证
+    """
+    import os
+    from urllib.parse import unquote
+    from fastapi.responses import FileResponse
+    
+    dao = TenderDAO(_get_pool())
+    
+    # 解码文件名
+    filename = unquote(filename)
+    
+    # 查找匹配的资源
+    with dao.pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT storage_path, mime_type
+                FROM tender_project_assets
+                WHERE project_id = %s AND filename = %s AND kind = 'image'
+                LIMIT 1
+            """, [project_id, filename])
+            
+            row = cur.fetchone()
+            
+            if not row:
+                raise HTTPException(status_code=404, detail=f"图片未找到: {filename}")
+            
+            storage_path = row['storage_path']
+            mime_type = row['mime_type'] or 'image/png'
+            
+            if not os.path.exists(storage_path):
+                raise HTTPException(status_code=404, detail=f"图片文件不存在: {filename}")
+            
+            return FileResponse(
+                storage_path,
+                media_type=mime_type,
+                headers={
+                    "Cache-Control": "public, max-age=3600",
+                    "Access-Control-Allow-Origin": "*"
+                }
+            )
+
+
+# ==================== 临时文件访问 ====================
+
+@router.get("/files/temp")
+async def serve_temp_file(
+    path: str = Query(..., description="文件路径"),
+    format: str = Query("pdf", description="文件格式（pdf/docx）"),
+):
+    """
+    提供临时文件访问
+    用于预览和下载套用格式后生成的文件
+    
+    Args:
+        path: 文件的完整路径
+        format: 文件格式（pdf或docx）
+    
+    Returns:
+        FileResponse: 文件内容
+    """
+    import os
+    from pathlib import Path
+    from urllib.parse import unquote
+    
+    try:
+        # 解码路径
+        file_path = Path(unquote(path))
+        
+        # 安全检查：确保文件在临时目录中
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="文件不存在")
+        
+        # 确定MIME类型
+        if format == "pdf":
+            media_type = "application/pdf"
+        elif format == "docx":
+            media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        else:
+            media_type = "application/octet-stream"
+        
+        # 返回文件
+        return FileResponse(
+            file_path,
+            media_type=media_type,
+            headers={
+                "Cache-Control": "no-cache",
+                "Content-Disposition": f"inline; filename={file_path.name}"
+            }
+        )
+    
+    except Exception as e:
+        logger.error(f"临时文件访问失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"文件访问失败: {str(e)}")

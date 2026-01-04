@@ -511,16 +511,16 @@ const RecordingsList: React.FC = () => {
                       >
                         💾 导出
                       </button>
+                      <button
+                        className="action-btn transcribe"
+                        onClick={() => openTranscribeDialog(recording.id)}
+                        disabled={transcribingId === recording.id}
+                      >
+                        {transcribingId === recording.id 
+                          ? '🔄 转写中...' 
+                          : (recording.transcript && recording.word_count > 0 ? '🔄 再次转写' : '📝 转写')}
+                      </button>
                     </>
-                  )}
-                  {(!recording.transcript || recording.word_count === 0) && recording.keep_audio && (
-                    <button
-                      className="action-btn transcribe"
-                      onClick={() => openTranscribeDialog(recording.id)}
-                      disabled={transcribingId === recording.id}
-                    >
-                      {transcribingId === recording.id ? '🔄 转写中...' : '📝 转写'}
-                    </button>
                   )}
                   {recording.transcript && recording.word_count > 0 && (
                     <>
@@ -538,12 +538,12 @@ const RecordingsList: React.FC = () => {
                       </button>
                     </>
                   )}
-                  {recording.import_status === 'pending' && recording.transcript && recording.word_count > 0 && (
+                  {recording.transcript && recording.word_count > 0 && (
                     <button
                       className="action-btn import"
                       onClick={() => openImportWizard(recording)}
                     >
-                      📥 导入知识库
+                      {recording.import_status === 'imported' ? '🔄 重新导入' : '📥 导入知识库'}
                     </button>
                   )}
                   <button

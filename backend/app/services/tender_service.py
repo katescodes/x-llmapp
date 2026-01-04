@@ -545,6 +545,32 @@ class TenderService:
             storage_path: Optional[str] = None
             doc_version_id = None  # 新增：DocStore 版本ID
             tpl_meta = {}  # 初始化 meta_json
+            
+            # ✅ 检测是否为图片文件
+            file_ext = filename.lower().split('.')[-1] if '.' in filename else ''
+            image_exts = {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff', 'svg'}
+            is_image = file_ext in image_exts
+            
+            # ✅ 如果是图片文件，只保存不入库向量
+            if is_image:
+                storage_path = os.path.join(base_dir, f"{kind}_{uuid.uuid4().hex}_{filename}")
+                with open(storage_path, "wb") as w:
+                    w.write(b)
+                
+                # 创建资产记录（不入库向量）
+                asset = self.dao.create_asset(
+                    project_id=project_id,
+                    kind=kind,
+                    filename=filename,
+                    storage_path=storage_path,
+                    file_size=size,
+                    mime_type=mime,
+                    kb_doc_id=None,
+                    bidder_name=bidder_name,
+                    meta_json={"asset_type": "image", "skip_ingest": True}
+                )
+                assets_out.append(asset)
+                continue  # 跳过后续的入库流程
 
             if kind == "template":
                 # 模板文件：保存到磁盘
@@ -600,6 +626,7 @@ class TenderService:
                     doc_type=kb_category,  # 使用映射后的知识库分类
                     owner_id=proj.get("owner_id"),
                     storage_path=storage_path,
+                    kb_id=kb_id,  # ✅ 传递 kb_id
                 )
                 
                 # 新入库成功

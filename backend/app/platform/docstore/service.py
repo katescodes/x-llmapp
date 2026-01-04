@@ -48,7 +48,8 @@ class DocStoreService:
         self,
         namespace: str,
         doc_type: str,
-        owner_id: Optional[str] = None
+        owner_id: Optional[str] = None,
+        meta_json: Optional[Dict[str, Any]] = None  # ✅ 新增参数
     ) -> str:
         """
         创建文档（逻辑文档）
@@ -57,6 +58,7 @@ class DocStoreService:
             namespace: 业务命名空间，如 "tender"
             doc_type: 文档类型，如 "tender", "bid", "template", "custom_rule"
             owner_id: 文档所有者ID
+            meta_json: 元数据（可选），如 {"kb_id": "xxx"}
             
         Returns:
             document_id: 文档ID
@@ -64,13 +66,17 @@ class DocStoreService:
         doc_id = _doc_id()
         
         sql = """
-            INSERT INTO documents (id, namespace, doc_type, owner_id, created_at)
-            VALUES (%s, %s, %s, %s, now())
+            INSERT INTO documents (id, namespace, doc_type, owner_id, created_at, meta_json)
+            VALUES (%s, %s, %s, %s, now(), %s)
         """
+        
+        # 将meta_json转为JSON字符串
+        import json
+        meta_json_str = json.dumps(meta_json) if meta_json else '{}'
         
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(sql, (doc_id, namespace, doc_type, owner_id))
+                cur.execute(sql, (doc_id, namespace, doc_type, owner_id, meta_json_str))
         
         return doc_id
 
@@ -149,11 +155,14 @@ class DocStoreService:
                     import json
                     meta_json_str = json.dumps(seg.get("meta_json", {}))
                     
+                    # 过滤掉NUL字符（PostgreSQL不支持）
+                    content_text = seg.get("content_text", "").replace('\x00', '')
+                    
                     cur.execute(sql, (
                         seg_id,
                         doc_version_id,
                         seg.get("segment_no", 0),
-                        seg.get("content_text", ""),
+                        content_text,
                         meta_json_str,
                         seg.get("page_start"),
                         seg.get("page_end"),

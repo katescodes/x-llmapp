@@ -236,6 +236,29 @@ export default function DeclareWorkspaceV2() {
     loadProjects();
   }, []);
 
+  // ✅ 监听 activeStep 变化，重新加载 assets
+  useEffect(() => {
+    const reloadAssets = async () => {
+      if (currentProject && activeStep === 2) {
+        try {
+          const result = await declareApi.listAssets(currentProject.project_id);
+          if (result && result.assets) {
+            setAssets(result.assets);
+            
+            // 筛选申报通知文件
+            const notices = result.assets.filter((a: DeclareAsset) => a.kind === 'notice');
+            setNoticeAssets(notices);
+            
+            console.log('[DeclareWorkspace] Step2: 重新加载资产列表, 申报通知数量:', notices.length);
+          }
+        } catch (err: any) {
+          console.error('[DeclareWorkspace] 重新加载资产失败:', err);
+        }
+      }
+    };
+    reloadAssets();
+  }, [activeStep, currentProject]);
+
   const loadProjects = async () => {
     try {
       console.log('[DeclareWorkspace] 加载项目列表...');
@@ -703,15 +726,21 @@ export default function DeclareWorkspaceV2() {
 
     setExporting(true);
     try {
-      // 下载文件
-      const response = await fetch(`/api/declare/projects/${currentProject.project_id}/export/docx`, {
+      const token = localStorage.getItem('auth_token');
+      if (!token) {
+        showToast('error', '未登录，请先登录');
+        return;
+      }
+
+      const response = await fetch(`/api/apps/declare/projects/${currentProject.project_id}/export/docx`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Authorization': `Bearer ${token}`,
         },
       });
       
       if (!response.ok) {
-        throw new Error('导出失败');
+        const errorText = await response.text();
+        throw new Error(`导出失败: ${response.status} - ${response.statusText}`);
       }
       
       const blob = await response.blob();
@@ -1323,9 +1352,9 @@ export default function DeclareWorkspaceV2() {
               {/* 工作区内容 */}
               <div className="kb-detail" style={{ padding: activeStep === 3 ? '0' : '24px', height: 'calc(100vh - 180px)', overflow: 'auto' }}>
                 {/* Step1: 上传文档（新样式） */}
-                {activeStep === 1 && (
+                <div style={{ display: activeStep === 1 ? 'block' : 'none' }}>
                   <DeclareUserDocumentsPage projectId={currentProject.project_id} />
-                )}
+                </div>
 
                 {/* Step1: 上传文档（旧版本，已废弃） */}
                 {false && activeStep === 1 && (
@@ -1678,84 +1707,82 @@ export default function DeclareWorkspaceV2() {
                 )}
 
                 {/* Step3: AI生成（使用统一的DocumentComponentManagement组件）*/}
-                {activeStep === 3 && (
-                  <div style={{ 
-                    height: '100%',
-                    display: 'flex', 
-                    flexDirection: 'column',
-                    overflow: 'hidden'
-                  }}>
-                    <h3 style={{ marginBottom: '20px', color: '#e2e8f0', flexShrink: 0 }}>🤖 AI生成申报书内容</h3>
-                    
-                    {directoryVersions && directoryVersions.length > 0 ? (
-                      <div style={{ 
-                        flex: 1,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        overflow: 'hidden',
-                        gap: '16px'
-                      }}>
-                        {/* 项目类型选择器 */}
-                        {directoryVersions.length > 1 && (
-                          <div style={{
-                            flexShrink: 0,
-                            padding: '12px 16px',
-                            background: 'rgba(59, 130, 246, 0.1)',
-                            border: '1px solid rgba(59, 130, 246, 0.3)',
-                            borderRadius: '8px',
-                          }}>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '12px', color: '#e2e8f0', fontSize: '14px' }}>
-                              <span style={{ fontWeight: 600 }}>📂 选择项目类型：</span>
-                              <select
-                                value={selectedProjectType || ''}
-                                onChange={(e) => setSelectedProjectType(e.target.value)}
-                                style={{
-                                  flex: 1,
-                                  padding: '8px 12px',
-                                  background: 'rgba(30, 41, 59, 0.8)',
-                                  color: '#e2e8f0',
-                                  border: '1px solid rgba(148, 163, 184, 0.3)',
-                                  borderRadius: '6px',
-                                  fontSize: '14px',
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                {directoryVersions.map((v: any) => (
-                                  <option key={v.version_id} value={v.project_type}>
-                                    {v.project_type}
-                                    {v.project_description ? ` - ${v.project_description}` : ''}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                          </div>
-                        )}
-                        
-                        {/* 文档生成界面 */}
-                        {selectedProjectType && directoryVersions.find((v: any) => v.project_type === selectedProjectType) && (
-                          <div style={{ 
-                            flex: 1,
-                            position: 'relative',
-                            overflow: 'hidden'
-                          }}>
-                            <DocumentComponentManagement
-                              embedded={true}
-                              initialDirectory={
-                                directoryVersions.find((v: any) => v.project_type === selectedProjectType)?.nodes || []
-                              }
-                              projectId={currentProject?.project_id}
-                              moduleType="declare"
-                            />
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="kb-empty">
-                        请先在"提取信息"步骤中生成申报目录
-                      </div>
-                    )}
-                  </div>
-                )}
+                <div style={{ 
+                  display: activeStep === 3 ? 'flex' : 'none',
+                  height: '100%',
+                  flexDirection: 'column',
+                  overflow: 'hidden'
+                }}>
+                  <h3 style={{ marginBottom: '20px', color: '#e2e8f0', flexShrink: 0 }}>🤖 AI生成申报书内容</h3>
+                  
+                  {directoryVersions && directoryVersions.length > 0 ? (
+                    <div style={{ 
+                      flex: 1,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      overflow: 'hidden',
+                      gap: '16px'
+                    }}>
+                      {/* 项目类型选择器 */}
+                      {directoryVersions.length > 1 && (
+                        <div style={{
+                          flexShrink: 0,
+                          padding: '12px 16px',
+                          background: 'rgba(59, 130, 246, 0.1)',
+                          border: '1px solid rgba(59, 130, 246, 0.3)',
+                          borderRadius: '8px',
+                        }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '12px', color: '#e2e8f0', fontSize: '14px' }}>
+                            <span style={{ fontWeight: 600 }}>📂 选择项目类型：</span>
+                            <select
+                              value={selectedProjectType || ''}
+                              onChange={(e) => setSelectedProjectType(e.target.value)}
+                              style={{
+                                flex: 1,
+                                padding: '8px 12px',
+                                background: 'rgba(30, 41, 59, 0.8)',
+                                color: '#e2e8f0',
+                                border: '1px solid rgba(148, 163, 184, 0.3)',
+                                borderRadius: '6px',
+                                fontSize: '14px',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {directoryVersions.map((v: any) => (
+                                <option key={v.version_id} value={v.project_type}>
+                                  {v.project_type}
+                                  {v.project_description ? ` - ${v.project_description}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                      )}
+                      
+                      {/* 文档生成界面 */}
+                      {selectedProjectType && directoryVersions.find((v: any) => v.project_type === selectedProjectType) && (
+                        <div style={{ 
+                          flex: 1,
+                          position: 'relative',
+                          overflow: 'hidden'
+                        }}>
+                          <DocumentComponentManagement
+                            embedded={true}
+                            initialDirectory={
+                              directoryVersions.find((v: any) => v.project_type === selectedProjectType)?.nodes || []
+                            }
+                            projectId={currentProject?.project_id}
+                            moduleType="declare"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="kb-empty">
+                      请先在"提取信息"步骤中生成申报目录
+                    </div>
+                  )}
+                </div>
 
               </div>
             </>

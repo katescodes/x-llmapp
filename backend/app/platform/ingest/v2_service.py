@@ -50,6 +50,7 @@ class IngestV2Service:
         doc_type: str,
         owner_id: Optional[str] = None,
         storage_path: Optional[str] = None,
+        kb_id: Optional[str] = None,  # ✅ 新增 kb_id 参数
     ) -> IngestV2Result:
         """
         新入库流程
@@ -62,15 +63,16 @@ class IngestV2Service:
             doc_type: 文档类型 (tender/bid/etc)
             owner_id: 所有者 ID
             storage_path: 存储路径
+            kb_id: 知识库ID (用于检索)  # ✅ 新增说明
             
         Returns:
             IngestV2Result
         """
-        logger.info(f"IngestV2 start asset_id={asset_id} filename={filename} doc_type={doc_type}")
+        logger.info(f"IngestV2 start asset_id={asset_id} filename={filename} doc_type={doc_type} kb_id={kb_id}")
         
         # 1. 确保 DocStore document/version 存在
         doc_version_id = await self._ensure_doc_version(
-            asset_id, file_bytes, filename, doc_type, owner_id, storage_path
+            asset_id, file_bytes, filename, doc_type, owner_id, storage_path, kb_id  # ✅ 传递 kb_id
         )
         
         # 2. 解析文件
@@ -139,13 +141,20 @@ class IngestV2Service:
         doc_type: str,
         owner_id: Optional[str],
         storage_path: Optional[str],
+        kb_id: Optional[str] = None,  # ✅ 新增 kb_id 参数
     ) -> str:
         """确保 document 和 version 存在，返回 doc_version_id"""
+        # 构建meta_json，包含kb_id
+        meta_json = {}
+        if kb_id:
+            meta_json["kb_id"] = kb_id  # ✅ 存储kb_id到meta_json
+        
         # 幂等创建 document
         document_id = self.docstore.create_document(
             namespace="tender",
             doc_type=doc_type,
             owner_id=owner_id,
+            meta_json=meta_json,  # ✅ 传递meta_json
         )
         
         # 幂等创建 version
@@ -292,10 +301,10 @@ class IngestV2Service:
                 logger.error(f"Embedding mismatch: expected {len(texts)}, got {len(vectors)}")
                 return 0
             
-            # 映射 doc_type 为统一类型（tender/bid）
+            # 映射 doc_type 为统一类型（tender/bid/declare）
             # documents 表的 doc_type -> Milvus 统一类型
-            normalized_doc_type = self._normalize_doc_type(doc_type)
-            logger.info(f"IngestV2 Milvus: doc_type={doc_type} -> normalized={normalized_doc_type}")
+            normalized_doc_type = self._normalize_doc_type(doc_type, project_id)
+            logger.info(f"IngestV2 Milvus: doc_type={doc_type} project_id={project_id} -> normalized={normalized_doc_type}")
             
             # 准备 Milvus 数据
             milvus_data = []
@@ -326,17 +335,52 @@ class IngestV2Service:
             logger.error(f"Failed to write Milvus: {e}", exc_info=True)
             return 0
     
-    def _normalize_doc_type(self, doc_type: str) -> str:
+    def _normalize_doc_type(self, doc_type: str, project_id: str) -> str:
         """
-        将 documents 表的 doc_type 映射为统一类型
+        将 documents 表的 doc_type 映射为 Milvus 统一类型
         
-        映射规则:
-        - tender_notice, tender_doc, tender_attachment -> tender
-        - bid_document, bid_attachment -> bid
-        - declare_notice, declare_company, declare_tech -> declare
-        - 其他 -> other
+        映射规则（根据 project_id 前缀判断归属）:
+        - project_id 以 "declare_proj_" 开头 -> 申报书项目
+          - declare_notice -> declare_notice
+          - 其他 -> declare
+        - project_id 以 "tp_" 开头 -> 招投标项目
+          - tender_notice, tender_* -> tender
+          - bid_* -> bid
+          - 其他（company_profile, tech_doc 等）-> tender（归属招投标）
+        - 默认根据关键词判断
         """
         doc_type_lower = doc_type.lower()
+        
+        # ✅ 根据 project_id 前缀判断项目类型
+        is_declare_project = project_id.startswith("declare_proj_")
+        is_tender_project = project_id.startswith("tp_")
+        
+        # 申报书项目的文档
+        if is_declare_project:
+            # 申报通知
+            if doc_type_lower == "declare_notice":
+                return "declare_notice"
+            # 其他申报文档（包括 general_doc, technical_material 等）
+            else:
+                return "declare"
+        
+        # 招投标项目的文档
+        if is_tender_project:
+            # 投标文档
+            if any(kw in doc_type_lower for kw in ["bid", "投标"]):
+                return "bid"
+            # 其他招投标文档（包括 tender_notice, company_profile, tech_doc 等）
+            else:
+                return "tender"
+        
+        # 兜底逻辑：根据关键词判断
+        # 申报通知
+        if doc_type_lower == "declare_notice":
+            return "declare_notice"
+        
+        # 申报类文档
+        if any(kw in doc_type_lower for kw in ["declare", "申报"]):
+            return "declare"
         
         # 招标类
         if any(kw in doc_type_lower for kw in ["tender", "招标"]):
@@ -346,11 +390,14 @@ class IngestV2Service:
         if any(kw in doc_type_lower for kw in ["bid", "投标"]):
             return "bid"
         
-        # 申报类
-        if any(kw in doc_type_lower for kw in ["declare", "申报"]):
+        # 默认（根据项目类型推断）
+        if is_declare_project:
+            logger.warning(f"Unknown doc_type for declare project: {doc_type}, defaulting to 'declare'")
             return "declare"
-        
-        # 默认
-        logger.warning(f"Unknown doc_type: {doc_type}, defaulting to 'other'")
-        return "other"
+        elif is_tender_project:
+            logger.warning(f"Unknown doc_type for tender project: {doc_type}, defaulting to 'tender'")
+            return "tender"
+        else:
+            logger.warning(f"Unknown doc_type and project_id: doc_type={doc_type}, project_id={project_id}, defaulting to 'other'")
+            return "other"
 

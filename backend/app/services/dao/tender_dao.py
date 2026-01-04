@@ -105,7 +105,7 @@ class TenderDAO:
     def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
         """获取项目信息"""
         return self._fetchone(
-            "SELECT id, kb_id, name, description, created_at FROM tender_projects WHERE id=%s",
+            "SELECT project_id, kb_id, name, description, created_at FROM tender_projects WHERE project_id=%s",
             (project_id,),
         )
 
@@ -114,20 +114,20 @@ class TenderDAO:
         pid = _id("tp")
         row = self._fetchone(
             """
-            INSERT INTO tender_projects (id, kb_id, name, description, owner_id, created_at)
+            INSERT INTO tender_projects (project_id, kb_id, name, description, owner_id, created_at)
             VALUES (%s, %s, %s, %s, %s, NOW())
-            RETURNING id, kb_id, name, description, owner_id, created_at
+            RETURNING project_id, kb_id, name, description, owner_id, created_at
             """,
             (pid, kb_id, name, description, owner_id),
         )
-        return row or {"id": pid, "kb_id": kb_id, "name": name, "description": description, "owner_id": owner_id}
+        return row or {"project_id": pid, "kb_id": kb_id, "name": name, "description": description, "owner_id": owner_id}
 
     def list_projects(self, owner_id: Optional[str]) -> List[Dict[str, Any]]:
         """列出项目（按owner_id过滤）"""
         if owner_id:
             return self._fetchall(
                 """
-                SELECT id, kb_id, name, description, owner_id, created_at
+                SELECT project_id, kb_id, name, description, owner_id, created_at
                 FROM tender_projects
                 WHERE owner_id=%s
                 ORDER BY created_at DESC
@@ -136,7 +136,7 @@ class TenderDAO:
             )
         return self._fetchall(
             """
-            SELECT id, kb_id, name, description, owner_id, created_at
+            SELECT project_id, kb_id, name, description, owner_id, created_at
             FROM tender_projects
             ORDER BY created_at DESC
             """,
@@ -162,7 +162,7 @@ class TenderDAO:
             return self.get_project(project_id) or {}
         
         # updated_at 会由触发器自动更新
-        sql = f"UPDATE tender_projects SET {', '.join(updates)} WHERE id=%s RETURNING *"
+        sql = f"UPDATE tender_projects SET {', '.join(updates)} WHERE project_id=%s RETURNING *"
         params.append(project_id)
         
         row = self._fetchone(sql, tuple(params))
@@ -171,7 +171,7 @@ class TenderDAO:
     def delete_project(self, project_id: str) -> None:
         """删除项目（级联删除由外键约束处理）"""
         self._execute(
-            "DELETE FROM tender_projects WHERE id=%s",
+            "DELETE FROM tender_projects WHERE project_id=%s",
             (project_id,),
         )
 
@@ -413,12 +413,15 @@ class TenderDAO:
             evidence = n.get("evidence_chunk_ids") or []
             notes = n.get("notes") or (n.get("meta_json") or {}).get("notes") or ""
             volume = (n.get("volume") or (n.get("meta_json") or {}).get("volume") or "").strip()
+            template_chunks = n.get("template_chunk_ids") or (n.get("meta_json") or {}).get("template_chunk_ids") or []
 
             meta = dict(n.get("meta_json") or {})
             if notes:
                 meta["notes"] = notes
             if volume:
                 meta["volume"] = volume
+            if template_chunks:
+                meta["template_chunk_ids"] = list(template_chunks)
 
             norm.append({
                 "raw": n,
@@ -1536,6 +1539,16 @@ class TenderDAO:
             """,
             (project_id,),
         )
+    
+    def get_all_section_bodies(self, project_id: str) -> Dict[str, Dict[str, Any]]:
+        """
+        获取项目的所有章节正文（返回字典格式，便于前端使用）
+        
+        Returns:
+            Dict[node_id -> {content_html, content_json, ...}]
+        """
+        sections = self.list_section_bodies(project_id)
+        return {section['node_id']: section for section in sections}
     
     def delete_section_body(self, project_id: str, node_id: str):
         """删除章节正文"""

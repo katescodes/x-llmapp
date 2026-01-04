@@ -148,7 +148,17 @@ export async function uploadAssets(
     formData.append('files', file);
   });
   
-  return api.post(`/api/apps/declare/projects/${projectId}/assets/import`, formData);
+  const url = `/api/apps/declare/projects/${projectId}/assets/import`;
+  console.log('[declareApi.uploadAssets] 调用API:', { url, kind, fileCount: files.length });
+  
+  try {
+    const result = await api.post(url, formData);
+    console.log('[declareApi.uploadAssets] API响应:', result);
+    return result;
+  } catch (err) {
+    console.error('[declareApi.uploadAssets] API失败:', err);
+    throw err;
+  }
 }
 
 /**
@@ -264,6 +274,13 @@ export async function generateDocument(
   const { sync = 0 } = options;
   const query = `?sync=${sync}`;
   return api.post(`/api/apps/declare/projects/${projectId}/document/generate${query}`, {});
+}
+
+/**
+ * 删除资产
+ */
+export async function deleteAsset(projectId: string, assetId: string): Promise<void> {
+  await api.delete(`/api/apps/declare/projects/${projectId}/assets/${assetId}`);
 }
 
 /**

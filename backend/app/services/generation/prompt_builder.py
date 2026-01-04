@@ -262,6 +262,17 @@ class PromptBuilder:
         has_requirements = context.requirements is not None
         has_materials = context.retrieval_result and context.retrieval_result.has_relevant
         
+        # 🔍 DEBUG: 检查检索结果
+        logger.info(f"[PromptBuilder DEBUG] has_materials={has_materials}")
+        if context.retrieval_result:
+            logger.info(f"[PromptBuilder DEBUG] chunks数量={len(context.retrieval_result.chunks)}")
+            logger.info(f"[PromptBuilder DEBUG] has_relevant={context.retrieval_result.has_relevant}")
+        
+        # 提取章节说明（notes）
+        section_notes = ""
+        if context.section_metadata and isinstance(context.section_metadata, dict):
+            section_notes = context.section_metadata.get("notes", "")
+        
         requirements_text = ""
         if has_requirements:
             requirements_text = self._format_requirements(context.requirements)
@@ -269,14 +280,27 @@ class PromptBuilder:
         materials_text = ""
         if has_materials:
             materials_text = context.retrieval_result.format_for_prompt()
+            # 🔍 DEBUG: 检查格式化后的内容
+            logger.info(f"[PromptBuilder DEBUG] materials_text长度={len(materials_text)}")
+            logger.info(f"[PromptBuilder DEBUG] materials_text预览={materials_text[:300]}")
+        
+        # 检测是否有图片信息
+        has_images = False
+        if has_materials and context.retrieval_result.chunks:
+            for chunk in context.retrieval_result.chunks:
+                metadata = chunk.get("metadata", {})
+                if metadata.get("asset_type") == "image" or "图片" in chunk.get("text", ""):
+                    has_images = True
+                    break
         
         template_context = {
             "section_title": context.section_title,
+            "section_notes": section_notes,  # ✅ 新增
             "has_requirements": has_requirements,
             "requirements": requirements_text,
             "has_materials": has_materials,
             "materials": materials_text,
-            "has_images": False,  # TODO: 检测是否有图片
+            "has_images": has_images,
             "example_confidence": "HIGH/MEDIUM/LOW"
         }
         
@@ -289,6 +313,11 @@ class PromptBuilder:
                 f"【章节标题】{context.section_title}",
                 ""
             ]
+            
+            if section_notes:  # ✅ 新增
+                parts.append("【章节说明】")
+                parts.append(section_notes)
+                parts.append("")
             
             if has_requirements:
                 parts.append("【申报要求】")
@@ -315,7 +344,7 @@ class PromptBuilder:
             
             parts.append("")
             parts.append("【输出要求】")
-            parts.append("1. 输出完整的申报书章节内容（Markdown格式）")
+            parts.append("1. 输出完整的申报书章节内容（HTML格式）")
             parts.append("2. 内容必须完整、专业、符合评审标准")
             parts.append("3. 结构清晰，逻辑严密，语言规范")
             parts.append("4. 不要输出章节标题，只输出正文内容")

@@ -243,7 +243,16 @@ class DeclareExtractV2Service:
             document_type="declare",
             requirements=requirements_dict
         )
-        retrieval_result = await retriever.retrieve(retrieval_context, top_k=5)
+        retrieval_result = await retriever.retrieve(retrieval_context, top_k=10)
+        
+        # 🔍 DEBUG: 检查检索结果
+        logger.info(f"[DEBUG] 检索结果: {len(retrieval_result.chunks)} 个chunk")
+        if retrieval_result.chunks:
+            first_chunk = retrieval_result.chunks[0]
+            logger.info(f"[DEBUG] 第一个chunk内容: {first_chunk.get('text', '')[:200]}")
+            logger.info(f"[DEBUG] has_relevant: {retrieval_result.has_relevant}")
+        else:
+            logger.warning(f"[DEBUG] ⚠️  检索结果为空！")
         
         # Step 3: 构建Prompt（使用统一组件）
         prompt_builder = PromptBuilder()

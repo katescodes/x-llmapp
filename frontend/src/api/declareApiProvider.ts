@@ -21,6 +21,7 @@ export const {
   getProject,
   uploadAssets,
   listAssets,
+  deleteAsset,
   extractRequirements,
   getRequirements,
   generateDirectory,

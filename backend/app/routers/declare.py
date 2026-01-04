@@ -249,6 +249,18 @@ def list_assets(project_id: str, kind: Optional[str] = None, user=Depends(get_cu
     return {"assets": assets}
 
 
+@router.delete("/projects/{project_id}/assets/{asset_id}")
+def delete_asset(
+    project_id: str,
+    asset_id: str,
+    user=Depends(get_current_user_sync)
+):
+    """删除资产"""
+    dao = _get_dao()
+    dao.delete_asset(asset_id)
+    return {"success": True}
+
+
 # ==================== Requirements ====================
 
 @router.post("/projects/{project_id}/extract/requirements", response_model=RunOut)
@@ -402,6 +414,7 @@ async def generate_section_content(
     class GenerateSectionRequest(BaseModel):
         title: str
         level: int
+        node_id: Optional[str] = None  # ✅ 新增：节点ID
         requirements: Optional[str] = None
     
     body = await req.json()
@@ -443,9 +456,159 @@ async def generate_section_content(
     else:
         content = ""
     
-    logger.info(f"[sections/generate] 返回内容长度: {len(content)}")
+    logger.info(f"[sections/generate] 生成内容长度: {len(content)}, node_id={request_data.node_id}")
+    
+    # ✅ 新增：自动保存到数据库（如果提供了node_id）
+    if request_data.node_id and content:
+        try:
+            section_id = dao.save_section(
+                project_id=project_id,
+                node_id=request_data.node_id,
+                node_title=request_data.title,
+                content_html=content,  # content_md实际上是HTML格式
+                content_md=None,
+                evidence_chunk_ids=result.get("evidence_chunk_ids"),
+                retrieval_trace=result.get("retrieval_trace"),
+            )
+            logger.info(f"[sections/generate] 已保存到数据库: section_id={section_id}")
+        except Exception as e:
+            logger.error(f"[sections/generate] 保存失败: {e}", exc_info=True)
+            # 保存失败不影响返回生成的内容
     
     return {"content": content}
+
+
+@router.post("/projects/{project_id}/sections/save")
+async def save_section_content(
+    project_id: str,
+    req: Request,
+    user=Depends(get_current_user),
+):
+    """
+    保存章节内容到数据库
+    用于手动编辑后的保存
+    """
+    from pydantic import BaseModel
+    
+    class SaveSectionRequest(BaseModel):
+        node_id: str
+        node_title: str
+        content_html: str
+        content_md: Optional[str] = None
+    
+    body = await req.json()
+    request_data = SaveSectionRequest(**body)
+    
+    dao = _get_dao()
+    
+    try:
+        section_id = dao.save_section(
+            project_id=project_id,
+            node_id=request_data.node_id,
+            node_title=request_data.node_title,
+            content_html=request_data.content_html,
+            content_md=request_data.content_md,
+        )
+        logger.info(f"[sections/save] 保存成功: section_id={section_id}")
+        return {"success": True, "section_id": section_id}
+    except Exception as e:
+        logger.error(f"[sections/save] 保存失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"保存失败: {str(e)}")
+
+
+@router.get("/projects/{project_id}/sections/load")
+async def load_all_sections(
+    project_id: str,
+    user=Depends(get_current_user),
+):
+    """
+    加载项目的所有章节内容
+    返回格式: {node_id: {content_html: "...", content_md: "...", ...}}
+    """
+    dao = _get_dao()
+    
+    try:
+        sections_dict = dao.get_all_sections(project_id)
+        logger.info(f"[sections/load] 加载了 {len(sections_dict)} 个章节")
+        return {"sections": sections_dict}
+    except Exception as e:
+        logger.error(f"[sections/load] 加载失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"加载失败: {str(e)}")
+
+
+@router.get("/projects/{project_id}/sections/{node_id}")
+async def get_section_content(
+    project_id: str,
+    node_id: str,
+    user=Depends(get_current_user),
+):
+    """
+    获取单个节点的章节内容
+    """
+    dao = _get_dao()
+    
+    try:
+        section = dao.get_section(project_id, node_id)
+        if not section:
+            return {"section": None}
+        return {"section": section}
+    except Exception as e:
+        logger.error(f"[sections/get] 获取失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
+
+
+# ==================== Assets ====================
+
+@router.get("/projects/{project_id}/assets/image/{filename}")
+async def get_project_image(
+    project_id: str,
+    filename: str,
+):
+    """
+    获取项目上传的图片资源
+    用于在文档预览中显示图片
+    
+    注意：此接口不需要认证，因为图片通过<img>标签加载，无法携带Authorization header
+    安全性由项目ID和文件名的复杂性保证
+    """
+    import os
+    from urllib.parse import unquote
+    from fastapi.responses import FileResponse
+    
+    dao = _get_dao()
+    
+    # 解码文件名
+    filename = unquote(filename)
+    
+    # 查找匹配的资源
+    with dao.pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT storage_path, mime_type
+                FROM declare_assets
+                WHERE project_id = %s AND filename = %s AND asset_type = 'image'
+                LIMIT 1
+            """, [project_id, filename])
+            
+            row = cur.fetchone()
+            
+            if not row:
+                raise HTTPException(status_code=404, detail=f"图片未找到: {filename}")
+            
+            storage_path = row['storage_path']
+            mime_type = row['mime_type'] or 'image/png'
+            
+            if not os.path.exists(storage_path):
+                raise HTTPException(status_code=404, detail=f"图片文件不存在: {filename}")
+            
+            return FileResponse(
+                storage_path,
+                media_type=mime_type,
+                headers={
+                    "Cache-Control": "public, max-age=3600",
+                    "Access-Control-Allow-Origin": "*"
+                }
+            )
 
 
 # ==================== Document ====================
@@ -490,22 +653,156 @@ async def generate_document(
 
 
 @router.get("/projects/{project_id}/export/docx")
-def export_docx(project_id: str, user=Depends(get_current_user_sync)):
-    """导出 DOCX"""
+async def export_docx(project_id: str, user=Depends(get_current_user_sync)):
+    """导出申报书为 Word 文档"""
+    from docx import Document
+    from docx.shared import Pt
+    from io import BytesIO
+    import tempfile
+    from pathlib import Path
+    
     dao = _get_dao()
-    document = dao.get_latest_document(project_id)
     
-    if not document:
-        raise HTTPException(status_code=404, detail="No document found")
+    # 1. 获取项目信息
+    project = dao.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
     
-    storage_path = document.get("storage_path")
-    filename = document.get("filename")
+    project_name = project.get("project_name", "申报书")
     
-    if not storage_path or not os.path.exists(storage_path):
-        raise HTTPException(status_code=404, detail="Document file not found")
+    # 2. 获取目录节点（最新版本）
+    with dao.pool.connection() as conn:
+        with conn.cursor() as cur:
+            # 获取最新的目录版本
+            cur.execute("""
+                SELECT version_id 
+                FROM declare_directory_versions 
+                WHERE project_id = %s AND is_active = true 
+                ORDER BY created_at DESC 
+                LIMIT 1
+            """, [project_id])
+            version_row = cur.fetchone()
+            
+            if not version_row:
+                raise HTTPException(status_code=404, detail="No directory found")
+            
+            version_id = version_row['version_id']
+            
+            # 获取该版本的所有目录节点，按 order_no 排序
+            cur.execute("""
+                SELECT id, title, level, order_no, parent_id, meta_json
+                FROM declare_directory_nodes
+                WHERE version_id = %s
+                ORDER BY order_no
+            """, [version_id])
+            nodes = cur.fetchall()
     
+    if not nodes:
+        raise HTTPException(status_code=404, detail="No directory nodes found")
+    
+    # ✅ 从 meta_json 中提取 notes 到顶层（便于后续使用）
+    for node in nodes:
+        meta_json = node.get('meta_json')
+        if isinstance(meta_json, dict) and 'notes' in meta_json:
+            node['notes'] = meta_json['notes']
+        else:
+            node['notes'] = None
+    
+    # 3. 获取所有章节内容（使用最新版本的sections）
+    sections_dict = {}
+    with dao.pool.connection() as conn:
+        with conn.cursor() as cur:
+            for node in nodes:
+                cur.execute("""
+                    SELECT content_html
+                    FROM declare_sections
+                    WHERE project_id = %s AND node_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, [project_id, node['id']])
+                section_row = cur.fetchone()
+                if section_row and section_row['content_html']:
+                    sections_dict[node['id']] = section_row['content_html']
+    
+    # 4. 创建 Word 文档
+    doc = Document()
+    
+    # 设置文档默认字体
+    style = doc.styles['Normal']
+    style.font.name = '宋体'
+    style.font.size = Pt(12)
+    
+    # 5. 按目录顺序写入内容
+    for node in nodes:
+        node_id = node['id']
+        title = node['title']
+        level = node['level']
+        
+        # 5.1 添加标题
+        heading_level = min(max(level, 1), 9)  # Word 支持 1-9 级标题
+        doc.add_heading(title, level=heading_level)
+        
+        # 5.2 添加正文内容
+        content = sections_dict.get(node_id, "")
+        
+        if content:
+            # 将 HTML 内容转换为纯文本（简单处理）
+            # 移除 HTML 标签
+            import re
+            
+            # 处理图片占位符 {image:filename}
+            def process_images(html_text):
+                # 暂时将图片占位符替换为文字说明
+                pattern = r'\{image:([^}]+)\}'
+                return re.sub(pattern, r'[图片: \1]', html_text)
+            
+            content = process_images(content)
+            
+            # 移除 HTML 标签，保留文本
+            content = re.sub(r'<br\s*/?>', '\n', content)  # 换行符
+            content = re.sub(r'<p[^>]*>', '', content)  # 段落开始
+            content = re.sub(r'</p>', '\n', content)  # 段落结束
+            content = re.sub(r'<h[1-6][^>]*>', '\n', content)  # 标题开始
+            content = re.sub(r'</h[1-6]>', '\n', content)  # 标题结束
+            content = re.sub(r'<strong>', '', content)  # 加粗开始
+            content = re.sub(r'</strong>', '', content)  # 加粗结束
+            content = re.sub(r'<li[^>]*>', '\n• ', content)  # 列表项
+            content = re.sub(r'</li>', '', content)
+            content = re.sub(r'<ul[^>]*>', '', content)
+            content = re.sub(r'</ul>', '\n', content)
+            content = re.sub(r'<ol[^>]*>', '', content)
+            content = re.sub(r'</ol>', '\n', content)
+            content = re.sub(r'<[^>]+>', '', content)  # 移除其他标签
+            
+            # 清理多余的空行
+            content = re.sub(r'\n\s*\n', '\n\n', content)
+            content = content.strip()
+            
+            # 添加段落
+            if content:
+                paragraphs = content.split('\n\n')
+                for para_text in paragraphs:
+                    if para_text.strip():
+                        doc.add_paragraph(para_text.strip())
+        else:
+            # 如果没有内容，添加提示
+            doc.add_paragraph("（本章节内容待填写）", style='Normal')
+        
+        # 添加一些间距
+        doc.add_paragraph("")
+    
+    # 6. 保存文档到临时文件
+    temp_dir = tempfile.gettempdir()
+    filename = f"{project_name}.docx"
+    output_path = Path(temp_dir) / f"declare_{project_id}_{filename}"
+    
+    doc.save(str(output_path))
+    
+    logger.info(f"[export_docx] 导出成功: {output_path}")
+    
+    # 7. 返回文件
     return FileResponse(
-        path=storage_path,
+        path=str(output_path),
         filename=filename,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )

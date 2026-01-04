@@ -118,8 +118,7 @@ class NewRetriever:
             fused = rrf_fuse(dense_hits, lexical_hits, k=60, topn=top_k)
         
         # 5. 加载完整文本 - 在线程池中执行，避免阻塞事件循环
-        chunk_ids = [hit["chunk_id"] for hit in fused]
-        results = await asyncio.to_thread(self._load_chunks, chunk_ids)
+        results = await asyncio.to_thread(self._load_chunks, fused)  # ✅ 传递完整的 fused 列表
         
         overall_ms = int((time.time() - overall_start) * 1000)
         logger.info(
@@ -327,10 +326,22 @@ class NewRetriever:
             logger.error(f"NewRetriever lexical search failed: {e}", exc_info=True)
             return []
     
-    def _load_chunks(self, chunk_ids: List[str]) -> List[RetrievedChunk]:
-        """批量加载分片内容"""
-        if not chunk_ids:
+    def _load_chunks(self, fused_hits: List[Dict]) -> List[RetrievedChunk]:
+        """
+        批量加载分片内容并赋值分数
+        
+        Args:
+            fused_hits: RRF 融合后的结果列表，每项包含 chunk_id 和 score
+            
+        Returns:
+            RetrievedChunk 列表，按原始顺序返回
+        """
+        if not fused_hits:
             return []
+        
+        # 提取 chunk_ids 和分数映射
+        chunk_ids = [hit["chunk_id"] for hit in fused_hits]
+        score_map = {hit["chunk_id"]: hit["score"] for hit in fused_hits}
         
         try:
             with self.pool.connection() as conn:
@@ -343,12 +354,12 @@ class NewRetriever:
                     cur.execute(sql, [chunk_ids])
                     rows = cur.fetchall()
                     
-                    # 按原始顺序返回
+                    # 按原始顺序返回，并赋值正确的分数
                     chunk_map = {
                         row['id']: RetrievedChunk(
                             chunk_id=row['id'],
                             text=row['content_text'],
-                            score=0.0,  # 这里 score 会被后续 RRF 覆盖
+                            score=score_map.get(row['id'], 0.0),  # ✅ 使用 RRF 融合后的分数
                             meta={
                                 "doc_version_id": row['doc_version_id'],
                                 **row['meta_json'],
