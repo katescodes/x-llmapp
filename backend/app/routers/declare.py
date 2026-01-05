@@ -399,6 +399,114 @@ def get_sections(
     return {"sections": sections}
 
 
+class AnalyzeIntentReq(BaseModel):
+    """AI意图识别请求"""
+    user_input: str
+    conversation_history: List[Dict[str, str]] = []
+    directory_structure: List[Dict[str, Any]]
+
+
+class AnalyzeIntentRes(BaseModel):
+    """AI意图识别响应"""
+    intent_type: str
+    target_node_ids: List[str]
+    action_description: str
+    requirements: str
+    confidence: float
+
+
+@router.post("/projects/{project_id}/ai-assistant/analyze-intent")
+async def analyze_user_intent(
+    project_id: str,
+    req: Request,
+    user=Depends(get_current_user),
+):
+    """AI意图识别 - 理解用户想修改哪些章节、如何修改"""
+    from pydantic import BaseModel
+    
+    class IntentRequest(BaseModel):
+        user_input: str
+        conversation_history: List[Dict[str, str]] = []
+        directory_structure: List[Dict[str, Any]]
+    
+    body = await req.json()
+    request_data = IntentRequest(**body)
+    
+    llm = _get_llm(req)
+    
+    # 构建章节信息
+    sections_info = "\n".join([
+        f"- [{node.get('id')}] {node.get('orderNo', '')} {node.get('title', '')}"
+        for node in request_data.directory_structure
+    ])
+    
+    # 构建对话历史
+    history_text = ""
+    if request_data.conversation_history:
+        history_text = "\n".join([
+            f"{msg['role']}: {msg['content']}"
+            for msg in request_data.conversation_history[-5:]
+        ])
+    
+    # 意图识别prompt
+    intent_prompt = f"""你是一个文档编辑AI助手。请分析用户的意图，理解他们想修改哪些章节、如何修改。
+
+【当前文档章节结构】
+{sections_info}
+
+{f"【最近对话历史】{history_text}" if history_text else ""}
+
+【用户输入】
+{request_data.user_input}
+
+请以JSON格式返回分析结果：
+{{
+    "intent_type": "generate|modify|optimize|global",
+    "target_node_ids": ["章节ID列表"],
+    "action_description": "简短描述要做什么",
+    "requirements": "提炼的具体需求（传给生成API）",
+    "confidence": 0.0-1.0
+}}
+
+判断规则：
+1. 如果提到"第X章"、章节标题、或章节编号 → 提取对应的node_id
+2. 如果说"这里"、"上面"、"刚才" → 结合对话历史判断
+3. 如果说"整个文档"、"所有" → intent_type=global，返回多个node_id
+4. 如果说"扩写"、"增加" → intent_type=generate
+5. 如果说"修改"、"改成" → intent_type=modify
+6. 如果说"优化"、"润色" → intent_type=optimize
+
+只返回JSON，不要其他文字。"""
+
+    try:
+        response = await llm.agenerate([intent_prompt])
+        result_text = response.generations[0][0].text.strip()
+        
+        # 提取JSON
+        if "```json" in result_text:
+            result_text = result_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in result_text:
+            result_text = result_text.split("```")[1].split("```")[0].strip()
+        
+        import json
+        result = json.loads(result_text)
+        
+        logger.info(f"[意图识别] 用户输入: {request_data.user_input[:50]}...")
+        logger.info(f"[意图识别] 识别结果: {result}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"[意图识别] 失败: {e}", exc_info=True)
+        return {
+            "intent_type": "unknown",
+            "target_node_ids": [],
+            "action_description": "无法理解意图",
+            "requirements": request_data.user_input,
+            "confidence": 0.0
+        }
+
+
 @router.post("/projects/{project_id}/sections/generate")
 async def generate_section_content(
     project_id: str,

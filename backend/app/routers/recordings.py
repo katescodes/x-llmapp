@@ -467,16 +467,17 @@ async def generate_recording_summary(
         if not transcript:
             raise ValueError("录音转写内容为空")
         
-        system_prompt = "你是一个专业的文本摘要助手。"
-        user_prompt = f"""请为以下录音转写内容生成一个简洁的摘要（100-200字）：
+        system_prompt = "你是一个专业的文本摘要助手。请用自然的中文段落形式输出摘要，不要使用代码、列表或特殊格式。"
+        user_prompt = f"""请为以下录音转写内容生成一个简洁的摘要（200-300字）：
 
 转写内容：
 {transcript}
 
 要求：
-1. 提取核心要点
-2. 简洁明了
-3. 100-200字"""
+1. 提取核心要点和关键信息
+2. 用流畅的段落形式表述，不要使用列表或代码格式
+3. 简洁明了，200-300字
+4. 只输出摘要正文，不要有标题或其他说明"""
         
         # 获取默认LLM配置
         profile = select_llm_profile(None)
@@ -495,6 +496,151 @@ async def generate_recording_summary(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"生成摘要失败: {str(e)}"
+        )
+
+
+@router.post("/{recording_id}/mindmap")
+async def generate_recording_mindmap(
+    recording_id: str,
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    通过LLM生成录音思维导图（Mermaid格式）
+    
+    需要认证
+    """
+    recording = recording_service.get_recording_by_id(recording_id, current_user.user_id)
+    
+    if not recording:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recording not found"
+        )
+    
+    # 调用LLM生成思维导图
+    from app.services.llm_client import generate_answer_with_llm, select_llm_profile
+    
+    try:
+        transcript = recording.get("transcript", "")
+        if not transcript:
+            raise ValueError("录音转写内容为空")
+        
+        system_prompt = """你是一个专业的思维导图生成助手。你需要将内容转换为Mermaid格式的思维导图。
+
+重要规则：
+1. 使用graph LR语法（从左到右的横向布局）
+2. 节点ID必须是简单的英文字母或数字，如：A, B, C1, C2等，绝对不能包含中文
+3. 节点文本必须用双引号包裹，可以是中文
+4. 连接使用 --> 符号
+5. 只输出mermaid代码，不要有任何其他文字说明
+6. 每行一个语句
+
+正确示例：
+graph LR
+    A["中心主题"]
+    B["分支1"]
+    C["分支2"]
+    A --> B
+    A --> C
+"""
+
+        user_prompt = f"""请将以下内容转换为Mermaid思维导图：
+
+内容：
+{transcript[:2000]}
+
+要求：
+1. 提取主要话题作为中心节点（节点ID用A）
+2. 提取2-4个一级分支（节点ID用B, C, D, E）
+3. 每个分支下可以有2-3个二级节点（节点ID用B1, B2, C1, C2等）
+4. 节点ID只能用英文字母和数字
+5. 节点文本用中文，必须用双引号包裹
+6. 使用graph LR格式
+7. 只输出代码，从graph LR开始，不要有其他说明文字"""
+        
+        # 获取默认LLM配置
+        profile = select_llm_profile(None)
+        
+        mindmap_code = await generate_answer_with_llm(
+            system_prompt=system_prompt,
+            user_message=user_prompt,
+            history=[],
+            profile=profile,
+            overrides={"temperature": 0.5, "max_tokens": 1024}
+        )
+        
+        # 清理输出，确保只保留mermaid代码
+        mindmap_code = mindmap_code.strip()
+        
+        # 移除markdown代码块标记
+        if mindmap_code.startswith("```mermaid"):
+            mindmap_code = mindmap_code[10:]
+        elif mindmap_code.startswith("```"):
+            mindmap_code = mindmap_code[3:]
+        
+        if mindmap_code.endswith("```"):
+            mindmap_code = mindmap_code[:-3]
+        
+        mindmap_code = mindmap_code.strip()
+        
+        # 确保以graph开头
+        if not mindmap_code.startswith("graph"):
+            mindmap_code = "graph LR\n" + mindmap_code
+        
+        # 验证和清理代码
+        import re
+        lines = mindmap_code.split('\n')
+        cleaned_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 保留graph声明
+            if line.startswith('graph'):
+                cleaned_lines.append(line)
+                continue
+            
+            # 清理节点定义和连接
+            if '-->' in line:
+                # 连接语句，确保格式正确
+                parts = line.split('-->')
+                if len(parts) == 2:
+                    left = parts[0].strip()
+                    right = parts[1].strip()
+                    cleaned_lines.append(f"    {left} --> {right}")
+            elif '[' in line and ']' in line:
+                # 节点定义，确保文本用双引号包裹
+                match = re.match(r'^([A-Za-z0-9_]+)\s*\[(.+?)\]', line)
+                if match:
+                    node_id = match.group(1)
+                    node_text = match.group(2).strip('"').strip("'").strip()
+                    # 确保文本不包含特殊字符，转义双引号
+                    node_text = node_text.replace('"', '\\"')
+                    cleaned_lines.append(f'    {node_id}["{node_text}"]')
+            else:
+                # 跳过其他行
+                pass
+        
+        mindmap_code = '\n'.join(cleaned_lines)
+        
+        # 如果清理后代码为空或太短，返回一个默认的思维导图
+        if len(mindmap_code) < 20:
+            mindmap_code = """graph LR
+    A["录音内容"]
+    B["主要内容"]
+    C["关键信息"]
+    A --> B
+    A --> C"""
+        
+        return {"mindmap": mindmap_code}
+        
+    except Exception as e:
+        logger.error(f"生成思维导图失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"生成思维导图失败: {str(e)}"
         )
 
 
