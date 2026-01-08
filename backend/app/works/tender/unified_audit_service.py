@@ -242,6 +242,26 @@ class UnifiedAuditService:
                     req_id = resp.get("requirement_id")
                     requirement = req_map.get(req_id, {})
                     
+                    # 如果找不到requirement，为框架式提取的维度生成描述性文本
+                    if not requirement or not requirement.get("requirement_text"):
+                        fallback_names = {
+                            "price": "投标总价",
+                            "honor_awards": "企业荣誉和奖项",
+                            "performance": "类似项目业绩",
+                            "technical_indicators": "技术指标",
+                            "implementation_plan": "实施方案",
+                            "after_sales_service": "售后服务方案",
+                            "qualification": "资质要求",
+                            "personnel": "人员配置",
+                            "schedule": "项目进度计划",
+                        }
+                        fallback_text = fallback_names.get(req_id, f"要求项：{req_id}")
+                        if not requirement:
+                            requirement = {}
+                        if not requirement.get("requirement_text"):
+                            requirement["requirement_text"] = fallback_text
+                            logger.debug(f"Generated fallback requirement_text for {req_id}: {fallback_text}")
+                    
                     # 确定状态和结论
                     review_status = resp.get("review_status", "PENDING")
                     review_conclusion = resp.get("review_conclusion", "")

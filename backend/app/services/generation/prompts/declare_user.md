@@ -14,6 +14,20 @@
 
 ---
 
+{{#if custom_requirements}}
+## 🎯 用户特殊要求
+
+{{custom_requirements}}
+
+⚠️ **最高优先级指令**
+- **严格按照上述用户要求生成内容**
+- 如果要求生成**表格**，必须使用HTML `<table>`、`<tr>`、`<th>`、`<td>` 标签
+- 如果要求某种特定格式，必须完全遵循该格式要求
+- **用户要求的优先级高于所有其他指导**
+
+---
+{{/if}}
+
 {{#if has_requirements}}
 ## 申报要求
 {{requirements}}

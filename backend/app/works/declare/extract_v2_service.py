@@ -171,6 +171,7 @@ class DeclareExtractV2Service:
         node_title: str,
         node_level: int,
         requirements_summary: str = "",
+        requirements_dict: Optional[Dict[str, Any]] = None,  # ✅ 新增：结构化requirements
         run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -214,9 +215,10 @@ class DeclareExtractV2Service:
         if not kb_id:
             raise ValueError(f"项目未绑定知识库: {project_id}")
         
-        # 获取申报要求
-        requirements_dict = {}
-        if requirements_summary:
+        # ✅ 优先使用结构化的requirements_dict，否则使用旧的requirements_summary
+        if requirements_dict is None:
+            requirements_dict = {}
+        if not requirements_dict and requirements_summary:
             requirements_dict = {"summary": requirements_summary}
         
         # 获取节点元数据（包含notes等信息）

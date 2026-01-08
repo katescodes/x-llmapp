@@ -105,7 +105,7 @@ class TenderDAO:
     def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
         """获取项目信息"""
         return self._fetchone(
-            "SELECT project_id, kb_id, name, description, created_at FROM tender_projects WHERE project_id=%s",
+            "SELECT project_id, kb_id, name, description, owner_id, created_at, updated_at FROM tender_projects WHERE project_id=%s",
             (project_id,),
         )
 
@@ -127,7 +127,7 @@ class TenderDAO:
         if owner_id:
             return self._fetchall(
                 """
-                SELECT project_id, kb_id, name, description, owner_id, created_at
+                SELECT project_id, kb_id, name, description, owner_id, created_at, updated_at
                 FROM tender_projects
                 WHERE owner_id=%s
                 ORDER BY created_at DESC
@@ -136,7 +136,7 @@ class TenderDAO:
             )
         return self._fetchall(
             """
-            SELECT project_id, kb_id, name, description, owner_id, created_at
+            SELECT project_id, kb_id, name, description, owner_id, created_at, updated_at
             FROM tender_projects
             ORDER BY created_at DESC
             """,

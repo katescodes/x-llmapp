@@ -1324,7 +1324,7 @@ class ExtractV2Service:
             with self.pool.connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT name FROM tender_projects WHERE id = %s",
+                        "SELECT name FROM tender_projects WHERE project_id = %s",
                         (project_id,)
                     )
                     row = cur.fetchone()

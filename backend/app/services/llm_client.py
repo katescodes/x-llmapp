@@ -147,7 +147,26 @@ def llm_json(
             "max_tokens": max_tokens,
         }
         
-        with httpx.Client(timeout=300.0) as client:  # ✅ 优化：增加到300秒（5分钟）避免Stage 2超时
+        # 检查是否是内网地址，如果是则禁用代理
+        from urllib.parse import urlparse
+        parsed_url = urlparse(profile.base_url)
+        hostname = parsed_url.hostname or ""
+        
+        # 内网地址不使用代理（避免SOCKS代理依赖问题）
+        is_internal = (
+            hostname.startswith("192.168.") or
+            hostname.startswith("10.") or
+            hostname.startswith("172.") or
+            hostname == "localhost" or
+            hostname == "127.0.0.1"
+        )
+        
+        # 使用trust_env=False禁用环境变量代理（适用于内网地址）
+        # 对于内网地址，同时禁用SSL验证（避免自签名证书问题）
+        trust_env = not is_internal
+        verify_ssl = not is_internal
+        
+        with httpx.Client(timeout=300.0, trust_env=trust_env, verify=verify_ssl) as client:
             response = client.post(full_url, headers=headers, json=payload)
             response.raise_for_status()
             result = response.json()

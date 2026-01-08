@@ -8,6 +8,7 @@ import { Recording, RecordingStatus } from '../types/recording';
 import ImportWizard from './ImportWizard';
 import VoiceRecorder from './VoiceRecorder';
 import '../styles/recordings.css';
+import mermaid from 'mermaid';
 
 const RecordingsList: React.FC = () => {
   const { token } = useAuth();
@@ -24,10 +25,15 @@ const RecordingsList: React.FC = () => {
   const [selectedRecording, setSelectedRecording] = useState<Recording | null>(null);
   const [showImportWizard, setShowImportWizard] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [viewingRecording, setViewingRecording] = useState<Recording | null>(null);
-  const [viewingSummary, setViewingSummary] = useState<Recording | null>(null);
   const [playingAudio, setPlayingAudio] = useState<string | null>(null);
   const [transcribingId, setTranscribingId] = useState<string | null>(null);
+  
+  // ✅ 侧边栏状态 (40/60布局)
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarType, setSidebarType] = useState<'fulltext' | 'summary' | 'mindmap'>('fulltext');
+  const [currentRecording, setCurrentRecording] = useState<Recording | null>(null);
+  const [summaryCache, setSummaryCache] = useState<Record<string, string>>({});
+  const [mindmapCache, setMindmapCache] = useState<Record<string, string>>({});
   
   // 转写增强选项
   const [showTranscribeDialog, setShowTranscribeDialog] = useState(false);
@@ -80,6 +86,24 @@ const RecordingsList: React.FC = () => {
   useEffect(() => {
     loadRecordings();
   }, [loadRecordings]);
+  
+  // 初始化 Mermaid
+  useEffect(() => {
+    mermaid.initialize({ 
+      startOnLoad: true,
+      theme: 'dark',
+      securityLevel: 'loose'
+    });
+  }, []);
+  
+  // 渲染思维导图
+  useEffect(() => {
+    if (sidebarOpen && sidebarType === 'mindmap' && currentRecording && mindmapCache[currentRecording.id]) {
+      setTimeout(() => {
+        mermaid.contentLoaded();
+      }, 100);
+    }
+  }, [sidebarOpen, sidebarType, currentRecording, mindmapCache]);
 
   // 格式化时长
   const formatDuration = (seconds: number): string => {
@@ -88,21 +112,63 @@ const RecordingsList: React.FC = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // 生成摘要（通过LLM）
+  // 生成摘要（通过LLM） - 显示在右侧边栏
   const generateSummary = async (recording: Recording) => {
+    // 检查缓存
+    if (summaryCache[recording.id]) {
+      setCurrentRecording(recording);
+      setSidebarType('summary');
+      setSidebarOpen(true);
+      return;
+    }
+    
     try {
       const response = await authFetch(`${apiBaseUrl}/api/recordings/${recording.id}/summary`, {
         method: 'POST',
       });
       if (response.ok) {
         const data = await response.json();
-        setViewingSummary({ ...recording, notes: data.summary });
+        // 保存到缓存
+        setSummaryCache(prev => ({ ...prev, [recording.id]: data.summary }));
+        setCurrentRecording(recording);
+        setSidebarType('summary');
+        setSidebarOpen(true);
       } else {
         alert('生成摘要失败');
       }
     } catch (error) {
       console.error('生成摘要失败:', error);
       alert('生成摘要失败');
+    }
+  };
+  
+  // 生成思维导图（通过LLM） - 显示在右侧边栏
+  const generateMindmap = async (recording: Recording) => {
+    // 检查缓存
+    if (mindmapCache[recording.id]) {
+      setCurrentRecording(recording);
+      setSidebarType('mindmap');
+      setSidebarOpen(true);
+      return;
+    }
+    
+    try {
+      const response = await authFetch(`${apiBaseUrl}/api/recordings/${recording.id}/mindmap`, {
+        method: 'POST',
+      });
+      if (response.ok) {
+        const data = await response.json();
+        // 保存到缓存
+        setMindmapCache(prev => ({ ...prev, [recording.id]: data.mindmap }));
+        setCurrentRecording(recording);
+        setSidebarType('mindmap');
+        setSidebarOpen(true);
+      } else {
+        alert('生成思维导图失败');
+      }
+    } catch (error) {
+      console.error('生成思维导图失败:', error);
+      alert('生成思维导图失败');
     }
   };
 
@@ -371,7 +437,14 @@ const RecordingsList: React.FC = () => {
           />
         </div>
       ) : (
-        <>
+        <div style={{ display: 'flex', height: '100%' }}>
+          {/* ✅ 左侧：录音列表 (40%) */}
+          <div className="recordings-main-content" style={{ 
+            flex: sidebarOpen ? '0 0 40%' : '1',
+            display: 'flex',
+            flexDirection: 'column',
+            transition: 'flex 0.3s ease'
+          }}>
           <div className="recordings-header">
             <div>
               <h2>📼 我的录音</h2>
@@ -526,7 +599,11 @@ const RecordingsList: React.FC = () => {
                     <>
                       <button
                         className="action-btn view"
-                        onClick={() => setViewingRecording(recording)}
+                        onClick={() => {
+                          setCurrentRecording(recording);
+                          setSidebarType('fulltext');
+                          setSidebarOpen(true);
+                        }}
                       >
                         📄 全文
                       </button>
@@ -535,6 +612,12 @@ const RecordingsList: React.FC = () => {
                         onClick={() => generateSummary(recording)}
                       >
                         📝 摘要
+                      </button>
+                      <button
+                        className="action-btn mindmap"
+                        onClick={() => generateMindmap(recording)}
+                      >
+                        🧠 思维导图
                       </button>
                     </>
                   )}
@@ -579,7 +662,151 @@ const RecordingsList: React.FC = () => {
               )}
             </>
           )}
-        </>
+          </div>  {/* 关闭 recordings-main-content */}
+          
+          {/* ✅ 右侧：内容展示侧边栏 (60%) */}
+          {sidebarOpen && currentRecording && (
+            <div className="recordings-sidebar" style={{ 
+              flex: '0 0 60%',
+              display: 'flex',
+              flexDirection: 'column',
+              borderLeft: '1px solid rgba(148, 163, 184, 0.2)',
+              background: '#0f1729'
+            }}>
+              {/* 侧边栏头部 */}
+              <div style={{
+                padding: '20px',
+                borderBottom: '1px solid rgba(148, 163, 184, 0.2)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                <h3 style={{ margin: 0, fontSize: '18px' }}>
+                  📄 {currentRecording.title}
+                </h3>
+                <button
+                  onClick={() => setSidebarOpen(false)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#94a3b8',
+                    fontSize: '24px',
+                    cursor: 'pointer',
+                    padding: '4px 8px'
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+              
+              {/* Tab 切换 */}
+              <div className="sidebar-tabs" style={{
+                display: 'flex',
+                borderBottom: '1px solid rgba(148, 163, 184, 0.2)',
+                padding: '0 20px'
+              }}>
+                <button
+                  className={`sidebar-tab ${sidebarType === 'fulltext' ? 'active' : ''}`}
+                  onClick={() => setSidebarType('fulltext')}
+                  style={{
+                    padding: '12px 20px',
+                    background: 'none',
+                    border: 'none',
+                    color: sidebarType === 'fulltext' ? '#3b82f6' : '#94a3b8',
+                    borderBottom: sidebarType === 'fulltext' ? '2px solid #3b82f6' : '2px solid transparent',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '500'
+                  }}
+                >
+                  📄 全文
+                </button>
+                <button
+                  className={`sidebar-tab ${sidebarType === 'summary' ? 'active' : ''}`}
+                  onClick={() => setSidebarType('summary')}
+                  style={{
+                    padding: '12px 20px',
+                    background: 'none',
+                    border: 'none',
+                    color: sidebarType === 'summary' ? '#3b82f6' : '#94a3b8',
+                    borderBottom: sidebarType === 'summary' ? '2px solid #3b82f6' : '2px solid transparent',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '500'
+                  }}
+                >
+                  📝 摘要
+                </button>
+                <button
+                  className={`sidebar-tab ${sidebarType === 'mindmap' ? 'active' : ''}`}
+                  onClick={() => setSidebarType('mindmap')}
+                  style={{
+                    padding: '12px 20px',
+                    background: 'none',
+                    border: 'none',
+                    color: sidebarType === 'mindmap' ? '#3b82f6' : '#94a3b8',
+                    borderBottom: sidebarType === 'mindmap' ? '2px solid #3b82f6' : '2px solid transparent',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '500'
+                  }}
+                >
+                  🧠 思维导图
+                </button>
+              </div>
+              
+              {/* 内容区域 */}
+              <div className="sidebar-content" style={{
+                flex: 1,
+                overflow: 'auto',
+                padding: '20px'
+              }}>
+                {sidebarType === 'fulltext' && (
+                  <div className="sidebar-text" style={{ 
+                    maxHeight: '100%',
+                    overflow: 'auto',
+                    lineHeight: '1.8',
+                    color: '#e2e8f0',
+                    whiteSpace: 'pre-wrap'
+                  }}>
+                    {currentRecording.transcript}
+                  </div>
+                )}
+                
+                {sidebarType === 'summary' && (
+                  <div className="sidebar-text" style={{ 
+                    maxHeight: '100%',
+                    overflow: 'auto',
+                    lineHeight: '1.8',
+                    color: '#e2e8f0',
+                    whiteSpace: 'pre-wrap'
+                  }}>
+                    {summaryCache[currentRecording.id] || '生成中...'}
+                  </div>
+                )}
+                
+                {sidebarType === 'mindmap' && (
+                  <div className="sidebar-mindmap" style={{
+                    width: '100%',
+                    overflowX: 'auto',
+                    overflowY: 'auto'
+                  }}>
+                    {mindmapCache[currentRecording.id] ? (
+                      <div 
+                        className="mermaid-diagram"
+                        dangerouslySetInnerHTML={{ 
+                          __html: `<pre class="mermaid">${mindmapCache[currentRecording.id]}</pre>` 
+                        }}
+                      />
+                    ) : (
+                      '生成中...'
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {/* 导入向导对话框 */}
@@ -589,57 +816,6 @@ const RecordingsList: React.FC = () => {
           onClose={() => setShowImportWizard(false)}
           onSuccess={handleImportSuccess}
         />
-      )}
-
-      {/* 查看全文对话框 */}
-      {viewingRecording && (
-        <div className="modal-overlay" onClick={() => setViewingRecording(null)}>
-          <div className="modal-content full-text-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>📄 {viewingRecording.title}</h3>
-              <button className="close-btn" onClick={() => setViewingRecording(null)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <div className="full-text-meta">
-                <span>录音时长: {formatDuration(viewingRecording.duration)}</span>
-                <span>•</span>
-                <span>字数: {viewingRecording.word_count}</span>
-                <span>•</span>
-                <span>录制时间: {formatDate(viewingRecording.created_at)}</span>
-              </div>
-              <div className="full-text-content">
-                {viewingRecording.transcript}
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setViewingRecording(null)}>
-                关闭
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 查看摘要对话框 */}
-      {viewingSummary && (
-        <div className="modal-overlay" onClick={() => setViewingSummary(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>📝 摘要 - {viewingSummary.title}</h3>
-              <button className="close-btn" onClick={() => setViewingSummary(null)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <div className="full-text-content">
-                {viewingSummary.notes || '正在生成摘要...'}
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setViewingSummary(null)}>
-                关闭
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* 播放音频对话框 */}

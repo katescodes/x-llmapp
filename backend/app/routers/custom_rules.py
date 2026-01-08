@@ -43,18 +43,28 @@ def create_rule_pack(
     用户输入规则要求文本，系统自动分析并生成结构化规则
     权限要求：已登录用户
     """
-    service = _get_service(request)
-    
-    # 创建规则包
-    rule_pack = service.create_rule_pack(
-        project_id=req.project_id,
-        pack_name=req.pack_name,
-        rule_requirements=req.rule_requirements,
-        model_id=req.model_id,
-        owner_id=user.user_id if user else None,
-    )
-    
-    return rule_pack
+    try:
+        service = _get_service(request)
+        
+        # 创建规则包
+        rule_pack = service.create_rule_pack(
+            project_id=req.project_id,
+            pack_name=req.pack_name,
+            rule_requirements=req.rule_requirements,
+            model_id=req.model_id,
+            owner_id=user.user_id if user else None,
+        )
+        
+        return rule_pack
+        
+    except ValueError as e:
+        # ValueError 包含详细的错误信息
+        logger.error(f"创建规则包失败: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        # 其他未预料的异常
+        logger.error(f"创建规则包失败（未知错误）: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"创建规则包失败：{str(e)}")
 
 
 @router.get("/rule-packs", response_model=List[CustomRulePackOut])

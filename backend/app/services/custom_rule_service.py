@@ -50,38 +50,68 @@ class CustomRuleService:
         Returns:
             创建的规则包信息
         """
-        logger.info(f"创建自定义规则包: {pack_name} (project_id={project_id})")
-        
-        # 1. AI 分析规则要求
-        rules_data = self._analyze_rule_requirements(rule_requirements, model_id)
-        
-        # 2. 创建规则包
-        pack_id = str(uuid.uuid4())
-        
-        with self.pool.connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO tender_rule_packs (
-                        id, pack_name, pack_type, project_id, priority, is_active
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    RETURNING id, pack_name, pack_type, project_id, priority, is_active, created_at, updated_at
-                    """,
-                    (pack_id, pack_name, "custom", project_id, 10, True),
-                )
-                row = cur.fetchone()
-        
-        # 3. 批量插入规则
-        if rules_data:
-            self._batch_insert_rules(pack_id, rules_data)
-        
-        # 4. 返回规则包信息
-        rule_pack = self.get_rule_pack(pack_id)
-        
-        logger.info(f"规则包创建成功: {pack_id}, 规则数量: {len(rules_data)}")
-        
-        return rule_pack
+        try:
+            logger.info(f"创建自定义规则包: {pack_name} (project_id={project_id})")
+            
+            # 1. AI 分析规则要求
+            try:
+                rules_data = self._analyze_rule_requirements(rule_requirements, model_id)
+            except Exception as e:
+                logger.error(f"AI 分析规则失败: {e}", exc_info=True)
+                raise ValueError(f"AI 分析规则失败: {str(e)}")
+            
+            # 2. 创建规则包
+            pack_id = str(uuid.uuid4())
+            
+            try:
+                with self.pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO tender_rule_packs (
+                                id, pack_name, pack_type, project_id, priority, is_active
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            RETURNING id, pack_name, pack_type, project_id, priority, is_active, created_at, updated_at
+                            """,
+                            (pack_id, pack_name, "custom", project_id, 10, True),
+                        )
+                        row = cur.fetchone()
+            except Exception as e:
+                logger.error(f"创建规则包失败（数据库错误）: {e}", exc_info=True)
+                raise ValueError(f"创建规则包失败：数据库错误 - {str(e)}")
+            
+            # 3. 批量插入规则
+            if rules_data:
+                try:
+                    self._batch_insert_rules(pack_id, rules_data)
+                except Exception as e:
+                    logger.error(f"插入规则失败: {e}", exc_info=True)
+                    # 尝试回滚：删除已创建的规则包
+                    try:
+                        self.delete_rule_pack(pack_id)
+                    except Exception:
+                        pass
+                    raise ValueError(f"插入规则失败: {str(e)}")
+            
+            # 4. 返回规则包信息
+            try:
+                rule_pack = self.get_rule_pack(pack_id)
+            except Exception as e:
+                logger.error(f"获取规则包信息失败: {e}", exc_info=True)
+                raise ValueError(f"规则包已创建，但获取信息失败: {str(e)}")
+            
+            logger.info(f"规则包创建成功: {pack_id}, 规则数量: {len(rules_data)}")
+            
+            return rule_pack
+            
+        except ValueError:
+            # ValueError 是我们主动抛出的，直接向上传递
+            raise
+        except Exception as e:
+            # 捕获其他未预料的异常
+            logger.error(f"创建规则包失败（未知错误）: {e}", exc_info=True)
+            raise ValueError(f"创建规则包失败：{str(e)}")
     
     def _analyze_rule_requirements(
         self,
@@ -97,7 +127,12 @@ class CustomRuleService:
             
         Returns:
             规则列表
+            
+        Raises:
+            ValueError: AI分析失败时抛出
         """
+        from fastapi import HTTPException
+        
         logger.info("开始 AI 分析规则要求")
         
         # 构建 Prompt
@@ -113,16 +148,29 @@ class CustomRuleService:
             )
             
             # 提取规则列表
+            if not result:
+                raise ValueError("LLM 返回为空")
+            
             rules = result.get("rules", [])
+            
+            if not rules:
+                logger.warning("AI 分析未生成任何规则，但不视为错误（可能用户输入过于简单）")
             
             logger.info(f"AI 分析完成，生成 {len(rules)} 条规则")
             
             return rules
             
+        except HTTPException as e:
+            # HTTPException 来自 llm_json，需要特殊处理
+            logger.error(f"AI 分析规则失败（LLM调用失败）: {e.detail}", exc_info=True)
+            raise ValueError(f"AI 分析规则失败: {e.detail}")
+        except ValueError as e:
+            # ValueError 是我们主动抛出的，直接向上传递
+            raise
         except Exception as e:
-            logger.error(f"AI 分析规则失败: {e}")
-            # 返回空列表，不阻塞创建流程
-            return []
+            logger.error(f"AI 分析规则失败（未知错误）: {e}", exc_info=True)
+            # 不再静默失败，抛出异常让上层处理
+            raise ValueError(f"AI 分析规则失败: {str(e)}. 请检查规则要求格式是否正确，或稍后重试")
     
     def _build_rule_analysis_prompt(self, rule_requirements: str) -> str:
         """构建规则分析 Prompt"""

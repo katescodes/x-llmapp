@@ -14,6 +14,8 @@ const DIMENSION_MAP: Record<string, string> = {
   schedule_quality: "工期质量",
   format: "格式要求",
   scoring: "评分标准",
+  consistency: "一致性",
+  custom_rule: "自定义",
   other: "其他",
 };
 

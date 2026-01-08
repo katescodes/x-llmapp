@@ -20,6 +20,29 @@ const getAuthHeaders = () => {
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
+// 错误信息提取函数（处理各种错误格式）
+const extractErrorMessage = (err: any): string => {
+  if (err.response?.data) {
+    const detail = err.response.data.detail;
+    if (typeof detail === 'string') {
+      return detail;
+    } else if (detail && typeof detail === 'object') {
+      // 处理结构化错误（如Pydantic验证错误）
+      if (Array.isArray(detail)) {
+        return detail.map((e: any) => e.msg || JSON.stringify(e)).join('; ');
+      } else {
+        return JSON.stringify(detail, null, 2);
+      }
+    } else if (err.response.data.message) {
+      return err.response.data.message;
+    }
+  }
+  if (err.message) {
+    return err.message;
+  }
+  return '未知错误';
+};
+
 interface CustomRulePack {
   id: string;
   pack_name: string;
@@ -74,7 +97,8 @@ export default function CustomRulesPage({ projectId, onBack, embedded = false }:
       setRulePacks(res.data || []);
     } catch (err: any) {
       console.error('加载规则包失败:', err);
-      alert(err.response?.data?.detail || '加载规则包失败');
+      const errorMsg = extractErrorMessage(err);
+      alert(`加载规则包失败：\n${errorMsg}`);
     } finally {
       setLoading(false);
     }
@@ -90,7 +114,8 @@ export default function CustomRulesPage({ projectId, onBack, embedded = false }:
       setRules(res.data || []);
     } catch (err: any) {
       console.error('加载规则失败:', err);
-      alert(err.response?.data?.detail || '加载规则失败');
+      const errorMsg = extractErrorMessage(err);
+      alert(`加载规则失败：\n${errorMsg}`);
     } finally {
       setLoading(false);
     }
@@ -133,7 +158,8 @@ export default function CustomRulesPage({ projectId, onBack, embedded = false }:
       await loadRules(newPack.id);
     } catch (err: any) {
       console.error('创建规则包失败:', err);
-      alert(err.response?.data?.detail || '创建规则包失败');
+      const errorMsg = extractErrorMessage(err);
+      alert(`创建规则包失败：\n${errorMsg}`);
     } finally {
       setCreating(false);
     }
@@ -162,7 +188,8 @@ export default function CustomRulesPage({ projectId, onBack, embedded = false }:
       await loadRulePacks();
     } catch (err: any) {
       console.error('删除规则包失败:', err);
-      alert(err.response?.data?.detail || '删除规则包失败');
+      const errorMsg = extractErrorMessage(err);
+      alert(`删除规则包失败：\n${errorMsg}`);
     }
   };
 

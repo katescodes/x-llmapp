@@ -320,9 +320,23 @@ export default function DocumentComponentManagement({
   const [aiChatHistory, setAIChatHistory] = useState<Array<{role: 'user' | 'assistant', content: string}>>([]);
   const [isAIChatProcessing, setIsAIChatProcessing] = useState(false); // AI助手专用状态
   const [isBatchGenerating, setIsBatchGenerating] = useState(false); // 批量生成专用状态
+  
+  // 内容对比相关状态
+  const [showCompare, setShowCompare] = useState(false);
+  const [compareNodeId, setCompareNodeId] = useState<string | null>(null);
+  const [compareOriginal, setCompareOriginal] = useState('');
+  const [compareNew, setCompareNew] = useState('');
+
+  // ✅ 打开AI助手时重置处理状态（防止状态卡住）
+  useEffect(() => {
+    if (showAIChat && isAIChatProcessing) {
+      console.log('[AI助手] 检测到处理状态异常，自动重置');
+      setIsAIChatProcessing(false);
+    }
+  }, [showAIChat]);
 
   // 目录显示/隐藏状态
-  const [isDirectoryVisible, setIsDirectoryVisible] = useState(true);
+  const [isDirectoryVisible, setIsDirectoryVisible] = useState(false);
 
   // -------------------- 初始化：加载已保存的内容 --------------------
 
@@ -814,7 +828,7 @@ export default function DocumentComponentManagement({
     }
   };
 
-  // AI助手处理修改请求
+  // AI助手处理修改请求（新版：支持意图识别、多轮对话、内容对比）
   const handleAIChatSubmit = async () => {
     if (!aiChatInput.trim() || isAIChatProcessing) return;
 
@@ -826,68 +840,99 @@ export default function DocumentComponentManagement({
     setAIChatHistory(prev => [...prev, { role: 'user', content: userMessage }]);
 
     try {
-      // 调用后端API，让AI理解用户意图并生成内容
       const flatNodes = flattenDirectory(directory);
-      let modified = false;
-      let modifiedNodeTitle = '';
 
       // 如果是嵌入模式且有projectId，调用真实API
       if (embedded && projectId) {
-        // 分析用户意图，找到要修改的章节
-        for (const node of flatNodes) {
-          // 简单的关键词匹配（可以改进为调用AI分析意图的API）
-          if (userMessage.includes(node.title) || 
-              userMessage.includes(node.orderNo || '') ||
-              userMessage.match(/第[一二三四五六七八九十]+章/)) {
-            
+        // ✅ 步骤1：调用意图识别API
+        const intentApiPath = moduleType === 'declare' 
+          ? `/api/apps/declare/projects/${projectId}/ai-assistant/analyze-intent`
+          : `/api/apps/tender/projects/${projectId}/ai-assistant/analyze-intent`;
+        
+        console.log('[AI助手] 开始意图识别...');
+        const intentResult = await api.post(intentApiPath, {
+          user_input: userMessage,
+          conversation_history: aiChatHistory,  // ✅ 传递对话历史
+          directory_structure: flatNodes.map(n => ({
+            id: n.id,
+            title: n.title,
+            orderNo: n.orderNo,
+            level: n.level
+          }))
+        });
+
+        console.log('[AI助手] 意图识别结果:', intentResult);
+
+        // 如果识别失败或置信度过低
+        if (!intentResult || intentResult.confidence < 0.3) {
+          setAIChatHistory(prev => [...prev, { 
+            role: 'assistant', 
+            content: '❓ 抱歉，我没有理解您的意思。请更明确地说明，比如："修改第一章内容"或"优化技术方案部分"。' 
+          }]);
+          setIsAIChatProcessing(false);
+          return;
+        }
+
+        const { intent_type, target_node_ids, requirements, action_description } = intentResult;
+
+        // ✅ 步骤2：根据意图类型处理
+        if (intent_type === 'global' && target_node_ids.length > 1) {
+          // 全局修改：批量处理多个章节
+          setAIChatHistory(prev => [...prev, { 
+            role: 'assistant', 
+            content: `🔄 正在${action_description}（共${target_node_ids.length}个章节）...` 
+          }]);
+
+          let successCount = 0;
+          for (const nodeId of target_node_ids) {
+            const node = flatNodes.find(n => n.id === nodeId);
+            if (!node) continue;
+
             try {
-              // 调用后端API生成内容（根据模块类型使用不同的API路径）
-              const apiPath = moduleType === 'declare' 
-                ? `/api/apps/declare/projects/${projectId}/sections/generate`
-                : `/api/apps/tender/projects/${projectId}/sections/generate`;
-              
-              // ✅ 使用统一的 api.post 方法，会自动处理认证，并传递node_id以自动保存
-              const data = await api.post(apiPath, {
-                  title: node.title,
-                  level: node.level,
-                  node_id: node.id,  // ✅ 添加node_id，后端会自动保存
-                  requirements: userMessage, // 将用户要求传给后端
-              });
-
-              const generatedContent = data.content || '<p>生成失败</p>';
-
-              setContents(prev => ({
-                ...prev,
-                [node.id]: {
-                  nodeId: node.id,
-                  html: generatedContent,
-                  status: 'generated',
-                },
-              }));
-
-              modified = true;
-              modifiedNodeTitle = node.title;
-              
-              // 滚动到修改的章节
-              setSelectedNodeId(node.id);
-              setTimeout(() => {
-                handleSelectNode(node.id);  // ✅ 使用统一的滚动方法
-              }, 100);
-
-              break;
+              await generateSectionWithCompare(node, requirements);
+              successCount++;
             } catch (error) {
-              console.error('[AI助手] 生成内容失败:', error);
-              setAIChatHistory(prev => [...prev, { 
-                role: 'assistant', 
-                content: `❌ 生成失败：${error}` 
-              }]);
-              setIsAIChatProcessing(false);
-              return;
+              console.error(`[AI助手] 生成失败: ${node.title}`, error);
             }
           }
+
+          setAIChatHistory(prev => [...prev, { 
+            role: 'assistant', 
+            content: `✅ 已完成${successCount}/${target_node_ids.length}个章节的${action_description}` 
+          }]);
+          
+        } else if (target_node_ids.length > 0) {
+          // 单章节修改：显示对比界面
+          const nodeId = target_node_ids[0];
+          const node = flatNodes.find(n => n.id === nodeId);
+          
+          if (!node) {
+            setAIChatHistory(prev => [...prev, { 
+              role: 'assistant', 
+              content: '❌ 找不到对应的章节' 
+            }]);
+            setIsAIChatProcessing(false);
+            return;
+          }
+
+          setAIChatHistory(prev => [...prev, { 
+            role: 'assistant', 
+            content: `🔄 正在${action_description}：${node.title}...` 
+          }]);
+
+          // 调用生成API，并显示对比界面
+          await generateSectionWithCompare(node, requirements);
+
+        } else {
+          setAIChatHistory(prev => [...prev, { 
+            role: 'assistant', 
+            content: '❓ 没有找到对应的章节。请更明确地指出要修改的章节。' 
+          }]);
         }
+
       } else {
-        // 非嵌入模式，使用模拟数据
+        // 非嵌入模式，使用简单的关键词匹配（兼容模拟数据）
+        let modified = false;
         for (const node of flatNodes) {
           if (userMessage.includes(node.title) || 
               userMessage.includes(node.orderNo || '') ||
@@ -907,26 +952,24 @@ export default function DocumentComponentManagement({
             }));
 
             modified = true;
-            modifiedNodeTitle = node.title;
             setSelectedNodeId(node.id);
             setTimeout(() => {
-              handleSelectNode(node.id);  // ✅ 使用统一的滚动方法
+              handleSelectNode(node.id);
             }, 100);
-
             break;
           }
         }
-      }
 
-      // 不再返回确认消息，只在找不到章节时提示
-      if (!modified) {
-        setAIChatHistory(prev => [...prev, { 
-          role: 'assistant', 
-          content: '❓ 没有找到对应的章节。请更明确地指出要修改的章节，比如"修改投标函的内容"或"生成第一章"。' 
-        }]);
+        if (!modified) {
+          setAIChatHistory(prev => [...prev, { 
+            role: 'assistant', 
+            content: '❓ 没有找到对应的章节。' 
+          }]);
+        }
       }
 
     } catch (error) {
+      console.error('[AI助手] 处理失败:', error);
       setAIChatHistory(prev => [...prev, { 
         role: 'assistant', 
         content: `❌ 处理失败：${error}` 
@@ -934,6 +977,75 @@ export default function DocumentComponentManagement({
     } finally {
       setIsAIChatProcessing(false);
     }
+  };
+
+  // 生成章节内容并显示对比（新增函数）
+  const generateSectionWithCompare = async (node: any, requirements: string) => {
+    try {
+      const apiPath = moduleType === 'declare' 
+        ? `/api/apps/declare/projects/${projectId}/sections/generate`
+        : `/api/apps/tender/projects/${projectId}/sections/generate`;
+      
+      // 获取原始内容
+      const originalContent = contents[node.id]?.html || '';
+      
+      // 调用生成API
+      const data = await api.post(apiPath, {
+        title: node.title,
+        level: node.level,
+        node_id: node.id,
+        requirements: requirements,
+        original_content: originalContent,  // 传递原始内容给AI参考
+      });
+
+      const newContent = data.content || '<p>生成失败</p>';
+
+      // 显示对比界面
+      setCompareNodeId(node.id);
+      setCompareOriginal(originalContent || '<p style="color: #94a3b8;">（原内容为空）</p>');
+      setCompareNew(newContent);
+      setShowCompare(true);
+      
+    } catch (error) {
+      console.error('[生成内容并对比] 失败:', error);
+      // 抛出错误，让外层catch处理
+      throw error;
+    }
+  };
+
+  // 采用新内容（对比界面的按钮）
+  const handleAcceptNewContent = () => {
+    if (!compareNodeId) return;
+
+    setContents(prev => ({
+      ...prev,
+      [compareNodeId]: {
+        nodeId: compareNodeId,
+        html: compareNew,
+        status: 'generated',
+      },
+    }));
+
+    setShowCompare(false);
+    setAIChatHistory(prev => [...prev, { 
+      role: 'assistant', 
+      content: '✅ 已采用新内容' 
+    }]);
+
+    // 滚动到该章节
+    setSelectedNodeId(compareNodeId);
+    setTimeout(() => {
+      handleSelectNode(compareNodeId);
+    }, 100);
+  };
+
+  // 保留原内容（对比界面的按钮）
+  const handleKeepOriginal = () => {
+    setShowCompare(false);
+    setAIChatHistory(prev => [...prev, { 
+      role: 'assistant', 
+      content: '✅ 已保留原内容' 
+    }]);
   };
 
   // 模拟 AI 生成某个章节的内容
@@ -2017,6 +2129,175 @@ export default function DocumentComponentManagement({
             >
               发送
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 内容对比弹窗 */}
+      {showCompare && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.7)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 4000,
+            padding: 20,
+          }}
+          onClick={() => setShowCompare(false)}
+        >
+          <div
+            style={{
+              background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
+              borderRadius: 16,
+              width: '90%',
+              maxWidth: 1400,
+              height: '85vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)',
+              border: '1px solid rgba(148, 163, 184, 0.3)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* 头部 */}
+            <div
+              style={{
+                padding: '20px 24px',
+                borderBottom: '1px solid rgba(148, 163, 184, 0.2)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: 18, color: '#f8fafc' }}>
+                📝 内容对比
+              </h3>
+              <button
+                onClick={() => setShowCompare(false)}
+                style={{
+                  padding: '4px 8px',
+                  border: 'none',
+                  background: 'transparent',
+                  color: '#94a3b8',
+                  cursor: 'pointer',
+                  fontSize: 20,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 对比内容 */}
+            <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+              {/* 左侧：原内容 */}
+              <div
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  borderRight: '1px solid rgba(148, 163, 184, 0.2)',
+                }}
+              >
+                <div
+                  style={{
+                    padding: '12px 20px',
+                    background: 'rgba(239, 68, 68, 0.1)',
+                    borderBottom: '1px solid rgba(148, 163, 184, 0.2)',
+                    color: '#fca5a5',
+                    fontWeight: 500,
+                  }}
+                >
+                  原内容
+                </div>
+                <div
+                  style={{
+                    flex: 1,
+                    padding: 20,
+                    overflow: 'auto',
+                    background: 'rgba(15, 23, 42, 0.5)',
+                  }}
+                  dangerouslySetInnerHTML={{ __html: compareOriginal }}
+                />
+              </div>
+
+              {/* 右侧：新内容 */}
+              <div
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                }}
+              >
+                <div
+                  style={{
+                    padding: '12px 20px',
+                    background: 'rgba(34, 197, 94, 0.1)',
+                    borderBottom: '1px solid rgba(148, 163, 184, 0.2)',
+                    color: '#86efac',
+                    fontWeight: 500,
+                  }}
+                >
+                  AI生成的新内容
+                </div>
+                <div
+                  style={{
+                    flex: 1,
+                    padding: 20,
+                    overflow: 'auto',
+                    background: 'rgba(15, 23, 42, 0.5)',
+                  }}
+                  dangerouslySetInnerHTML={{ __html: compareNew }}
+                />
+              </div>
+            </div>
+
+            {/* 底部按钮 */}
+            <div
+              style={{
+                padding: '16px 24px',
+                borderTop: '1px solid rgba(148, 163, 184, 0.2)',
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 12,
+              }}
+            >
+              <button
+                onClick={handleKeepOriginal}
+                style={{
+                  padding: '10px 24px',
+                  border: '1px solid rgba(148, 163, 184, 0.3)',
+                  background: 'transparent',
+                  color: '#94a3b8',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  fontSize: 14,
+                  fontWeight: 500,
+                }}
+              >
+                保留原内容
+              </button>
+              <button
+                onClick={handleAcceptNewContent}
+                style={{
+                  padding: '10px 24px',
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+                  color: '#fff',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  fontSize: 14,
+                  fontWeight: 500,
+                }}
+              >
+                ✓ 采用新内容
+              </button>
+            </div>
           </div>
         </div>
       )}

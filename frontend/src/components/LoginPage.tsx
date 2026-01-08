@@ -56,7 +56,14 @@ const LoginPage: React.FC = () => {
     <div className="auth-container">
       <div className="auth-card">
         <div className="auth-header">
-          <h1>🤖 亿林亿问</h1>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px' }}>
+            <img 
+              src="/logo.png?v=2" 
+              alt="亿林亿智" 
+              style={{ height: '60px', marginRight: '12px' }}
+            />
+            <h1 style={{ margin: 0, fontSize: '32px', fontWeight: 'bold' }}>亿林亿智</h1>
+          </div>
           <p>智能知识问答系统</p>
         </div>
 

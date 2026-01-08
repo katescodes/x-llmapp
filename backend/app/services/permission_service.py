@@ -429,7 +429,8 @@ def get_user_roles(user_id: str) -> List[UserRoleResponse]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT ur.id, ur.user_id, ur.role_id, r.code, r.name, 
+                SELECT ur.id, ur.user_id, ur.role_id, 
+                       r.code, r.name, 
                        ur.granted_by, ur.granted_at, ur.expires_at
                 FROM user_roles ur
                 JOIN roles r ON ur.role_id = r.id
@@ -441,7 +442,14 @@ def get_user_roles(user_id: str) -> List[UserRoleResponse]:
             
             return [
                 UserRoleResponse(
-                    id=row['id'], user_id=row['user_id'], role_id=row['role_id'], role_code=row['role_code'], role_name=row['role_name'], granted_by=row['granted_by'], granted_at=row['granted_at'], expires_at=row['expires_at']
+                    id=row['id'], 
+                    user_id=row['user_id'], 
+                    role_id=row['role_id'], 
+                    role_code=row['code'], 
+                    role_name=row['name'], 
+                    granted_by=row['granted_by'], 
+                    granted_at=row['granted_at'], 
+                    expires_at=row['expires_at']
                 )
                 for row in rows
             ]
@@ -581,7 +589,7 @@ def check_user_permissions(user_id: str, permission_codes: List[str]) -> Dict[st
                 WHERE ur.user_id = %s AND p.is_active = TRUE
             """, (user_id,))
             
-            user_perms = {row['id'] for row in cur.fetchall()}
+            user_perms = {row['code'] for row in cur.fetchall()}
             
             # 检查每个权限
             result = {}

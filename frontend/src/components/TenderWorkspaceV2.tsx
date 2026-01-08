@@ -743,11 +743,9 @@ export default function TenderWorkspaceV2() {
   // 审核
   const loadRulePacks = async () => {
     try {
-      const data = await api.get('/api/apps/tender/rule-packs');
+      // 加载所有共享规则包（不传project_id参数，获取project_id为NULL的共享规则包）
+      const data = await api.get(`/api/custom-rules/rule-packs`);
       setRulePacks(data);
-      if (data.length > 0 && !selectedRulePackId) {
-        setSelectedRulePackId(data[0].id);
-      }
     } catch (err) {
       console.error('加载规则包失败:', err);
     }
@@ -856,6 +854,15 @@ export default function TenderWorkspaceV2() {
       setAssets([]);
     }
   };
+  
+  // ✅ 切换到审核tab时自动加载审核记录
+  useEffect(() => {
+    if (!currentProject || activeTab !== 4) return;
+    
+    // 每次切换到审核tab时，重新加载审核记录（确保显示最新数据）
+    console.log('[useEffect] 切换到审核tab，加载审核记录');
+    loadReviewItems(currentProject.id);
+  }, [activeTab, currentProject?.id]);
   
   // 项目切换时加载数据并恢复run状态
   useEffect(() => {
@@ -1720,8 +1727,6 @@ export default function TenderWorkspaceV2() {
         {/* Step 1: 上传文档 */}
         {activeTab === 1 && (
           <div>
-            <h3 style={{ marginBottom: '20px', color: '#e2e8f0' }}>📤 上传文档</h3>
-            
             {/* 上传控件 */}
             <div style={{ 
               padding: '24px', 
@@ -1846,8 +1851,6 @@ export default function TenderWorkspaceV2() {
         {/* Step 2: 提取信息（三个子标签） */}
         {activeTab === 2 && (
           <div>
-            <h3 style={{ marginBottom: '20px', color: '#e2e8f0' }}>📊 提取招标信息</h3>
-            
             {/* 子标签导航 */}
             <div style={{ display: 'flex', gap: '8px', marginBottom: '24px', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '12px' }}>
               {[
@@ -2172,7 +2175,6 @@ export default function TenderWorkspaceV2() {
             flexDirection: 'column',
             overflow: 'hidden'  // ✅ 防止双滚动条
           }}>
-            <h3 style={{ marginBottom: '20px', color: '#e2e8f0', flexShrink: 0 }}>🤖 AI生成标书内容</h3>
             {directory.length > 0 ? (
               <div style={{ 
                 flex: 1,  // ✅ 占据剩余空间
@@ -2196,8 +2198,7 @@ export default function TenderWorkspaceV2() {
         {/* Step 4: 审核 */}
         {activeTab === 4 && (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, color: '#e2e8f0' }}>投标文件审核</h3>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '16px' }}>
               <button 
                 onClick={startReview} 
                 className="kb-create-form"
@@ -2249,8 +2250,9 @@ export default function TenderWorkspaceV2() {
                 }}>
                   <div style={{ fontWeight: 600, marginBottom: '8px', color: '#60a5fa' }}>💡 审核模式说明</div>
                   <ul style={{ margin: 0, paddingLeft: '20px', color: '#94a3b8', fontSize: '13px' }}>
-                    <li style={{ marginBottom: '4px' }}><strong>不选规则包</strong>：基础评估模式 - 快速检查每个招标要求是否有投标响应</li>
-                    <li><strong>选择规则包</strong>：详细审核模式 - 使用自定义规则 + 基础评估，进行全面合规性审核</li>
+                    <li style={{ marginBottom: '4px' }}><strong>不选规则包</strong>：基础评估模式 - 基于招标要求快速检查投标响应的完整性</li>
+                    <li><strong>选择规则包</strong>：详细审核模式 - 叠加自定义合规规则，进行全面深度审核</li>
+                    <li style={{ color: '#fbbf24' }}>💡 <strong>规则包 ≠ 招标要求</strong>：规则包是通用的合规检查规则（如资质、格式等），招标要求是从招标文件中提取的具体要求</li>
                   </ul>
                 </div>
                 {rulePacks.length > 0 ? (
@@ -2283,7 +2285,7 @@ export default function TenderWorkspaceV2() {
                   </div>
                 ) : (
                   <div className="kb-empty">
-                    暂无自定义规则包（可选，可在左侧"自定义规则"页面创建）
+                    暂无自定义规则包（可在左侧"自定义规则"页面创建）
                   </div>
                 )}
               </div>

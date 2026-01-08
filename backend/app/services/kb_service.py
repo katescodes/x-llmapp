@@ -31,14 +31,16 @@ def list_kbs_by_owner(owner_id: str):
             """, (owner_id,))
             
             rows = cur.fetchall()
+            # ✅ 转换日期字段为字符串
+            from datetime import datetime
             return [
                 {
                     "id": row['id'],
                     "name": row['name'],
                     "description": row['description'],
                     "category_id": row['category_id'],
-                    "created_at": row['created_at'],
-                    "updated_at": row['updated_at'],
+                    "created_at": row['created_at'].isoformat() if isinstance(row['created_at'], datetime) else (row['created_at'] if row['created_at'] else None),
+                    "updated_at": row['updated_at'].isoformat() if isinstance(row['updated_at'], datetime) else (row['updated_at'] if row['updated_at'] else None),
                     "owner_id": row['owner_id'],
                 }
                 for row in rows
@@ -145,16 +147,24 @@ def list_documents(kb_id: str):
             
             documents = []
             for row in rows:
-                doc_id, filename, source, status, created_at, updated_at, meta_json, kb_category = row
+                # ✅ 从dict中通过键名访问，而不是解包
+                from datetime import datetime
+                created_at = row['created_at']
+                updated_at = row['updated_at']
+                
+                # 处理日期字段：如果是datetime对象则转换，如果已经是字符串则直接使用
+                created_at_str = created_at.isoformat() if isinstance(created_at, datetime) else (created_at if created_at else None)
+                updated_at_str = updated_at.isoformat() if isinstance(updated_at, datetime) else (updated_at if updated_at else None)
+                
                 documents.append({
-                    'id': doc_id,
-                    'filename': filename,
-                    'source': source,
-                    'status': status,
-                    'created_at': created_at.isoformat() if created_at else None,
-                    'updated_at': updated_at.isoformat() if updated_at else None,
-                    'meta': meta_json or {},
-                    'kb_category': kb_category or 'general_doc',
+                    'id': row['id'],
+                    'filename': row['filename'],
+                    'source': row['source'],
+                    'status': row['status'],
+                    'created_at': created_at_str,
+                    'updated_at': updated_at_str,
+                    'meta': row['meta_json'] or {},
+                    'kb_category': row['kb_category'] or 'general_doc',
                 })
             
             return documents

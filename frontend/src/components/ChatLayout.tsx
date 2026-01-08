@@ -73,7 +73,10 @@ const ChatLayout: React.FC = () => {
   const [selectedLLM, setSelectedLLM] = useState<string | undefined>();
   const [activeLLMName, setActiveLLMName] = useState<string | undefined>();
 
-  const [sessionId, setSessionId] = useState<string | undefined>();
+  const [sessionId, setSessionId] = useState<string | undefined>(() => {
+    // 从localStorage恢复当前会话ID
+    return localStorage.getItem('current_chat_session_id') || undefined;
+  });
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [sessionLoading, setSessionLoading] = useState(false);
 
@@ -102,6 +105,28 @@ const ChatLayout: React.FC = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // 保存sessionId到localStorage
+  useEffect(() => {
+    if (sessionId) {
+      localStorage.setItem('current_chat_session_id', sessionId);
+    } else {
+      localStorage.removeItem('current_chat_session_id');
+    }
+  }, [sessionId]);
+
+  // 页面加载时恢复会话
+  useEffect(() => {
+    const savedSessionId = localStorage.getItem('current_chat_session_id');
+    if (savedSessionId && messages.length === 0) {
+      // 只在消息为空时恢复，避免重复加载
+      handleLoadSession(savedSessionId).catch(() => {
+        // 如果加载失败，清除保存的sessionId
+        localStorage.removeItem('current_chat_session_id');
+        setSessionId(undefined);
+      });
+    }
+  }, []); // 只在组件挂载时执行一次
 
   const fetchSessions = useCallback(async () => {
     try {
@@ -455,6 +480,7 @@ const ChatLayout: React.FC = () => {
       });
       if (!resp.ok) throw new Error("删除会话失败");
       if (sessionId === id) {
+        localStorage.removeItem('current_chat_session_id'); // 清除保存的会话ID
         handleStartNew();
       }
       fetchSessions();
@@ -469,6 +495,7 @@ const ChatLayout: React.FC = () => {
     setMessages([]);
     setSources([]);
     setSearchWarning(null);
+    localStorage.removeItem('current_chat_session_id'); // 清除保存的会话ID
     const currentModelName =
       llmOptions.find((opt) => opt.key === selectedLLM)?.name || activeLLMName;
     if (currentModelName) {
@@ -500,8 +527,17 @@ const ChatLayout: React.FC = () => {
       <div className="sidebar">
         {/* 固定头部 */}
         <div className="sidebar-header">
-          <div className="sidebar-title">亿林GPT · Search</div>
-          <div className="sidebar-subtitle">本地大模型 + 联网搜索 + RAG</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+            <img 
+              src="/logo.png?v=2" 
+              alt="亿林亿智" 
+              style={{ height: '40px', width: '40px', objectFit: 'contain' }}
+            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <div className="sidebar-title" style={{ marginBottom: 0, lineHeight: '1.2' }}>亿林亿智</div>
+              <div className="sidebar-subtitle" style={{ marginBottom: 0, lineHeight: '1.2' }}>本地大模型 + 联网搜索 + RAG</div>
+            </div>
+          </div>
         </div>
 
         {/* 可滚动内容区 */}

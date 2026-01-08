@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 class CustomRulePackCreateReq(BaseModel):
     """创建自定义规则包请求"""
-    project_id: str = Field(..., description="项目ID")
+    project_id: Optional[str] = Field(None, description="项目ID（可选，不传则创建共享规则包）")
     pack_name: str = Field(..., min_length=1, description="规则包名称")
     rule_requirements: str = Field(..., min_length=1, description="规则要求文本（用户输入）")
     model_id: Optional[str] = Field(None, description="使用的模型ID")

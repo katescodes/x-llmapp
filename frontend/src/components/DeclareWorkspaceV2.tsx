@@ -1713,8 +1713,6 @@ export default function DeclareWorkspaceV2() {
                   flexDirection: 'column',
                   overflow: 'hidden'
                 }}>
-                  <h3 style={{ marginBottom: '20px', color: '#e2e8f0', flexShrink: 0 }}>🤖 AI生成申报书内容</h3>
-                  
                   {directoryVersions && directoryVersions.length > 0 ? (
                     <div style={{ 
                       flex: 1,

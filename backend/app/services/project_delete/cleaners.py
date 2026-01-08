@@ -160,7 +160,7 @@ class KnowledgeBaseResourceCleaner(ProjectResourceCleaner):
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT kb_id FROM tender_projects WHERE id=%s",
+                    "SELECT kb_id FROM tender_projects WHERE project_id=%s",
                     (project_id,)
                 )
                 row = cur.fetchone()
@@ -223,7 +223,7 @@ class KnowledgeBaseResourceCleaner(ProjectResourceCleaner):
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT kb_id FROM tender_projects WHERE id=%s",
+                    "SELECT kb_id FROM tender_projects WHERE project_id=%s",
                     (project_id,)
                 )
                 row = cur.fetchone()
@@ -278,9 +278,7 @@ class MetadataResourceCleaner(ProjectResourceCleaner):
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 # 统计各类资源
-                # tender_risks 表已删除
-                # cur.execute("SELECT COUNT(*) as count FROM tender_risks WHERE project_id=%s", (project_id,))
-                counts["risks"] = cur.fetchone()['count']
+                # tender_risks 表已删除，不再统计
                 
                 cur.execute("SELECT COUNT(*) as count FROM tender_directory_nodes WHERE project_id=%s", (project_id,))
                 counts["directory"] = cur.fetchone()['count']

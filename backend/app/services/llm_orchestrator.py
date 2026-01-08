@@ -93,13 +93,24 @@ async def summarize_with_llm(
     if attachment_context:
         attachment_hint = "\n注意：用户上传了附件，附件内容已包含在 search_context 中，请优先基于附件内容回答。"
     
+    # 如果有实际检索结果，增强忠实引用的约束
+    kb_constraint = ""
+    if sources:
+        kb_constraint = (
+            "\n\n【重要约束】\n"
+            "- 严格基于 search_context 中的内容回答，不要添加检索内容之外的信息\n"
+            "- 不要使用外部知识或常识来补充、推测或评价\n"
+            "- 忠实转述检索到的内容，保持原文的准确性\n"
+            "- 如果检索内容不足以完整回答问题，明确说明缺失部分，不要猜测"
+        )
+    
     summarizer_user = (
         f"用户问题:\n{user_question}\n\n"
         f"search_context:\n{context_text}\n\n"
         f"可以使用的引用编号：{available_refs}\n"
         f"回答要求:\n- 语言: {answer_style.language}\n- 输出形式: {answer_style.format}\n"
         f"- 重点: {focus_text}\n"
-        f"请基于 search_context 给出有条理的回答。{attachment_hint}"
+        f"请基于 search_context 给出有条理的回答。{attachment_hint}{kb_constraint}"
     )
     prompt_chars = len(summarizer_system) + len(summarizer_user)
     req_logger.info(
@@ -155,13 +166,24 @@ async def summarize_with_llm_stream(
     if attachment_context:
         attachment_hint = "\n注意：用户上传了附件，附件内容已包含在 search_context 中，请优先基于附件内容回答。"
     
+    # 如果有实际检索结果，增强忠实引用的约束
+    kb_constraint = ""
+    if sources:
+        kb_constraint = (
+            "\n\n【重要约束】\n"
+            "- 严格基于 search_context 中的内容回答，不要添加检索内容之外的信息\n"
+            "- 不要使用外部知识或常识来补充、推测或评价\n"
+            "- 忠实转述检索到的内容，保持原文的准确性\n"
+            "- 如果检索内容不足以完整回答问题，明确说明缺失部分，不要猜测"
+        )
+    
     summarizer_user = (
         f"用户问题:\n{user_question}\n\n"
         f"search_context:\n{context_text}\n\n"
         f"可以使用的引用编号：{available_refs}\n"
         f"回答要求:\n- 语言: {answer_style.language}\n- 输出形式: {answer_style.format}\n"
         f"- 重点: {focus_text}\n"
-        f"请基于 search_context 给出有条理的回答。{attachment_hint}"
+        f"请基于 search_context 给出有条理的回答。{attachment_hint}{kb_constraint}"
     )
     prompt_chars = len(summarizer_system) + len(summarizer_user)
     req_logger.info(

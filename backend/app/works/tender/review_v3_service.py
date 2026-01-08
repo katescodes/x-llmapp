@@ -135,8 +135,17 @@ class ReviewV3Service:
         logger.info(f"ReviewV3: Found {len(rules)} active rules from {len(rule_pack_ids)} packs")
         
         for rule in rules:
-            (rule_id, rule_pack_id, rule_key, rule_name, dimension, 
-             evaluator, condition_json, severity, is_hard, pack_name) = rule
+            # ✅ 从dict中通过键名访问，而不是解包（cursor返回dict row）
+            rule_id = rule['id']
+            rule_pack_id = rule['rule_pack_id']
+            rule_key = rule['rule_key']
+            rule_name = rule['rule_name']
+            dimension = rule['dimension']
+            evaluator = rule['evaluator']
+            condition_json = rule['condition_json']
+            severity = rule['severity']
+            is_hard = rule['is_hard']
+            pack_name = rule['pack_name']
             
             # 转换为虚拟requirement
             virtual_req = self._convert_rule_to_requirement(
@@ -212,23 +221,16 @@ class ReviewV3Service:
         else:
             req_type = "SEMANTIC"  # 默认语义审核
         
-        # 映射dimension
-        dimension_map = {
-            "qualification": "qualification",
-            "technical": "technical",
-            "business": "business",
-            "price": "price",
-            "doc_structure": "doc_structure",
-            "schedule_quality": "schedule_quality",
-            "other": "other"
-        }
-        mapped_dimension = dimension_map.get(dimension, dimension)
+        # ✅ 自定义规则统一使用"custom_rule"维度（在前端显示为"自定义"）
+        # 不使用规则原始的dimension，而是统一标记为自定义规则
+        mapped_dimension = "custom_rule"
         
         # 构建虚拟requirement
         virtual_req = {
             "id": virtual_id,
+            "requirement_id": rule_key,  # ✅ 添加requirement_id字段，用于一体化审核的映射
             "project_id": project_id,
-            "dimension": mapped_dimension,
+            "dimension": mapped_dimension,  # ✅ 统一为"custom_rule"
             "requirement_text": requirement_text,
             "req_type": req_type,
             "is_hard": is_hard,

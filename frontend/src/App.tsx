@@ -15,7 +15,7 @@ type Page = "chat" | "settings" | "kb" | "recordings" | "tender" | "declare" | "
 
 const MainApp: React.FC = () => {
   const { user, logout, isLoading } = useAuth();
-  const { canAccessAdminMode } = usePermission();
+  const { canAccessAdminMode, hasPermission, hasAnyPermission } = usePermission();
   const [currentPage, setCurrentPage] = useState<Page>("chat");
 
   // 监听从招投标工作台跳转到格式模板的事件
@@ -53,11 +53,6 @@ const MainApp: React.FC = () => {
     return <LoginPage />;
   }
 
-  const pageContainerStyle = (visible: boolean): React.CSSProperties => ({
-    display: visible ? "block" : "none",
-    height: "100%",
-  });
-
   // 已登录：显示主应用
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
@@ -70,36 +65,51 @@ const MainApp: React.FC = () => {
         >
           💬 对话
         </button>
-        <button
-          onClick={() => setCurrentPage("kb")}
-          className={`nav-btn ${currentPage === "kb" ? "active" : ""}`}
-        >
-          📚 知识库
-        </button>
-        <button
-          onClick={() => setCurrentPage("tender")}
-          className={`nav-btn ${currentPage === "tender" ? "active" : ""}`}
-        >
-          🧾 招投标
-        </button>
-        <button
-          onClick={() => setCurrentPage("declare")}
-          className={`nav-btn ${currentPage === "declare" ? "active" : ""}`}
-        >
-          📝 申报书
-        </button>
-        <button
-          onClick={() => setCurrentPage("recordings")}
-          className={`nav-btn ${currentPage === "recordings" ? "active" : ""}`}
-        >
-          📼 我的录音
-        </button>
-        <button
-          onClick={() => setCurrentPage("settings")}
-          className={`nav-btn ${currentPage === "settings" ? "active" : ""}`}
-        >
-          ⚙️ 系统设置
-        </button>
+        {/* 知识库 - 需要 kb.view 权限 */}
+        {hasPermission("kb.view") && (
+          <button
+            onClick={() => setCurrentPage("kb")}
+            className={`nav-btn ${currentPage === "kb" ? "active" : ""}`}
+          >
+            📚 知识库
+          </button>
+        )}
+        {/* 招投标 - 需要 tender.view 权限 */}
+        {hasPermission("tender.view") && (
+          <button
+            onClick={() => setCurrentPage("tender")}
+            className={`nav-btn ${currentPage === "tender" ? "active" : ""}`}
+          >
+            🧾 招投标
+          </button>
+        )}
+        {/* 申报书 - 需要 declare.view 权限 */}
+        {hasPermission("declare.view") && (
+          <button
+            onClick={() => setCurrentPage("declare")}
+            className={`nav-btn ${currentPage === "declare" ? "active" : ""}`}
+          >
+            📝 申报书
+          </button>
+        )}
+        {/* 我的录音 - 需要 recording.view 权限 */}
+        {hasPermission("recording.view") && (
+          <button
+            onClick={() => setCurrentPage("recordings")}
+            className={`nav-btn ${currentPage === "recordings" ? "active" : ""}`}
+          >
+            📼 我的录音
+          </button>
+        )}
+        {/* 系统设置 - 需要管理员或员工权限 */}
+        {canAccessAdminMode && (
+          <button
+            onClick={() => setCurrentPage("settings")}
+            className={`nav-btn ${currentPage === "settings" ? "active" : ""}`}
+          >
+            ⚙️ 系统设置
+          </button>
+        )}
         </div>
         
         {/* 用户信息和退出 */}
@@ -128,48 +138,13 @@ const MainApp: React.FC = () => {
 
       {/* 页面内容 */}
       <div style={{ flex: 1, overflow: "hidden", minHeight: 0 }}>
-        <div
-          style={pageContainerStyle(currentPage === "chat")}
-          aria-hidden={currentPage !== "chat"}
-        >
-          <ChatLayout />
-        </div>
-        <div
-          style={pageContainerStyle(currentPage === "kb")}
-          aria-hidden={currentPage !== "kb"}
-        >
-          <KnowledgeBaseManager />
-        </div>
-        <div
-          style={pageContainerStyle(currentPage === "tender")}
-          aria-hidden={currentPage !== "tender"}
-        >
-          <TenderWorkspace />
-        </div>
-        <div
-          style={pageContainerStyle(currentPage === "declare")}
-          aria-hidden={currentPage !== "declare"}
-        >
-          <DeclareWorkspace />
-        </div>
-        <div
-          style={pageContainerStyle(currentPage === "format-templates")}
-          aria-hidden={currentPage !== "format-templates"}
-        >
-          <FormatTemplatesPage />
-        </div>
-        <div
-          style={pageContainerStyle(currentPage === "recordings")}
-          aria-hidden={currentPage !== "recordings"}
-        >
-          <RecordingsList />
-        </div>
-        <div
-          style={pageContainerStyle(currentPage === "settings")}
-          aria-hidden={currentPage !== "settings"}
-        >
-          <SystemSettings />
-        </div>
+        {currentPage === "chat" && <ChatLayout />}
+        {currentPage === "kb" && <KnowledgeBaseManager />}
+        {currentPage === "tender" && <TenderWorkspace />}
+        {currentPage === "declare" && <DeclareWorkspace />}
+        {currentPage === "format-templates" && <FormatTemplatesPage />}
+        {currentPage === "recordings" && <RecordingsList />}
+        {currentPage === "settings" && <SystemSettings />}
       </div>
       
       {/* Debug 面板（仅开发模式） */}

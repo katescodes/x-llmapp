@@ -2,10 +2,19 @@
  * 录音管理样式
  */
 
+.recordings-page-wrapper {
+  width: 100%;
+  height: 100%;
+}
+
 .recordings-container {
   padding: 24px;
   max-width: 1200px;
   margin: 0 auto;
+}
+
+.recordings-main-content {
+  min-width: 0;
 }
 
 .recordings-header {
@@ -90,6 +99,28 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+  max-height: calc(100vh - 300px); /* 限制最大高度 */
+  overflow-y: auto; /* 添加垂直滚动条 */
+  padding-right: 8px; /* 为滚动条留出空间 */
+}
+
+/* 美化滚动条 */
+.recordings-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.recordings-list::-webkit-scrollbar-track {
+  background: rgba(30, 41, 59, 0.3);
+  border-radius: 4px;
+}
+
+.recordings-list::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.5);
+  border-radius: 4px;
+}
+
+.recordings-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.7);
 }
 
 .recording-card {
@@ -505,3 +536,301 @@
     padding: 8px 10px;
   }
 }
+
+/* 侧边栏样式 */
+.recordings-sidebar {
+  position: sticky;
+  top: 20px;
+  flex: 0 0 60%;
+  max-width: none;
+  min-height: 500px; /* 最小高度 */
+  max-height: none; /* 移除高度限制 */
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: visible; /* 允许内容超出 */
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  animation: slideInRight 0.3s ease-out;
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.sidebar-header h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #f8fafc;
+  margin: 0;
+}
+
+.sidebar-close-btn {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: all 0.2s;
+  line-height: 1;
+}
+
+.sidebar-close-btn:hover {
+  background: rgba(148, 163, 184, 0.1);
+  color: #f8fafc;
+}
+
+/* Tab切换样式 */
+.sidebar-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.3);
+  padding: 0;
+}
+
+.sidebar-tab {
+  flex: 1;
+  padding: 12px 16px;
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-bottom: 2px solid transparent;
+  position: relative;
+}
+
+.sidebar-tab:hover {
+  color: #e2e8f0;
+  background: rgba(148, 163, 184, 0.05);
+}
+
+.sidebar-tab.active {
+  color: #3b82f6;
+  background: rgba(59, 130, 246, 0.1);
+  border-bottom-color: #3b82f6;
+}
+
+.sidebar-meta {
+  padding: 16px 24px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(15, 23, 42, 0.3);
+}
+
+.sidebar-meta-item {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.sidebar-meta-row {
+  display: flex;
+  gap: 20px;
+}
+
+.meta-label {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.meta-value {
+  color: #e2e8f0;
+}
+
+.sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto; /* 添加横向滚动 */
+  padding: 24px;
+  min-height: 0; /* 允许内容收缩 */
+  max-height: calc(100vh - 300px); /* 限制最大高度以确保滚动条可见 */
+}
+
+/* 侧边栏内容滚动条样式 */
+.sidebar-content::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.sidebar-content::-webkit-scrollbar-track {
+  background: rgba(148, 163, 184, 0.1);
+  border-radius: 4px;
+}
+
+.sidebar-content::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 4px;
+}
+
+.sidebar-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.6);
+}
+
+.sidebar-text {
+  color: #e2e8f0;
+  font-size: 15px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 600px; /* 限制最大高度 */
+  overflow-y: auto; /* 添加纵向滚动条 */
+  overflow-x: auto; /* 添加横向滚动条 */
+  padding-right: 8px; /* 为滚动条留出空间 */
+}
+
+/* 文本区域滚动条样式 */
+.sidebar-text::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.sidebar-text::-webkit-scrollbar-track {
+  background: rgba(148, 163, 184, 0.1);
+  border-radius: 4px;
+}
+
+.sidebar-text::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 4px;
+}
+
+.sidebar-text::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.6);
+}
+
+.sidebar-actions {
+  padding: 16px 24px;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.3);
+  display: flex;
+  gap: 12px;
+}
+
+.sidebar-action-btn {
+  flex: 1;
+  padding: 10px 16px;
+  background: rgba(59, 130, 246, 0.2);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 8px;
+  color: #93c5fd;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.sidebar-action-btn:hover {
+  background: rgba(59, 130, 246, 0.3);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+/* 思维导图样式 */
+.sidebar-mindmap {
+  width: 100%;
+  min-height: 500px; /* 最小高度 */
+  max-height: 600px; /* 限制最大高度以显示滚动条 */
+  height: auto; /* 自动高度 */
+  overflow: auto; /* 双向滚动 */
+  padding-right: 8px; /* 为滚动条留出空间 */
+}
+
+/* 思维导图滚动条样式 */
+.sidebar-mindmap::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.sidebar-mindmap::-webkit-scrollbar-track {
+  background: rgba(148, 163, 184, 0.1);
+  border-radius: 5px;
+}
+
+.sidebar-mindmap::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.5);
+  border-radius: 5px;
+}
+
+.sidebar-mindmap::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.7);
+}
+
+.sidebar-mindmap::-webkit-scrollbar-corner {
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.sidebar-mindmap .mermaid-diagram {
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  margin: 0;
+  min-width: 100%; /* 最小宽度为容器宽度 */
+  width: max-content; /* 宽度自适应内容 */
+  min-height: 400px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start; /* 左对齐 */
+}
+
+.sidebar-mindmap .mermaid {
+  width: max-content; /* 宽度自适应内容 */
+  min-width: 100%;
+  display: flex;
+  justify-content: flex-start; /* 左对齐 */
+}
+
+.sidebar-mindmap svg {
+  max-width: none; /* 移除最大宽度限制 */
+  width: auto; /* 自动宽度 */
+  height: auto;
+  min-width: 800px; /* 最小宽度确保横向展开 */
+}
+
+/* 移动端侧边栏适配 */
+@media (max-width: 1024px) {
+  .recordings-sidebar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    max-width: none;
+    width: 90%;
+    height: 100vh;
+    border-radius: 0;
+    z-index: 1000;
+  }
+  
+  .recordings-container {
+    position: relative;
+  }
+}
+
+@media (max-width: 768px) {
+  .recordings-sidebar {
+    width: 100%;
+  }
+}
+

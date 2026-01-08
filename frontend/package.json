@@ -1,6 +1,6 @@
 {
   "name": "localgpt-search-frontend",
-  "version": "0.2.0",
+  "version": "0.4.8",
   "private": true,
   "scripts": {
     "dev": "vite",
@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "axios": "^1.6.0",
+    "mermaid": "^10.9.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",

@@ -7,9 +7,12 @@ import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, TYPE_CHECKING
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from urllib.parse import urlparse
+
+from app.utils.permission import require_permission
+from app.models.user import TokenData
 
 if TYPE_CHECKING:
     from psycopg_pool import ConnectionPool
@@ -280,6 +283,7 @@ def _format_sse_event(event_type: str, payload: dict) -> bytes:
 async def _chat_endpoint_impl(
     req: ChatRequest,
     request_id: str,
+    current_user: Optional[TokenData] = None,
     stream_tokens: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> ChatResponse:
     req_logger = get_request_logger(logger, request_id)
@@ -347,7 +351,8 @@ async def _chat_endpoint_impl(
     if not session_id:
         title = req.message[:40] or "新会话"
         initial_kbs = explicit_kb_ids if kb_override_provided else []
-        session_id = create_history_session(title, initial_kbs, search_mode, req.llm_key)
+        owner_id = current_user.user_id if current_user else None
+        session_id = create_history_session(title, initial_kbs, search_mode, req.llm_key, owner_id)
         history_session = get_history_session(session_id)
 
     if history_session is None:
@@ -1248,13 +1253,19 @@ async def _chat_endpoint_impl(
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(req: ChatRequest) -> ChatResponse:
+async def chat_endpoint(
+    req: ChatRequest,
+    current_user: TokenData = Depends(require_permission("chat.create"))
+) -> ChatResponse:
     request_id = uuid4().hex
-    return await _chat_endpoint_impl(req, request_id)
+    return await _chat_endpoint_impl(req, request_id, current_user)
 
 
 @router.post("/chat/stream")
-async def chat_stream_endpoint(req: ChatRequest):
+async def chat_stream_endpoint(
+    req: ChatRequest,
+    current_user: TokenData = Depends(require_permission("chat.create"))
+):
     request_id = uuid4().hex
     queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue()
     done_event = asyncio.Event()
@@ -1268,6 +1279,7 @@ async def chat_stream_endpoint(req: ChatRequest):
             response = await _chat_endpoint_impl(
                 req,
                 request_id,
+                current_user,
                 stream_tokens=send_delta,
             )
             await queue.put(_format_sse_event("result", response.model_dump()))

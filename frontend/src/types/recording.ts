@@ -24,6 +24,8 @@ export interface Recording {
   notes?: string;
   created_at: string;
   imported_at?: string;
+  audio_path?: string;
+  keep_audio?: boolean;
 }
 
 export interface RecordingListResponse {

@@ -27,12 +27,15 @@ class ProjectCreateReq(BaseModel):
 
 class ProjectOut(BaseModel):
     """项目输出模型"""
+    model_config = {"from_attributes": True}
+    
     project_id: str  # 统一使用project_id，与数据库字段名一致
     kb_id: str
     name: str
     description: Optional[str] = None
     owner_id: Optional[str] = None
     created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     
     # 为前端兼容性添加 id 字段（计算属性）
     @computed_field

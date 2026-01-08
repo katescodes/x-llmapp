@@ -2,7 +2,7 @@
 申报书 Router
 """
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -479,8 +479,16 @@ async def analyze_user_intent(
 只返回JSON，不要其他文字。"""
 
     try:
-        response = await llm.agenerate([intent_prompt])
-        result_text = response.generations[0][0].text.strip()
+        messages = [{"role": "user", "content": intent_prompt}]
+        response = await llm.achat(messages=messages, model_id=None)
+        
+        # 提取文本内容
+        if isinstance(response, dict) and "choices" in response:
+            result_text = response["choices"][0]["message"]["content"].strip()
+        elif isinstance(response, str):
+            result_text = response.strip()
+        else:
+            result_text = str(response).strip()
         
         # 提取JSON
         if "```json" in result_text:
@@ -539,7 +547,14 @@ async def generate_section_content(
         req_data = requirements.get("data_json", {})
         requirements_summary = req_data.get("summary", "") if isinstance(req_data, dict) else ""
     
-    # 如果有用户自定义要求，添加到上下文
+    # ✅ 如果有用户自定义要求，添加到上下文
+    requirements_dict = {}
+    if requirements_summary:
+        requirements_dict["summary"] = requirements_summary
+    if request_data.requirements:
+        requirements_dict["custom_requirements"] = request_data.requirements
+    
+    # 构建最终的requirements_summary（用于向后兼容）
     if request_data.requirements:
         requirements_summary += f"\n\n【用户要求】\n{request_data.requirements}"
     
@@ -553,6 +568,7 @@ async def generate_section_content(
         node_title=request_data.title,
         node_level=request_data.level,  # 使用前端传来的level
         requirements_summary=requirements_summary,
+        requirements_dict=requirements_dict,  # ✅ 新增：结构化的requirements
         run_id=None,
     )
     

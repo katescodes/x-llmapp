@@ -202,13 +202,19 @@ class PromptBuilder:
         if has_materials:
             materials_text = context.retrieval_result.format_for_prompt()
         
+        # ✅ 提取用户自定义要求
+        custom_requirements = ""
+        if context.requirements and "custom_requirements" in context.requirements:
+            custom_requirements = context.requirements["custom_requirements"]
+        
         template_context = {
             "section_title": context.section_title,
             "section_level": context.section_level,
             "project_info": self._format_project_info(context.project_info),
             "has_materials": has_materials,
             "materials": materials_text,
-            "min_words": min_words
+            "min_words": min_words,
+            "custom_requirements": custom_requirements  # ✅ 传递用户要求
         }
         
         try:
@@ -244,14 +250,28 @@ class PromptBuilder:
                 )
             
             parts.append("")
+            
+            # ✅ 如果有用户自定义要求，优先展示
+            if context.requirements and "custom_requirements" in context.requirements:
+                custom_req = context.requirements["custom_requirements"]
+                parts.append("【🎯 用户特殊要求】")
+                parts.append(custom_req)
+                parts.append("")
+                parts.append("⚠️ **重要提示**")
+                parts.append("- 请严格按照上述用户要求生成内容")
+                parts.append("- 如果要求生成表格，必须使用HTML <table>、<tr>、<td> 标签")
+                parts.append("- 如果要求某种格式，必须完全遵循该格式要求")
+                parts.append("")
+            
             parts.append("【输出要求】")
-            parts.append("1. 输出HTML格式的章节内容（使用<p>、<ul>、<li>等标签）")
+            parts.append("1. 输出HTML格式的章节内容（使用<p>、<ul>、<li>、<table>等标签）")
             parts.append(f"2. 内容至少{min_words}字，分为3-6段")
             parts.append("3. 根据标题类型生成合适内容：")
             parts.append("   - 如果是「投标函」「授权书」等格式类章节，生成对应的格式范本")
             parts.append("   - 如果是技术方案类章节，详细描述技术路线、方法、保障措施等")
             parts.append("   - 如果是商务类章节，说明报价依据、优惠措施、付款方式等")
             parts.append("   - 如果是公司/业绩类章节，充分利用企业资料展示实力")
+            parts.append("   - 如果用户要求表格格式，必须生成标准HTML表格（<table>标签）")
             parts.append("4. 不要输出章节标题，只输出正文内容")
             
             return "\n".join(parts)
@@ -293,9 +313,15 @@ class PromptBuilder:
                     has_images = True
                     break
         
+        # ✅ 提取用户自定义要求
+        custom_requirements = ""
+        if context.requirements and "custom_requirements" in context.requirements:
+            custom_requirements = context.requirements["custom_requirements"]
+        
         template_context = {
             "section_title": context.section_title,
             "section_notes": section_notes,  # ✅ 新增
+            "custom_requirements": custom_requirements,  # ✅ 传递用户要求
             "has_requirements": has_requirements,
             "requirements": requirements_text,
             "has_materials": has_materials,
@@ -379,10 +405,22 @@ class PromptBuilder:
         return "\n".join(lines)
     
     def _format_requirements(self, requirements: Dict[str, Any]) -> str:
-        """格式化申报要求"""
+        """格式化申报要求和用户自定义要求"""
         lines = []
         
-        # 提取关键字段
+        # ✅ 优先处理用户自定义要求（来自AI助手）
+        if "custom_requirements" in requirements:
+            custom_req = requirements["custom_requirements"]
+            lines.append("【🎯 用户特殊要求】")
+            lines.append(custom_req)
+            lines.append("")
+            lines.append("⚠️ **重要提示**")
+            lines.append("- 请严格按照上述用户要求生成内容")
+            lines.append("- 如果要求生成表格，必须使用HTML <table>、<tr>、<td> 标签")
+            lines.append("- 如果要求某种格式，必须完全遵循该格式要求")
+            lines.append("")
+        
+        # 提取申报要求关键字段
         if "summary" in requirements:
             lines.append(requirements["summary"])
         elif "data_json" in requirements and isinstance(requirements["data_json"], dict):

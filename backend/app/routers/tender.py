@@ -40,6 +40,7 @@ from app.services.tender_service import TenderService
 from app.services.platform.jobs_service import JobsService
 from app.services import kb_service
 from app.utils.auth import get_current_user_sync
+from app.utils.permission import require_permission
 from app.utils.evidence_mapper import chunks_to_span_refs
 
 # 创建路由器
@@ -102,7 +103,7 @@ def _svc(req: Request) -> TenderService:
 # ==================== 项目管理 ====================
 
 @router.post("/projects", response_model=ProjectOut)
-def create_project(req: ProjectCreateReq, request: Request, user=Depends(get_current_user_sync)):
+def create_project(req: ProjectCreateReq, request: Request, user=Depends(require_permission("tender.create"))):
     """创建项目（自动创建KB）"""
     # 1. 先创建知识库，设置owner为当前用户
     kb_id = kb_service.create_kb(
@@ -1281,8 +1282,16 @@ async def analyze_user_intent(
 
     try:
         # 调用LLM分析意图
-        response = await llm.agenerate([intent_prompt])
-        result_text = response.generations[0][0].text.strip()
+        messages = [{"role": "user", "content": intent_prompt}]
+        response = await llm.achat(messages=messages, model_id=None)
+        
+        # 提取文本内容
+        if isinstance(response, dict) and "choices" in response:
+            result_text = response["choices"][0]["message"]["content"].strip()
+        elif isinstance(response, str):
+            result_text = response.strip()
+        else:
+            result_text = str(response).strip()
         
         # 尝试提取JSON（去掉可能的markdown代码块标记）
         if "```json" in result_text:
@@ -1352,6 +1361,7 @@ async def generate_section_content(
         title=req.title,
         level=req.level,
         project_context=project_context,
+        requirements=req.requirements,  # ✅ 传递用户要求
         model_id=model_id,
     )
     

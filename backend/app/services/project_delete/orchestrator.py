@@ -48,7 +48,7 @@ class ProjectDeletionOrchestrator:
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, name FROM tender_projects WHERE id=%s",
+                    "SELECT project_id, name FROM tender_projects WHERE project_id=%s",
                     (project_id,)
                 )
                 row = cur.fetchone()
@@ -112,7 +112,7 @@ class ProjectDeletionOrchestrator:
             with self.pool.connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "DELETE FROM tender_projects WHERE id=%s",
+                        "DELETE FROM tender_projects WHERE project_id=%s",
                         (project_id,)
                     )
                 conn.commit()
@@ -133,7 +133,7 @@ class ProjectDeletionOrchestrator:
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT name FROM tender_projects WHERE id=%s",
+                    "SELECT name FROM tender_projects WHERE project_id=%s",
                     (project_id,)
                 )
                 row = cur.fetchone()

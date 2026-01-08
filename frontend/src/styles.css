@@ -14,6 +14,7 @@ body {
     sans-serif;
   background-color: #0f172a;
   color: #e5e7eb;
+  letter-spacing: 1px;  /* 字间距：0.5px（轻微）；1px（适中）；1.5px（较宽） */
   /* 移动端优化 */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -719,9 +720,13 @@ body {
   color: #e5e7eb;
   resize: none;
   min-height: 48px;
+  max-height: 144px; /* 6行 * 24px */
   min-width: 0; /* 允许缩小 */
   font-size: 14px;
+  line-height: 24px; /* 明确设置行高 */
   box-sizing: border-box; /* padding 计入宽度 */
+  overflow-y: hidden; /* 默认隐藏滚动条，由JS控制 */
+  transition: height 0.1s ease; /* 平滑过渡 */
 }
 
 .btn-primary {

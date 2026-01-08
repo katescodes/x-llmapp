@@ -12,6 +12,7 @@ from datetime import datetime
 
 from app.services import recording_service
 from app.utils.auth import get_current_user, TokenData
+from app.utils.permission import require_permission
 
 router = APIRouter(prefix="/api/recordings", tags=["Recordings"])
 logger = logging.getLogger(__name__)
@@ -92,7 +93,7 @@ async def get_recording(
 async def import_recording(
     recording_id: str,
     request: ImportRecordingRequest,
-    current_user: TokenData = Depends(get_current_user)
+    current_user: TokenData = Depends(require_permission("recording.import"))
 ):
     """
     导入录音到知识库
@@ -246,7 +247,7 @@ async def get_recording_audio(
 async def upload_audio_file(
     file: UploadFile = File(...),
     title: Optional[str] = None,
-    current_user: TokenData = Depends(get_current_user)
+    current_user: TokenData = Depends(require_permission("recording.create"))
 ):
     """
     上传外部音频文件并创建录音记录
@@ -444,7 +445,7 @@ async def download_recording_audio(
 @router.post("/{recording_id}/summary")
 async def generate_recording_summary(
     recording_id: str,
-    current_user: TokenData = Depends(get_current_user)
+    current_user: TokenData = Depends(require_permission("recording.view"))
 ):
     """
     通过LLM生成录音摘要
@@ -502,7 +503,7 @@ async def generate_recording_summary(
 @router.post("/{recording_id}/mindmap")
 async def generate_recording_mindmap(
     recording_id: str,
-    current_user: TokenData = Depends(get_current_user)
+    current_user: TokenData = Depends(require_permission("recording.view"))
 ):
     """
     通过LLM生成录音思维导图（Mermaid格式）

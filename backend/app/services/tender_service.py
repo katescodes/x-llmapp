@@ -4167,6 +4167,7 @@ class TenderService:
         title: str,
         level: int,
         project_context: str,
+        requirements: Optional[str] = None,  # ✅ 新增：用户自定义要求
         model_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -4221,12 +4222,19 @@ class TenderService:
         
         # Step 3: 构建Prompt（使用统一组件）
         prompt_builder = PromptBuilder()
+        
+        # ✅ 如果有用户自定义要求，构建requirements字典
+        requirements_dict = None
+        if requirements:
+            requirements_dict = {"custom_requirements": requirements}
+        
         prompt_context = PromptContext(
             document_type="tender",
             section_title=title,
             section_level=level,
             project_info=project_info_dict,
-            retrieval_result=retrieval_result
+            retrieval_result=retrieval_result,
+            requirements=requirements_dict  # ✅ 传递用户要求
         )
         prompt = prompt_builder.build(prompt_context)
         
