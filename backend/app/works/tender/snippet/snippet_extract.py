@@ -55,16 +55,22 @@ async def extract_format_snippets(
     if not all_blocks:
         raise ValueError("文档为空，无法提取范本")
     
-    # 2. 定位"格式范本"章节
+    # 2. 策略：优先定位"格式范本"章节，找不到则全文扫描
+    chapter_blocks = None
     try:
         chapter_blocks = locate_format_chapter(all_blocks)
-        logger.info(f"格式章节定位完成: {len(chapter_blocks)} 个块")
+        if chapter_blocks and len(chapter_blocks) > 10:  # 至少有10个块才算有效
+            logger.info(f"✅ 定位到格式章节: {len(chapter_blocks)} 个块 ({len(chapter_blocks)/len(all_blocks)*100:.1f}%)")
+        else:
+            logger.warning(f"⚠️ 格式章节太小（{len(chapter_blocks) if chapter_blocks else 0}块），改用全文扫描")
+            chapter_blocks = None
     except Exception as e:
-        logger.warning(f"格式章节定位失败，使用全部blocks: {e}")
-        chapter_blocks = all_blocks
+        logger.warning(f"格式章节定位失败: {e}")
+        chapter_blocks = None
     
+    # 如果没有找到格式章节，使用全文
     if not chapter_blocks:
-        logger.warning("格式章节为空，使用全部blocks")
+        logger.info("📖 使用全文扫描模式（更全面，但可能识别到非范文内容）")
         chapter_blocks = all_blocks
     
     # 3. LLM 识别范本边界
@@ -74,6 +80,17 @@ async def extract_format_snippets(
     except Exception as e:
         logger.error(f"LLM 识别失败: {e}")
         raise ValueError(f"范本识别失败: {str(e)}")
+    
+    if not snippet_spans:
+        # 如果第一次没识别到，且之前是用格式章节，则尝试全文
+        if chapter_blocks != all_blocks:
+            logger.warning("格式章节未识别到范本，尝试全文扫描...")
+            try:
+                snippet_spans = detect_snippets(all_blocks, model_id=model_id)
+                logger.info(f"全文扫描识别完成: {len(snippet_spans)} 个范本")
+                chapter_blocks = all_blocks  # 切换到全文模式
+            except Exception as e2:
+                logger.error(f"全文扫描也失败: {e2}")
     
     if not snippet_spans:
         raise ValueError("未识别到任何格式范本，请检查文档内容")
@@ -98,8 +115,12 @@ async def extract_format_snippets(
             continue
         
         # 构建范本记录
+        # 使用 project_id + norm_key 生成确定性ID，避免重复
+        import hashlib
+        deterministic_id = hashlib.md5(f"{project_id}_{span['norm_key']}".encode()).hexdigest()[:16]
+        
         snippet = {
-            "id": f"snip_{uuid.uuid4().hex[:16]}",
+            "id": f"snip_{deterministic_id}",
             "project_id": project_id,
             "source_file_id": source_file_id or file_path,
             "norm_key": span["norm_key"],
@@ -116,6 +137,48 @@ async def extract_format_snippets(
     
     logger.info(f"格式范本提取完成: {len(snippets)} 个有效范本")
     return snippets
+
+
+def clean_duplicate_snippets(project_id: str, db_pool) -> int:
+    """
+    清理项目中的重复范文（保留置信度最高的）
+    
+    Args:
+        project_id: 项目ID
+        db_pool: 数据库连接池
+        
+    Returns:
+        删除的重复范文数量
+    """
+    logger.info(f"开始清理项目重复范文: project={project_id}")
+    
+    with db_pool.connection() as conn:
+        with conn.cursor() as cur:
+            # 找出重复的范文（相同的 norm_key）
+            cur.execute("""
+                WITH ranked_snippets AS (
+                    SELECT 
+                        id,
+                        norm_key,
+                        confidence,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY project_id, norm_key 
+                            ORDER BY confidence DESC, created_at DESC
+                        ) as rn
+                    FROM tender_format_snippets
+                    WHERE project_id = %s
+                )
+                DELETE FROM tender_format_snippets
+                WHERE id IN (
+                    SELECT id FROM ranked_snippets WHERE rn > 1
+                )
+            """, (project_id,))
+            
+            deleted_count = cur.rowcount
+            conn.commit()
+            
+            logger.info(f"清理完成: 删除了 {deleted_count} 个重复范文")
+            return deleted_count
 
 
 def save_snippets_to_db(snippets: List[Dict[str, Any]], db_pool) -> int:
@@ -142,6 +205,11 @@ def save_snippets_to_db(snippets: List[Dict[str, Any]], db_pool) -> int:
         with conn.cursor() as cur:
             for snippet in snippets:
                 try:
+                    # 确保 suggest_outline_titles 是列表
+                    suggest_titles = snippet.get("suggest_outline_titles", [])
+                    if not isinstance(suggest_titles, list):
+                        suggest_titles = []
+                    
                     cur.execute(
                         """
                         INSERT INTO tender_format_snippets (
@@ -163,7 +231,7 @@ def save_snippets_to_db(snippets: List[Dict[str, Any]], db_pool) -> int:
                             snippet["start_block_id"],
                             snippet["end_block_id"],
                             json.dumps(snippet["blocks_json"], ensure_ascii=False),
-                            snippet["suggest_outline_titles"],
+                            suggest_titles,  # PostgreSQL 会自动处理 Python 列表到 TEXT[] 的转换
                             snippet["confidence"]
                         )
                     )
@@ -208,8 +276,53 @@ def get_snippets_by_project(project_id: str, db_pool) -> List[Dict[str, Any]]:
             rows = cur.fetchall()
             
             snippets = []
-            for row in rows:
-                snippets.append({
+            for i, row in enumerate(rows):
+                try:
+                    print(f"Processing row {i}: id={row.get('id')}")
+                    
+                    # 处理 suggest_outline_titles - PostgreSQL TEXT[] 直接返回为 Python 列表
+                    suggest_titles = row.get('suggest_outline_titles')
+                    print(f"  suggest_titles type: {type(suggest_titles)}, value: {suggest_titles}")
+                    if suggest_titles is None:
+                        suggest_titles = []
+                    elif not isinstance(suggest_titles, list):
+                        # 如果不是列表，尝试转换
+                        if isinstance(suggest_titles, str):
+                            try:
+                                suggest_titles = json.loads(suggest_titles)
+                            except:
+                                suggest_titles = []
+                        else:
+                            suggest_titles = []
+                    
+                    # 处理 blocks_json - PostgreSQL JSONB 直接返回为 Python 对象
+                    blocks = row.get('blocks_json')
+                    print(f"  blocks type: {type(blocks)}, len: {len(blocks) if isinstance(blocks, list) else 'N/A'}")
+                    if blocks is None:
+                        blocks = []
+                    elif not isinstance(blocks, list):
+                        # 如果不是列表，尝试转换
+                        if isinstance(blocks, str):
+                            try:
+                                blocks = json.loads(blocks)
+                            except:
+                                blocks = []
+                        else:
+                            blocks = []
+                    
+                    # 处理 created_at
+                    created_at = row.get('created_at')
+                    if created_at:
+                        try:
+                            if hasattr(created_at, 'isoformat'):
+                                created_at = created_at.isoformat()
+                            else:
+                                created_at = str(created_at)
+                        except Exception as e:
+                            print(f"Warning: Failed to convert created_at: {e}")
+                            created_at = None
+                    
+                    snippet_dict = {
                     "id": row['id'],
                     "project_id": row['project_id'],
                     "source_file_id": row['source_file_id'],
@@ -217,12 +330,20 @@ def get_snippets_by_project(project_id: str, db_pool) -> List[Dict[str, Any]]:
                     "title": row['title'],
                     "start_block_id": row['start_block_id'],
                     "end_block_id": row['end_block_id'],
-                    "blocks_json": json.loads(row['blocks_json']) if row.get('blocks_json') else [],
-                    "suggest_outline_titles": row.get('suggest_outline_titles') or [],
+                        "blocks_json": blocks,
+                        "suggest_outline_titles": suggest_titles,
                     "confidence": row['confidence'],
-                    "created_at": row['created_at'].isoformat() if row.get('created_at') else None
-                })
+                        "created_at": created_at
+                    }
+                    print(f"  Created snippet dict successfully")
+                    snippets.append(snippet_dict)
+                except Exception as e:
+                    print(f"Error processing row {row.get('id')}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    raise
             
+            print(f"Returning {len(snippets)} snippets")
             return snippets
 
 
@@ -257,6 +378,32 @@ def get_snippet_by_id(snippet_id: str, db_pool) -> Optional[Dict[str, Any]]:
             if not row:
                 return None
             
+            # 处理 suggest_outline_titles - PostgreSQL TEXT[] 直接返回为 Python 列表
+            suggest_titles = row.get('suggest_outline_titles')
+            if suggest_titles is None:
+                suggest_titles = []
+            elif not isinstance(suggest_titles, list):
+                if isinstance(suggest_titles, str):
+                    try:
+                        suggest_titles = json.loads(suggest_titles)
+                    except:
+                        suggest_titles = []
+                else:
+                    suggest_titles = []
+            
+            # 处理 blocks_json - PostgreSQL JSONB 直接返回为 Python 对象
+            blocks = row.get('blocks_json')
+            if blocks is None:
+                blocks = []
+            elif not isinstance(blocks, list):
+                if isinstance(blocks, str):
+                    try:
+                        blocks = json.loads(blocks)
+                    except:
+                        blocks = []
+                else:
+                    blocks = []
+            
             return {
                 "id": row['id'],
                 "project_id": row['project_id'],
@@ -265,8 +412,8 @@ def get_snippet_by_id(snippet_id: str, db_pool) -> Optional[Dict[str, Any]]:
                 "title": row['title'],
                 "start_block_id": row['start_block_id'],
                 "end_block_id": row['end_block_id'],
-                "blocks_json": json.loads(row['blocks_json']) if row.get('blocks_json') else [],
-                "suggest_outline_titles": row.get('suggest_outline_titles') or [],
+                "blocks_json": blocks,
+                "suggest_outline_titles": suggest_titles,
                 "confidence": row['confidence'],
                 "created_at": row['created_at'].isoformat() if row.get('created_at') else None
             }

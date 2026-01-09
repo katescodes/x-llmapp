@@ -9,12 +9,18 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# 格式章节关键词
-FORMAT_CHAPTER_KEYWORDS = [
-    "投标文件格式",
-    "响应文件格式", 
-    "格式范本",
-    "格式要求",
+# 组合匹配方案：文件类型词 + 格式词
+FILE_TYPE_KEYWORDS = [
+    "投标", "响应", "应答", "磋商", "竞谈", "报价",
+    "投标文件", "响应文件", "应答文件", "磋商文件", "竞谈文件"
+]
+
+FORMAT_KEYWORDS = [
+    "格式", "样式", "范本", "模板"
+]
+
+# 备用精确匹配关键词（降级策略）
+FALLBACK_KEYWORDS = [
     "第六章",
     "附件",
     "格式附件"
@@ -30,12 +36,40 @@ FORMAT_CHAPTER_END_KEYWORDS = [
 ]
 
 
+def _is_format_chapter_title(text: str) -> bool:
+    """
+    判断文本是否为格式章节标题（组合匹配）
+    
+    策略：同时包含"文件类型词"和"格式词"
+    例如：投标文件格式、磋商响应文件编制要求、报价文件组成
+    
+    Args:
+        text: 待检查的文本
+        
+    Returns:
+        是否为格式章节标题
+    """
+    # 组合匹配：文件类型 + 格式
+    has_file_type = any(keyword in text for keyword in FILE_TYPE_KEYWORDS)
+    has_format = any(keyword in text for keyword in FORMAT_KEYWORDS)
+    
+    if has_file_type and has_format:
+        return True
+    
+    # 降级：备用关键词
+    for keyword in FALLBACK_KEYWORDS:
+        if keyword in text:
+            return True
+    
+    return False
+
+
 def locate_format_chapter(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     在 blocks 中定位"格式范本"章节
     
     策略：
-    1. 查找包含格式章节关键词的标题块
+    1. 使用组合匹配查找标题：文件类型词 + 格式词
     2. 从该块开始，直到遇到结束标志或文档结尾
     3. 返回范围内的所有 blocks
     
@@ -49,7 +83,7 @@ def locate_format_chapter(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         logger.warning("blocks 为空，返回空列表")
         return []
     
-    logger.info(f"开始定位格式章节，总块数: {len(blocks)}")
+    logger.info(f"开始定位格式章节（组合匹配），总块数: {len(blocks)}")
     
     # 1. 查找起始位置
     start_idx = None
@@ -61,21 +95,15 @@ def locate_format_chapter(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not text:
             continue
         
-        # 检查是否包含格式章节关键词
-        for keyword in FORMAT_CHAPTER_KEYWORDS:
-            if keyword in text:
-                # 检查是否是标题（通常较短且可能有章节号）
-                if len(text) < 100:  # 标题通常不会太长
-                    start_idx = i
-                    logger.info(f"找到格式章节起始: block[{i}] = '{text[:50]}'")
-                    break
-        
-        if start_idx is not None:
+        # 检查是否是格式章节标题（标题通常较短）
+        if len(text) < 100 and _is_format_chapter_title(text):
+            start_idx = i
+            logger.info(f"✅ 找到格式章节起始: block[{i}] = '{text[:50]}'")
             break
     
     # 如果没找到，返回全部（降级策略）
     if start_idx is None:
-        logger.warning("未找到格式章节关键词，返回全部 blocks")
+        logger.warning("⚠️ 未找到格式章节标题，返回全部 blocks")
         return blocks
     
     # 2. 查找结束位置

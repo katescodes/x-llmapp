@@ -59,14 +59,26 @@ def build_snippet_detect_prompt(blocks: List[Dict[str, Any]]) -> str:
     # 构建 prompt
     prompt = f"""你是"招标文件格式范本识别专家"。
 
-我会给你一个招标文件"格式范本"章节的 blocks 列表（按文档顺序）。
-你的任务：识别其中所有的格式范本（投标函、授权书、报价表等），并确定每个范本的边界（起始和结束 blockId）。
+我会给你一个招标文件的 blocks 列表（按文档顺序）。
+你的任务：识别其中所有的**格式范文/格式模板**（投标函、法人授权书、开标一览表等），并确定每个范文的边界（起始和结束 blockId）。
+
+**什么是格式范文？**
+- 招标文件中提供的**空白模板**，供投标人填写使用
+- 通常包含"格式"、"附件"、"模板"等字样
+- 例如："投标函（格式）"、"附件1：法人授权书"、"开标一览表"
 
 **重要规则：**
-1. 只输出范围（startBlockId/endBlockId），不要改写内容
-2. 不要生成表格内容，表格会由代码自动提取
-3. 一个范本通常包括：标题段落 + 说明段落 + 内容段落/表格
-4. 优先识别以下标准范本类型：
+1. **优先识别下列标准范文**（最常见，绝对不能遗漏）：
+   - 投标函/投标书
+   - 法人授权书/授权委托书/法定代表人身份证明
+   - 开标一览表/报价一览表/投标报价表
+   - 商务偏离表/技术偏离表
+   - 资格声明函/承诺书
+
+2. 只输出范围（startBlockId/endBlockId），不要改写内容
+3. 不要生成表格内容，表格会由代码自动提取
+4. 一个范文通常包括：标题段落 + 说明段落 + 内容段落/表格
+5. **范文标题通常较短**（<50字），且包含"格式"、"附件"、"模板"、"表"等词
 
 标准范本类型（norm_key）：
 - bid_letter: 投标函
@@ -109,10 +121,17 @@ def build_snippet_detect_prompt(blocks: List[Dict[str, Any]]) -> str:
 **字段说明：**
 - norm_key: 从上面标准类型中选择，如果不在列表中用 "other"
 - title: 范本原始标题（从文档中提取）
-- startBlockId: 范本起始块 ID（包含标题）
+- startBlockId: 范本起始块 ID（包含标题段落）
 - endBlockId: 范本结束块 ID（包含最后一个段落/表格）
+  ⚠️ **重要**：如果范文只有一个block（如单个表格），startBlockId和endBlockId可以相同
 - suggestOutlineTitles: 建议匹配的目录节点标题（数组，用于自动填充）
 - confidence: 识别置信度（0.0-1.0）
+
+**边界识别技巧：**
+- 范文通常从标题开始（如"附件1：投标函"）
+- 到下一个范文标题之前结束，或到说明文字结束
+- 如果范文是单个表格，startBlockId = endBlockId = 表格的blockId
+- 如果范文包含多个段落/表格，endBlockId是最后一个block的ID
 
 **文档 blocks：**
 {json.dumps(blocks_summary, ensure_ascii=False, indent=2)}
@@ -214,9 +233,9 @@ def validate_snippet_bounds(
         start_idx = block_ids.index(start_id)
         end_idx = block_ids.index(end_id)
         
-        # end 必须在 start 之后
-        if end_idx <= start_idx:
-            logger.warning(f"范本边界无效: end <= start ({start_id} -> {end_id})")
+        # ✅ 允许单个block的范文（很多范文就是一个表格）
+        if end_idx < start_idx:
+            logger.warning(f"范本边界无效: end < start ({start_id} -> {end_id})")
             return False
         
         # 范围不应该太大（>500 blocks 可能有问题）

@@ -15,7 +15,17 @@ from app.works.tender.snippet.snippet_extract import (
     extract_format_snippets,
     save_snippets_to_db,
     get_snippets_by_project,
-    get_snippet_by_id
+    get_snippet_by_id,
+    clean_duplicate_snippets
+)
+from app.works.tender.snippet.snippet_matcher import (
+    match_snippets_to_nodes,
+    suggest_manual_matches
+)
+from app.works.tender.snippet.snippet_applier import (
+    apply_snippet_to_node,
+    batch_apply_snippets,
+    identify_placeholders
 )
 
 logger = logging.getLogger(__name__)
@@ -61,6 +71,38 @@ class ApplySnippetRequest(BaseModel):
     """应用范本到节点请求"""
     snippet_id: str = Field(..., description="范本ID")
     mode: str = Field("replace", description="应用模式：replace|append")
+
+
+class DirectoryNodeInput(BaseModel):
+    """目录节点输入"""
+    id: str
+    title: str
+    level: Optional[int] = None
+
+
+class MatchSnippetsRequest(BaseModel):
+    """匹配范文请求"""
+    directory_nodes: List[DirectoryNodeInput] = Field(..., description="目录节点列表")
+    confidence_threshold: float = Field(0.7, description="置信度阈值", ge=0.0, le=1.0)
+
+
+class MatchResult(BaseModel):
+    """匹配结果"""
+    node_id: str
+    node_title: str
+    snippet_id: str
+    snippet_title: str
+    confidence: float
+    match_type: str
+
+
+class MatchSnippetsResponse(BaseModel):
+    """匹配范文响应"""
+    matches: List[MatchResult]
+    unmatched_nodes: List[Dict[str, str]]
+    unmatched_snippets: List[Dict[str, str]]
+    suggestions: List[Dict[str, Any]]
+    stats: Dict[str, Any]
 
 
 class ExtractSnippetsResponse(BaseModel):
@@ -114,6 +156,11 @@ async def extract_snippets_from_file(
         # 2. 保存到数据库
         db_pool = _get_pool()
         saved_count = save_snippets_to_db(snippets, db_pool)
+        
+        # 3. 清理重复范文（保留置信度最高的）
+        deleted_count = clean_duplicate_snippets(project_id, db_pool)
+        if deleted_count > 0:
+            logger.info(f"清理了 {deleted_count} 个重复范文")
         
         logger.info(f"范本提取完成: {saved_count} 个范本已保存")
         
@@ -169,8 +216,16 @@ async def list_project_snippets(
         db_pool = _get_pool()
         snippets = get_snippets_by_project(project_id, db_pool)
         
-        snippets_out = [
-            SnippetOut(
+        snippets_out = []
+        for s in snippets:
+            try:
+                # 确保 suggest_outline_titles 是列表
+                suggest_titles = s.get("suggest_outline_titles", [])
+                if not isinstance(suggest_titles, list):
+                    logger.warning(f"suggest_outline_titles is not a list: {type(suggest_titles)}, converting...")
+                    suggest_titles = []
+                
+                snippet_out = SnippetOut(
                 id=s["id"],
                 project_id=s["project_id"],
                 source_file_id=s.get("source_file_id"),
@@ -178,12 +233,14 @@ async def list_project_snippets(
                 title=s["title"],
                 start_block_id=s["start_block_id"],
                 end_block_id=s["end_block_id"],
-                suggest_outline_titles=s.get("suggest_outline_titles", []),
+                    suggest_outline_titles=suggest_titles,
                 confidence=s.get("confidence", 0.5),
                 created_at=s.get("created_at")
             )
-            for s in snippets
-        ]
+                snippets_out.append(snippet_out)
+            except Exception as e:
+                logger.error(f"Error creating SnippetOut for {s.get('id')}: {e}, data: {s}")
+                raise
         
         logger.info(f"获取范本列表成功: {len(snippets_out)} 个范本")
         return snippets_out
@@ -191,6 +248,38 @@ async def list_project_snippets(
     except Exception as e:
         logger.error(f"获取范本列表失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取范本列表失败: {str(e)}")
+
+
+@router.post("/projects/{project_id}/format-snippets/clean-duplicates")
+async def clean_project_duplicate_snippets(
+    project_id: str,
+    user: TokenData = Depends(require_permission("tender.edit"))
+):
+    """
+    清理项目中的重复范文
+    
+    保留每个 norm_key 置信度最高的范文，删除其他重复项
+    
+    Args:
+        project_id: 项目 ID
+    
+    Returns:
+        删除的重复范文数量
+    """
+    logger.info(f"清理项目重复范文: project={project_id}")
+    
+    try:
+        db_pool = _get_pool()
+        deleted_count = clean_duplicate_snippets(project_id, db_pool)
+        
+        return {
+            "deleted_count": deleted_count,
+            "message": f"成功清理 {deleted_count} 个重复范文"
+        }
+    
+    except Exception as e:
+        logger.error(f"清理重复范文失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"清理失败: {str(e)}")
 
 
 @router.get("/format-snippets/{snippet_id}", response_model=SnippetDetailOut)
@@ -242,7 +331,7 @@ async def get_snippet_detail(
 
 
 @router.post("/outline-nodes/{node_id}/apply-snippet")
-async def apply_snippet_to_node(
+async def apply_snippet_to_outline_node(
     node_id: str,
     request: ApplySnippetRequest,
     user: TokenData = Depends(require_permission("tender.edit"))
@@ -335,6 +424,86 @@ async def apply_snippet_to_node(
         raise HTTPException(status_code=500, detail=f"应用范本失败: {str(e)}")
 
 
+@router.post("/projects/{project_id}/snippets/match", response_model=MatchSnippetsResponse)
+async def match_snippets(
+    project_id: str,
+    request: MatchSnippetsRequest,
+    user: TokenData = Depends(require_permission("tender.edit"))
+):
+    """
+    将范文匹配到目录节点
+    
+    工作流程：
+    1. 获取项目的所有范文
+    2. 使用匹配算法找到最佳匹配
+    3. 返回匹配结果、未匹配列表、建议列表
+    
+    Args:
+        project_id: 项目 ID
+        request: 匹配请求（包含目录节点列表）
+    
+    Returns:
+        匹配结果
+    """
+    logger.info(f"开始匹配范文: project={project_id}, nodes={len(request.directory_nodes)}")
+    
+    try:
+        # 1. 获取项目的所有范文
+        db_pool = _get_pool()
+        snippets = get_snippets_by_project(project_id, db_pool)
+        
+        if not snippets:
+            raise HTTPException(
+                status_code=404,
+                detail="项目没有可用的范文，请先提取格式范文"
+            )
+        
+        logger.info(f"获取到 {len(snippets)} 个范文")
+        
+        # 2. 转换目录节点格式
+        directory_nodes = [
+            {
+                "id": node.id,
+                "title": node.title,
+                "level": node.level
+            }
+            for node in request.directory_nodes
+        ]
+        
+        # 3. 执行匹配
+        match_result = match_snippets_to_nodes(
+            snippets=snippets,
+            directory_nodes=directory_nodes,
+            confidence_threshold=request.confidence_threshold
+        )
+        
+        # 4. 生成建议
+        suggestions = suggest_manual_matches(
+            unmatched_nodes=match_result["unmatched_nodes"],
+            unmatched_snippets=match_result["unmatched_snippets"]
+        )
+        
+        logger.info(
+            f"匹配完成: {len(match_result['matches'])} 个匹配, "
+            f"{len(suggestions)} 个建议"
+        )
+        
+        # 5. 构建响应
+        return MatchSnippetsResponse(
+            matches=[MatchResult(**m) for m in match_result["matches"]],
+            unmatched_nodes=match_result["unmatched_nodes"],
+            unmatched_snippets=match_result["unmatched_snippets"],
+            suggestions=suggestions,
+            stats=match_result["stats"]
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"匹配范文失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"匹配范文失败: {str(e)}")
+
+
 @router.delete("/format-snippets/{snippet_id}")
 async def delete_snippet(
     snippet_id: str,
@@ -378,4 +547,196 @@ async def delete_snippet(
     except Exception as e:
         logger.error(f"删除范本失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"删除范本失败: {str(e)}")
+
+
+# ============= Phase 4: 范文应用 =============
+
+class ApplySnippetRequest(BaseModel):
+    """应用范文请求"""
+    snippet_id: str = Field(..., description="范文ID")
+    node_id: str = Field(..., description="节点ID")
+    mode: str = Field("replace", description="应用模式: replace|append")
+    auto_fill: bool = Field(True, description="是否自动填充占位符")
+    custom_values: Optional[Dict[str, str]] = Field(None, description="自定义填充值")
+
+
+class ApplySnippetResponse(BaseModel):
+    """应用范文响应"""
+    success: bool
+    node_id: str
+    node_title: str
+    snippet_id: str
+    snippet_title: str
+    placeholders_found: int
+    placeholders_filled: int
+    mode: str
+    message: str
+
+
+class BatchApplyRequest(BaseModel):
+    """批量应用范文请求"""
+    matches: List[Dict[str, str]] = Field(..., description="匹配列表 [{node_id, snippet_id}]")
+    mode: str = Field("replace", description="应用模式")
+    auto_fill: bool = Field(True, description="是否自动填充占位符")
+
+
+class BatchApplyResponse(BaseModel):
+    """批量应用范文响应"""
+    success_count: int
+    failed_count: int
+    total: int
+    results: List[Dict[str, Any]]
+    errors: List[str]
+
+
+@router.post("/projects/{project_id}/snippets/apply", response_model=ApplySnippetResponse)
+async def apply_snippet(
+    project_id: str,
+    request: ApplySnippetRequest,
+    user: TokenData = Depends(require_permission("tender.edit"))
+):
+    """
+    将范文应用到节点
+    
+    Args:
+        project_id: 项目ID
+        request: 应用请求
+    
+    Returns:
+        应用结果
+    """
+    logger.info(f"应用范文: project={project_id}, snippet={request.snippet_id}, node={request.node_id}")
+    
+    try:
+        db_pool = _get_pool()
+        
+        result = apply_snippet_to_node(
+            snippet_id=request.snippet_id,
+            node_id=request.node_id,
+            project_id=project_id,
+            db_pool=db_pool,
+            mode=request.mode,
+            auto_fill=request.auto_fill,
+            custom_values=request.custom_values
+        )
+        
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["message"])
+        
+        logger.info(f"✅ 范文应用成功: {result['node_title']}")
+        return ApplySnippetResponse(**result)
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"应用范文失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"应用范文失败: {str(e)}")
+
+
+@router.post("/projects/{project_id}/snippets/batch-apply", response_model=BatchApplyResponse)
+async def batch_apply(
+    project_id: str,
+    request: BatchApplyRequest,
+    user: TokenData = Depends(require_permission("tender.edit"))
+):
+    """
+    批量应用范文到节点
+    
+    Args:
+        project_id: 项目ID
+        request: 批量应用请求
+    
+    Returns:
+        批量应用结果
+    """
+    logger.info(f"批量应用范文: project={project_id}, count={len(request.matches)}")
+    
+    try:
+        db_pool = _get_pool()
+        
+        result = batch_apply_snippets(
+            matches=request.matches,
+            project_id=project_id,
+            db_pool=db_pool,
+            mode=request.mode,
+            auto_fill=request.auto_fill
+        )
+        
+        logger.info(f"✅ 批量应用完成: {result['success_count']}/{result['total']} 成功")
+        return BatchApplyResponse(**result)
+    
+    except Exception as e:
+        logger.error(f"批量应用范文失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"批量应用范文失败: {str(e)}")
+
+
+@router.get("/projects/{project_id}/snippets/{snippet_id}/placeholders")
+async def get_snippet_placeholders(
+    project_id: str,
+    snippet_id: str,
+    user: TokenData = Depends(require_permission("tender.edit"))
+):
+    """
+    获取范文中的占位符
+    
+    Args:
+        project_id: 项目ID
+        snippet_id: 范文ID
+    
+    Returns:
+        占位符列表
+    """
+    logger.info(f"获取范文占位符: project={project_id}, snippet={snippet_id}")
+    
+    try:
+        db_pool = _get_pool()
+        snippet = get_snippet_by_id(snippet_id, db_pool)
+        
+        if not snippet or snippet.get("project_id") != project_id:
+            raise HTTPException(status_code=404, detail="范文不存在")
+        
+        # 将blocks转换为文本
+        blocks_json = snippet.get("blocks_json", [])
+        text = _blocks_to_text(blocks_json)
+        
+        # 识别占位符
+        placeholders = identify_placeholders(text)
+        
+        logger.info(f"✅ 找到 {len(placeholders)} 个占位符")
+        return {
+            "snippet_id": snippet_id,
+            "snippet_title": snippet["title"],
+            "placeholders": placeholders,
+            "total": len(placeholders)
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取占位符失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取占位符失败: {str(e)}")
+
+
+def _blocks_to_text(blocks: List[Dict[str, Any]]) -> str:
+    """将blocks转换为文本"""
+    parts = []
+    for block in blocks:
+        block_type = block.get("type", "")
+        # 支持多种段落类型
+        if block_type in ("p", "paragraph", "heading", "h1", "h2", "h3", "h4", "h5", "h6"):
+            text = block.get("text", "").strip()
+            if text:
+                parts.append(text)
+        elif block_type == "table":
+            table_data = block.get("data", {})
+            rows = table_data.get("rows", [])
+            if rows:
+                header = rows[0] if len(rows) > 0 else []
+                if header:
+                    parts.append(" | ".join(str(cell) for cell in header))
+                    parts.append(" | ".join(["---"] * len(header)))
+                for row in rows[1:]:
+                    parts.append(" | ".join(str(cell) for cell in row))
+                parts.append("")
+    return "\n".join(parts)
 

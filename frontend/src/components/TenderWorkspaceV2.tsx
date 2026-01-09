@@ -81,6 +81,100 @@ interface ProjectState {
   };
 }
 
+// ==================== 范文匹配确认面板 ====================
+
+const SnippetMatchPanel: React.FC<{
+  matches: any[];
+  onConfirm: () => void;
+  onCancel: () => void;
+}> = ({ matches, onConfirm, onCancel }) => {
+  return (
+    <div style={{
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: 'rgba(0,0,0,0.7)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 9999
+    }}>
+      <div style={{
+        backgroundColor: '#1e293b',
+        padding: '24px',
+        borderRadius: '12px',
+        maxWidth: '600px',
+        maxHeight: '80vh',
+        overflow: 'auto',
+        border: '1px solid rgba(139, 92, 246, 0.3)',
+        boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3)'
+      }}>
+        <h3 style={{ color: '#e2e8f0', marginBottom: '16px' }}>
+          📋 检测到 {matches.length} 个章节可使用范文
+        </h3>
+        
+        <div style={{ marginTop: '16px' }}>
+          {matches.map((match, i) => (
+            <div key={i} style={{
+              padding: '12px',
+              marginBottom: '8px',
+              backgroundColor: 'rgba(16, 185, 129, 0.1)',
+              borderRadius: '6px',
+              borderLeft: '4px solid #10b981'
+            }}>
+              <div style={{ fontWeight: 'bold', marginBottom: '4px', color: '#10b981' }}>
+                ✅ {match.node_title}
+              </div>
+              <div style={{ fontSize: '14px', color: '#94a3b8' }}>
+                来源: {match.snippet_title} (置信度: {(match.confidence * 100).toFixed(0)}%)
+              </div>
+              <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
+                匹配类型: {match.match_type === 'exact' ? '精确匹配' : 
+                          match.match_type === 'synonym' ? '同义词匹配' : 
+                          match.match_type === 'keyword' ? '关键词匹配' : '包含匹配'}
+              </div>
+            </div>
+          ))}
+        </div>
+        
+        <div style={{ marginTop: '24px', display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+          <button
+            onClick={onCancel}
+            style={{
+              padding: '10px 20px',
+              backgroundColor: '#475569',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '14px'
+            }}
+          >
+            取消
+          </button>
+          <button
+            onClick={onConfirm}
+            style={{
+              padding: '10px 20px',
+              backgroundColor: '#10b981',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: '500'
+            }}
+          >
+            确认插入
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ==================== 主组件 ====================
 
 export default function TenderWorkspaceV2() {
@@ -89,7 +183,7 @@ export default function TenderWorkspaceV2() {
   // 视图状态
   const [viewMode, setViewMode] = useState<'projectList' | 'projectDetail' | 'formatTemplates' | 'customRules' | 'userDocuments'>('projectList');
   const [activeTab, setActiveTab] = useState(1); // 1-4对应4个步骤
-  const [step2SubTab, setStep2SubTab] = useState<'info' | 'requirements' | 'directory'>('info');
+  const [step2SubTab, setStep2SubTab] = useState<'info' | 'requirements' | 'directory' | 'snippets'>('info');
   
   // 项目状态（为每个项目保存独立状态）
   const projectStatesRef = useRef<Map<string, ProjectState>>(new Map());
@@ -155,6 +249,13 @@ export default function TenderWorkspaceV2() {
   // 证据面板
   const [evidencePanelOpen, setEvidencePanelOpen] = useState(false);
   const [evidenceChunks, setEvidenceChunks] = useState<any[]>([]);
+  
+  // 范文相关
+  const [snippets, setSnippets] = useState<any[]>([]);
+  const [extractingSnippets, setExtractingSnippets] = useState(false);
+  const [snippetMatches, setSnippetMatches] = useState<any[]>([]);
+  const [matchingSnippets, setMatchingSnippets] = useState(false);
+  const [showSnippetMatchPanel, setShowSnippetMatchPanel] = useState(false);
   
   // 获取/更新项目状态的辅助函数
   const getProjectState = useCallback((projectId: string): ProjectState => {
@@ -811,6 +912,120 @@ export default function TenderWorkspaceV2() {
     }
   };
   
+  // ==================== 范文提取和匹配 ====================
+  
+  const loadSnippets = async (projectId: string) => {
+    console.log(`[loadSnippets] 开始加载范文: project=${projectId}`);
+    try {
+      const result = await api.get(
+        `/api/apps/tender/projects/${projectId}/format-snippets`
+      );
+      
+      // 竞态条件保护：加载完成时项目已切换
+      if (currentProject?.id !== projectId) {
+        console.log(`[loadSnippets] 加载完成时项目已切换，丢弃数据 (当前=${currentProject?.id}, 加载=${projectId})`);
+        return;
+      }
+      
+      setSnippets(result || []);
+      console.log(`✅ 加载范文成功: project=${projectId}, count=${result?.length || 0}`);
+      if (result && result.length > 0) {
+        console.log(`   第1个范文: ${result[0].title} (id=${result[0].id})`);
+      }
+    } catch (err: any) {
+      console.error('加载范文失败:', err);
+      // 不弹出错误提示，静默失败
+      if (currentProject?.id === projectId) {
+        setSnippets([]);
+      }
+    }
+  };
+  
+  const extractFormatSnippets = async (projectId: string) => {
+    setExtractingSnippets(true);
+    try {
+      // 获取招标文件
+      const tenderAssets = assets.filter(a => a.kind === 'tender');
+      if (tenderAssets.length === 0) {
+        alert('请先上传招标文件');
+        return;
+      }
+      
+      const tenderFile = tenderAssets[0];
+      
+      // 调用提取API
+      const result = await api.post(
+        `/api/apps/tender/projects/${projectId}/extract-format-snippets`,
+        {
+          source_file_path: tenderFile.storage_path,
+          source_file_id: tenderFile.asset_id,
+          model_id: 'gpt-oss-120b'
+        }
+      );
+      
+      setSnippets(result.snippets);
+      alert(`✅ 提取成功！找到 ${result.total} 个格式范文`);
+    } catch (err: any) {
+      console.error('提取范文失败:', err);
+      alert(`提取失败: ${err.message || err}`);
+    } finally {
+      setExtractingSnippets(false);
+    }
+  };
+  
+  const matchSnippetsToDirectory = async (projectId: string) => {
+    if (snippets.length === 0) {
+      alert('请先提取格式范文');
+      return;
+    }
+    
+    if (directory.length === 0) {
+      alert('请先生成投标书目录');
+      return;
+    }
+    
+    setMatchingSnippets(true);
+    try {
+      const result = await api.post(
+        `/api/apps/tender/projects/${projectId}/snippets/match`,
+        {
+          directory_nodes: directory.map(node => ({
+            id: node.id,
+            title: node.title,
+            level: node.level
+          })),
+          confidence_threshold: 0.7
+        }
+      );
+      
+      // result.matches 是匹配成功的
+      setSnippetMatches(result.matches || []);
+      
+      if (result.matches && result.matches.length > 0) {
+        setShowSnippetMatchPanel(true);
+        alert(`✅ 匹配成功！找到 ${result.matches.length} 个可用范文`);
+      } else {
+        alert('未找到匹配的范文');
+      }
+    } catch (err: any) {
+      console.error('匹配范文失败:', err);
+      alert(`匹配失败: ${err.response?.data?.detail || err.message || err}`);
+    } finally {
+      setMatchingSnippets(false);
+    }
+  };
+  
+  // ==================== 自动加载数据 ====================
+  
+  // 当项目切换或进入snippets tab时，自动加载范文
+  React.useEffect(() => {
+    if (currentProject && step2SubTab === 'snippets') {
+      loadSnippets(currentProject.id);
+    }
+  }, [currentProject?.id, step2SubTab]);
+  
+  // ==================== 审核相关 ====================
+  
   const loadReviewItems = async (forceProjectId?: string) => {
     const projectId = forceProjectId || currentProject?.id;
     if (!projectId) return;
@@ -871,12 +1086,16 @@ export default function TenderWorkspaceV2() {
     const projectId = currentProject.id;
     console.log('[useEffect] 项目切换，加载新项目数据:', projectId);
     
+    // 立即清空旧数据，避免显示混乱
+    setSnippets([]);
+    
     // 加载项目数据
     loadAssets(projectId);
     loadProjectInfo(projectId);
     loadRequirements(projectId);
     loadDirectory(projectId);
     loadReviewItems(projectId);
+    loadSnippets(projectId);  // 加载范文
     
     // 从后端加载run状态，并恢复轮询
     const loadAndRestoreRuns = async () => {
@@ -1857,6 +2076,7 @@ export default function TenderWorkspaceV2() {
                 { id: 'info' as const, label: '📋 项目信息', count: projectInfo ? 1 : 0 },
                 { id: 'requirements' as const, label: '📝 招标要求', count: requirements ? 1 : 0 },
                 { id: 'directory' as const, label: '📑 投标目录', count: directory.length },
+                { id: 'snippets' as const, label: '📄 格式范文', count: snippets.length },
               ].map(tab => (
                 <button
                   key={tab.id}
@@ -2164,6 +2384,109 @@ export default function TenderWorkspaceV2() {
                 )}
               </div>
             )}
+
+            {/* 子标签4: 格式范文 */}
+            {step2SubTab === 'snippets' && (
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                  <h4 style={{ color: '#e2e8f0', margin: 0 }}>格式范文提取</h4>
+                  <button 
+                    onClick={() => currentProject && extractFormatSnippets(currentProject.id)} 
+                    className="kb-create-form" 
+                    style={{ 
+                      width: 'auto', 
+                      marginBottom: 0,
+                      backgroundColor: extractingSnippets ? '#6b7280' : '#10b981'
+                    }}
+                    disabled={!currentProject || extractingSnippets || assets.filter(a => a.kind === 'tender').length === 0}
+                  >
+                    {extractingSnippets ? '🔍 提取中...' : '📋 提取格式范文'}
+                  </button>
+                </div>
+
+                {/* 提取提示 */}
+                {assets.filter(a => a.kind === 'tender').length === 0 && (
+                  <div style={{
+                    padding: '12px',
+                    backgroundColor: 'rgba(251, 191, 36, 0.1)',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(251, 191, 36, 0.3)',
+                    marginBottom: '16px'
+                  }}>
+                    <div style={{ color: '#fbbf24', fontSize: '14px' }}>
+                      ⚠️ 请先在Step 1中上传招标文件
+                    </div>
+                  </div>
+                )}
+
+                {/* 范文列表 */}
+                {snippets.length > 0 ? (
+                  <div>
+                    <div style={{
+                      marginBottom: '16px',
+                      padding: '12px',
+                      backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(16, 185, 129, 0.3)'
+                    }}>
+                      <div style={{ fontWeight: 'bold', marginBottom: '8px', color: '#10b981' }}>
+                        ✅ 已保存 {snippets.length} 个格式范文
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#64748b' }}>
+                        💡 提示：这些范文会自动保存，切换Tab后仍可查看
+                      </div>
+                    </div>
+
+                    {/* 范文卡片列表 */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {snippets.map((snippet, index) => (
+                        <div
+                          key={snippet.id}
+                          style={{
+                            padding: '16px',
+                            backgroundColor: 'rgba(255,255,255,0.05)',
+                            borderRadius: '8px',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            transition: 'all 0.2s'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ 
+                                fontSize: '16px', 
+                                fontWeight: '600', 
+                                color: '#e2e8f0',
+                                marginBottom: '8px'
+                              }}>
+                                {index + 1}. {snippet.title}
+                              </div>
+                              <div style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '4px' }}>
+                                置信度: <span style={{ 
+                                  color: snippet.confidence >= 0.9 ? '#10b981' : 
+                                        snippet.confidence >= 0.7 ? '#fbbf24' : '#ef4444',
+                                  fontWeight: '600'
+                                }}>
+                                  {(snippet.confidence * 100).toFixed(0)}%
+                                </span>
+                              </div>
+                              {snippet.suggest_outline_titles && snippet.suggest_outline_titles.length > 0 && (
+                                <div style={{ fontSize: '12px', color: '#64748b' }}>
+                                  建议匹配: {snippet.suggest_outline_titles.join(', ')}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="kb-empty">
+                    暂无数据，请点击"提取格式范文"按钮
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -2179,13 +2502,49 @@ export default function TenderWorkspaceV2() {
               <div style={{ 
                 flex: 1,  // ✅ 占据剩余空间
                 position: 'relative',  // ✅ 为内部absolute/fixed定位提供参考
-                overflow: 'hidden'  // ✅ 防止溢出
+                overflow: 'hidden',  // ✅ 防止溢出
+                display: 'flex',
+                flexDirection: 'column'
               }}>
+                {/* 插入范文按钮 */}
+                {snippets.length > 0 && (
+                  <div style={{ 
+                    padding: '12px 16px', 
+                    backgroundColor: 'rgba(139, 92, 246, 0.1)',
+                    borderBottom: '1px solid rgba(139, 92, 246, 0.2)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px'
+                  }}>
+                    <button
+                      onClick={() => currentProject && matchSnippetsToDirectory(currentProject.id)}
+                      disabled={!currentProject || matchingSnippets || snippets.length === 0}
+                      style={{
+                        padding: '8px 16px',
+                        backgroundColor: matchingSnippets ? '#6b7280' : '#8b5cf6',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: matchingSnippets ? 'not-allowed' : 'pointer',
+                        fontSize: '14px',
+                        fontWeight: '500'
+                      }}
+                    >
+                      {matchingSnippets ? '🔄 匹配中...' : '📋 插入范文'}
+                    </button>
+                    <span style={{ color: '#a78bfa', fontSize: '14px' }}>
+                      已提取 {snippets.length} 个范文，点击匹配到目录节点
+                    </span>
+                  </div>
+                )}
+                
+                <div style={{ flex: 1, overflow: 'hidden' }}>
                 <DocumentComponentManagement
                   embedded={true}
                   initialDirectory={directory}
                   projectId={currentProject?.id}
                 />
+                </div>
               </div>
             ) : (
               <div className="kb-empty">
@@ -2584,6 +2943,42 @@ export default function TenderWorkspaceV2() {
             </div>
           </div>
         </div>
+      )}
+      
+      {/* 范文匹配确认面板 */}
+      {showSnippetMatchPanel && snippetMatches.length > 0 && (
+        <SnippetMatchPanel
+          matches={snippetMatches.filter(m => m.snippet_id !== null)}
+          onConfirm={async () => {
+            if (!currentProject) return;
+            
+            try {
+              // 批量应用范文
+              const matchesToApply = snippetMatches
+                .filter(m => m.snippet_id !== null)
+                .map(m => ({
+                  node_id: m.node_id,
+                  snippet_id: m.snippet_id
+                }));
+              
+              const result = await api.post(
+                `/api/apps/tender/projects/${currentProject.id}/snippets/batch-apply`,
+                {
+                  matches: matchesToApply,
+                  mode: 'replace',
+                  auto_fill: true
+                }
+              );
+              
+              alert(`✅ 成功应用 ${result.success_count} 个范文！`);
+              setShowSnippetMatchPanel(false);
+            } catch (err: any) {
+              console.error('应用范文失败:', err);
+              alert(`应用失败: ${err.response?.data?.detail || err.message || err}`);
+            }
+          }}
+          onCancel={() => setShowSnippetMatchPanel(false)}
+        />
       )}
     </div>
     );
