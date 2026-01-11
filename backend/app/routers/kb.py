@@ -212,3 +212,113 @@ async def import_docs(
             )
     return ImportResponse(items=results)
 
+
+
+# ==================== 资源共享接口 ====================
+
+@router.post("/{kb_id}/share")
+def share_kb_to_organization(
+    kb_id: str,
+    current_user: TokenData = Depends(require_permission("kb.edit"))
+):
+    """
+    共享知识库到企业
+    只有知识库的创建者可以共享
+    """
+    from app.services.db.postgres import _get_pool
+    pool = _get_pool()
+    
+    try:
+        with pool.connection() as conn:
+            import psycopg.rows
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                # 检查知识库是否存在且用户是否为owner
+                cur.execute("""
+                    SELECT owner_id, scope FROM knowledge_bases 
+                    WHERE id = %s
+                """, [kb_id])
+                
+                kb = cur.fetchone()
+                if not kb:
+                    raise HTTPException(status_code=404, detail="知识库不存在")
+                
+                if kb["owner_id"] != current_user.user_id:
+                    raise HTTPException(status_code=403, detail="只有知识库创建者可以共享")
+                
+                if kb["scope"] == 'organization':
+                    return {"success": True, "message": "知识库已经是共享状态"}
+                
+                # 更新为共享状态
+                cur.execute("""
+                    UPDATE knowledge_bases 
+                    SET scope = 'organization', updated_at = NOW()
+                    WHERE id = %s
+                """, [kb_id])
+                
+                conn.commit()
+                
+                return {
+                    "success": True,
+                    "message": "知识库已共享到企业",
+                    "kb_id": kb_id,
+                    "scope": "organization"
+                }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"共享失败: {str(e)}")
+
+
+@router.post("/{kb_id}/unshare")
+def unshare_kb_from_organization(
+    kb_id: str,
+    current_user: TokenData = Depends(require_permission("kb.edit"))
+):
+    """
+    取消共享知识库（改回私有）
+    只有知识库的创建者可以取消共享
+    """
+    from app.services.db.postgres import _get_pool
+    pool = _get_pool()
+    
+    try:
+        with pool.connection() as conn:
+            import psycopg.rows
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                # 检查知识库是否存在且用户是否为owner
+                cur.execute("""
+                    SELECT owner_id, scope FROM knowledge_bases 
+                    WHERE id = %s
+                """, [kb_id])
+                
+                kb = cur.fetchone()
+                if not kb:
+                    raise HTTPException(status_code=404, detail="知识库不存在")
+                
+                if kb["owner_id"] != current_user.user_id:
+                    raise HTTPException(status_code=403, detail="只有知识库创建者可以取消共享")
+                
+                if kb["scope"] == 'private':
+                    return {"success": True, "message": "知识库已经是私有状态"}
+                
+                # 更新为私有状态
+                cur.execute("""
+                    UPDATE knowledge_bases 
+                    SET scope = 'private', updated_at = NOW()
+                    WHERE id = %s
+                """, [kb_id])
+                
+                conn.commit()
+                
+                return {
+                    "success": True,
+                    "message": "知识库已取消共享",
+                    "kb_id": kb_id,
+                    "scope": "private"
+                }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"取消共享失败: {str(e)}")

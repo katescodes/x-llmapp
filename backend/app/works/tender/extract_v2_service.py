@@ -600,50 +600,238 @@ class ExtractV2Service:
         logger.info(f"ExtractV2: generate_directory start project_id={project_id}, fast_mode={use_fast_mode}")
         
         # 阶段1：尝试快速模式
+        # ❌ 已禁用：不再使用固定的商务/技术/价格划分，完全依赖从招标书提取的实际目录结构
+        # 现在目录生成完全基于招标书中的"投标文件格式"章节
         fast_nodes = []
         fast_stats = {}
         generation_mode = "llm"  # 默认全LLM
         
-        if use_fast_mode:
+        # if use_fast_mode:
+        #     tender_info = self.dao.get_project_info(project_id)
+        #     if tender_info and tender_info.get("schema_version") == "tender_info_v3":
+        #         try:
+        #             from app.works.tender.directory_fast_builder import build_directory_from_project_info
+        #             
+        #             fast_nodes, fast_stats = build_directory_from_project_info(
+        #                 project_id=project_id,
+        #                 pool=self.pool,
+        #                 tender_info=tender_info
+        #             )
+        #             
+        #             if fast_nodes and len(fast_nodes) >= 5:  # 至少5个节点才认为有效
+        #                 logger.info(
+        #                     f"ExtractV2: Fast mode success - {len(fast_nodes)} nodes, "
+        #                     f"skip LLM generation"
+        #                 )
+        #                 generation_mode = "fast"
+        #                 
+        #                 # 快速模式成功，直接返回
+        #                 return {
+        #                     "data": {"nodes": fast_nodes},
+        #                     "evidence_chunk_ids": [],
+        #                     "evidence_spans": [],
+        #                     "retrieval_trace": {},
+        #                     "generation_mode": generation_mode,
+        #                     "fast_stats": fast_stats
+        #                 }
+        #             else:
+        #                 logger.info(f"ExtractV2: Fast mode insufficient ({len(fast_nodes)} nodes), fallback to LLM")
+        #                 generation_mode = "hybrid"
+        #                 
+        #         except Exception as e:
+        #             logger.warning(f"ExtractV2: Fast mode failed (non-fatal): {e}")
+        #             generation_mode = "llm"
+        #     else:
+        #         logger.info("ExtractV2: No project_info available, using LLM mode")
+        
+        # ✅ 新策略（2026-01）：优先从招标书原文提取目录，禁止LLM自行划分大类
+        # 
+        # 流程：
+        # 1. 先用 augment 从招标书"投标文件格式"章节提取原文目录（写入数据库）
+        # 2. 如果提取成功（>= 5个节点），直接使用，不调用LLM
+        # 3. 如果提取失败或节点太少，才回退到LLM生成
+        
+        logger.info(f"ExtractV2: 开始生成目录...")
+        
+        # 🔍 DEBUG: 强制写入日志文件
+        import sys
+        debug_log = open("/tmp/extract_v2_debug.log", "a")
+        debug_log.write(f"\n=== ExtractV2.generate_directory_v2 START ===\n")
+        debug_log.write(f"project_id: {project_id}\n")
+        debug_log.write(f"use_fast_mode: {use_fast_mode}\n")
+        debug_log.flush()
+        
+        print(f"[ExtractV2-DEBUG] 开始生成目录: project_id={project_id}", file=sys.stderr)
+        
+        # 步骤0：清空现有目录节点（避免使用旧数据）
+        try:
+            from app.services.db.postgres import get_conn
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        DELETE FROM tender_directory_nodes WHERE project_id = %s
+                    """, [project_id])
+                    deleted_count = cur.rowcount
+                    conn.commit()
+                    if deleted_count > 0:
+                        logger.info(f"ExtractV2: 清空了 {deleted_count} 个旧目录节点")
+                        debug_log.write(f"清空了 {deleted_count} 个旧节点\n")
+                        debug_log.flush()
+        except Exception as e:
+            logger.warning(f"ExtractV2: 清空旧节点失败（非致命）: {e}")
+            debug_log.write(f"清空失败: {e}\n")
+            debug_log.flush()
+        
+        # 步骤1：尝试从招标书原文提取
+        extracted_count = 0
+        try:
+            logger.info(f"ExtractV2: 尝试从招标书「投标文件格式」章节提取原文目录...")
+            debug_log.write(f"开始调用augment...\n")
+            debug_log.flush()
+            
+            from app.works.tender.directory_augment_v1 import augment_directory_from_tender_info_v3
+            
             tender_info = self.dao.get_project_info(project_id)
-            if tender_info and tender_info.get("schema_version") == "tender_info_v3":
-                try:
-                    from app.works.tender.directory_fast_builder import build_directory_from_project_info
+            debug_log.write(f"tender_info keys: {list(tender_info.keys()) if tender_info else None}\n")
+            debug_log.flush()
+            
+            augment_result = augment_directory_from_tender_info_v3(
+                project_id=project_id,
+                pool=self.pool,
+                tender_info=tender_info
+            )
+            
+            debug_log.write(f"augment_result: {augment_result}\n")
+            debug_log.flush()
+            
+            extracted_count = augment_result.get("added_count", 0)
+            logger.info(
+                f"ExtractV2: 从招标书原文提取 {extracted_count} 个节点, "
+                f"标题示例: {augment_result.get('enhanced_titles', [])[:3]}"
+            )
+            debug_log.write(f"提取了 {extracted_count} 个节点\n")
+            debug_log.flush()
+            
+        except Exception as e:
+            logger.warning(f"ExtractV2: 从招标书提取目录失败: {e}")
+        
+        # 步骤2：读取数据库中的节点
+        nodes = []
+        generation_mode = "unknown"
+        
+        from app.services.db.postgres import get_conn
+        import psycopg.rows
+        with get_conn() as conn:
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                cur.execute("""
+                    SELECT COUNT(*) as count FROM tender_directory_nodes WHERE project_id = %s
+                """, [project_id])
+                total_count = cur.fetchone()["count"]
+                
+                if total_count >= 5:
+                    # 质量检查：确保提取的节点有合理的层级结构
+                    cur.execute("""
+                        SELECT COUNT(DISTINCT numbering) as unique_numberings,
+                               COUNT(*) FILTER (WHERE level = 1) as l1_count,
+                               COUNT(*) FILTER (WHERE level = 2) as l2_count,
+                               COUNT(*) FILTER (WHERE level = 3) as l3_count,
+                               array_agg(title) FILTER (WHERE level = 1) as l1_titles
+                        FROM tender_directory_nodes WHERE project_id = %s
+                    """, [project_id])
+                    quality_check = cur.fetchone()
                     
-                    fast_nodes, fast_stats = build_directory_from_project_info(
-                        project_id=project_id,
-                        pool=self.pool,
-                        tender_info=tender_info
+                    l1_count = quality_check["l1_count"]
+                    l2_count = quality_check["l2_count"]
+                    l3_count = quality_check["l3_count"]
+                    
+                    # 质量标准1：结构检查
+                    # - 如果有L2节点，要求L2 > L1（有层级结构）
+                    # - 如果没有L2节点，允许扁平结构（但需要有多个L1节点）
+                    has_good_structure = (
+                        (l2_count > 0 and l2_count > l1_count) or  # 有层级结构
+                        (l2_count == 0 and l1_count >= 5)          # 扁平结构，至少5个L1
                     )
                     
-                    if fast_nodes and len(fast_nodes) >= 5:  # 至少5个节点才认为有效
-                        logger.info(
-                            f"ExtractV2: Fast mode success - {len(fast_nodes)} nodes, "
-                            f"skip LLM generation"
-                        )
-                        generation_mode = "fast"
+                    # 质量标准2：L1标题应该包含投标文件格式的典型关键词
+                    l1_titles = quality_check.get("l1_titles") or []
+                    l1_text = "".join(l1_titles).lower() if l1_titles else ""
+                    format_keywords = ["商务", "技术", "资格", "响应", "投标", "报价", "资信", "证明", "文件", "保证金", "授权", "偏差", "清单"]
+                    has_format_keywords = sum(1 for kw in format_keywords if kw in l1_text) >= 3
+                    
+                    # 质量标准3：不应该是招标文件的评标、磋商等章节
+                    invalid_keywords = ["磋商", "评标", "评审", "招标", "开标"]
+                    has_invalid_keywords = sum(1 for kw in invalid_keywords if kw in l1_text) >= 2
+                    
+                    is_high_quality = has_good_structure and has_format_keywords and not has_invalid_keywords
+                    
+                    if is_high_quality:
+                        # 节点足够且质量好，使用原文提取的结果
+                        generation_mode = "extracted_from_tender"
+                        structure_type = "层级结构" if l2_count > 0 else "扁平结构"
+                        print(f"✅ [质量检查] PASS: {structure_type}, L1={l1_count}, L2={l2_count}, L3={l3_count}")
+                        logger.info(f"✅ ExtractV2: 使用从招标书原文提取的 {total_count} 个节点 ({structure_type})")
+                    else:
+                        # 质量不够，记录提取到的节点标题，然后fallback到LLM
+                        l1_titles_str = ", ".join(l1_titles[:5]) if l1_titles else "[]"
+                        if len(l1_titles) > 5:
+                            l1_titles_str += f"... (共{len(l1_titles)}个)"
+                        print(f"⚠️ [质量检查] FAIL: L1={l1_count}, L2={l2_count}, struct_ok={has_good_structure}, format_kw={has_format_keywords}, invalid_kw={has_invalid_keywords}")
+                        print(f"   提取到的L1标题: {l1_titles_str}")
+                        logger.warning(f"⚠️ ExtractV2: 提取的节点质量不够，fallback到LLM")
+                        generation_mode = "llm"
+                        # 清空已提取的节点
+                        cur.execute("DELETE FROM tender_directory_nodes WHERE project_id = %s", [project_id])
+                        conn.commit()
+                        total_count = 0
+                    
+                    if generation_mode == "extracted_from_tender":
+                        cur.execute("""
+                            SELECT id, parent_id, title, level, numbering, is_required, source, 
+                                   evidence_chunk_ids, meta_json, order_no
+                            FROM tender_directory_nodes
+                            WHERE project_id = %s
+                            ORDER BY order_no
+                        """, [project_id])
+                        rows = cur.fetchall()
                         
-                        # 快速模式成功，直接返回
+                        for row in rows:
+                            nodes.append({
+                                "id": row.get("id"),  # 🔥 传递id
+                                "parent_id": row.get("parent_id"),  # 🔥 传递parent_id
+                                "title": row["title"],
+                                "level": row["level"],
+                                "numbering": row.get("numbering", ""),
+                                "order_no": row.get("order_no", 0),
+                                "parent_ref": None,
+                                "required": row.get("is_required", True),
+                                "notes": row.get("meta_json", {}).get("notes", "") if row.get("meta_json") else "",
+                                "evidence_chunk_ids": row.get("evidence_chunk_ids", [])
+                            })
+                        
                         return {
-                            "data": {"nodes": fast_nodes},
+                            "data": {"nodes": nodes},
                             "evidence_chunk_ids": [],
                             "evidence_spans": [],
                             "retrieval_trace": {},
                             "generation_mode": generation_mode,
-                            "fast_stats": fast_stats
+                            "extracted_stats": {
+                                "total_nodes": total_count,
+                                "source": "tender_format_chapter"
+                            }
                         }
-                    else:
-                        logger.info(f"ExtractV2: Fast mode insufficient ({len(fast_nodes)} nodes), fallback to LLM")
-                        generation_mode = "hybrid"
-                        
-                except Exception as e:
-                    logger.warning(f"ExtractV2: Fast mode failed (non-fatal): {e}")
-                    generation_mode = "llm"
-            else:
-                logger.info("ExtractV2: No project_info available, using LLM mode")
+                else:
+                    # ⚠️ 提取失败，fallback到LLM
+                    logger.warning(f"⚠️ ExtractV2: 从招标书提取目录不足（只提取到{total_count}个节点），fallback到LLM生成模式")
+                    # 清空已提取的节点，准备使用LLM生成
+                    with get_conn(self.pool) as conn:
+                        conn.execute("""
+                            DELETE FROM tender_directory_nodes 
+                            WHERE project_id = %s
+                        """, (project_id,))
+                        conn.commit()
         
-        # 阶段2：LLM生成（全新或补充）
-        logger.info(f"ExtractV2: Starting LLM generation mode={generation_mode}")
+        # === LLM 生成模式 ===
+        generation_mode = "llm"
         
         # 1. 获取 embedding provider
         embedding_provider = get_embedding_store().get_default()
@@ -674,35 +862,37 @@ class ExtractV2Service:
             logger.warning(f"ExtractV2: no directory nodes extracted for project={project_id}")
         
         # 5. 如果是混合模式，合并快速节点和LLM节点
-        if generation_mode == "hybrid" and fast_nodes:
-            logger.info(f"ExtractV2: Merging fast nodes ({len(fast_nodes)}) with LLM nodes ({len(nodes)})")
-            # 简单策略：优先使用快速节点，LLM节点作为补充
-            nodes = fast_nodes + nodes
+        # ❌ 已禁用：不再使用固定划分
+        # if generation_mode == "hybrid" and fast_nodes:
+        #     logger.info(f"ExtractV2: Merging fast nodes ({len(fast_nodes)}) with LLM nodes ({len(nodes)})")
+        #     # 简单策略：优先使用快速节点，LLM节点作为补充
+        #     nodes = fast_nodes + nodes
         
         logger.info(f"ExtractV2: generate_directory done nodes={len(nodes)}, mode={generation_mode}")
         
-        # 5. 目录增强 - 利用 tender_info_v3 补充必填节点
-        try:
-            logger.info(f"ExtractV2: Attempting directory augmentation for project={project_id}")
-            
-            # 读取 tender_project_info
-            tender_info = self.dao.get_project_info(project_id)
-            if tender_info and tender_info.get("schema_version") == "tender_info_v3":
-                from app.works.tender.directory_augment_v1 import augment_directory_from_tender_info_v3
-                
-                augment_result = augment_directory_from_tender_info_v3(
-                    project_id=project_id,
-                    pool=self.pool,
-                    tender_info=tender_info
-                )
-                
-                logger.info(
-                    f"ExtractV2: Directory augmentation done - "
-                    f"added={augment_result['added_count']}, "
-                    f"titles={augment_result['enhanced_titles'][:5]}"
-                )
-        except Exception as e:
-            logger.warning(f"ExtractV2: Directory augmentation failed (non-fatal): {e}")
+        # 5. 目录增强 - 已在阶段1完成，不再重复执行
+        # ❌ 已禁用：augment 已经在阶段1执行过了
+        # try:
+        #     logger.info(f"ExtractV2: Attempting directory augmentation for project={project_id}")
+        #     
+        #     # 读取 tender_project_info
+        #     tender_info = self.dao.get_project_info(project_id)
+        #     if tender_info and tender_info.get("schema_version") == "tender_info_v3":
+        #         from app.works.tender.directory_augment_v1 import augment_directory_from_tender_info_v3
+        #         
+        #         augment_result = augment_directory_from_tender_info_v3(
+        #             project_id=project_id,
+        #             pool=self.pool,
+        #             tender_info=tender_info
+        #         )
+        #         
+        #         logger.info(
+        #             f"ExtractV2: Directory augmentation done - "
+        #             f"added={augment_result['added_count']}, "
+        #             f"titles={augment_result['enhanced_titles'][:5]}"
+        #         )
+        # except Exception as e:
+        #     logger.warning(f"ExtractV2: Directory augmentation failed (non-fatal): {e}")
         
         # ✨ 6. 规则细化 - 基于招标要求细化评分标准、资格审查等节点（新增阶段4）
         refinement_stats = {}

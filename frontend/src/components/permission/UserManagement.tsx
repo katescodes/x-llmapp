@@ -7,14 +7,24 @@ import { userRoleApi, roleApi } from '../../api/permission';
 import { User } from '../../types/auth';
 import { Role, UserRole } from '../../types/permission';
 
+interface Organization {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+}
+
 const UserManagement: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [userRoles, setUserRoles] = useState<UserRole[]>([]);
   const [showRoleDialog, setShowRoleDialog] = useState(false);
+  const [showOrgDialog, setShowOrgDialog] = useState(false);
+  const [selectedOrgId, setSelectedOrgId] = useState<string>('');
 
   // 加载用户列表
   const loadUsers = async () => {
@@ -39,9 +49,20 @@ const UserManagement: React.FC = () => {
     }
   };
 
+  // 加载企业列表
+  const loadOrganizations = async () => {
+    try {
+      const data = await api.get('/api/organizations/');
+      setOrganizations(data);
+    } catch (err: any) {
+      console.error('加载企业列表失败:', err);
+    }
+  };
+
   useEffect(() => {
     loadUsers();
     loadRoles();
+    loadOrganizations();
   }, []);
 
   // 查看用户角色
@@ -99,6 +120,30 @@ const UserManagement: React.FC = () => {
       await loadUsers();
     } catch (err: any) {
       setError(err.message || '更新用户状态失败');
+    }
+  };
+
+  // 显示企业编辑对话框
+  const showEditOrganization = (user: User) => {
+    setSelectedUser(user);
+    setSelectedOrgId(user.organization_id || '');
+    setShowOrgDialog(true);
+  };
+
+  // 更新用户企业
+  const updateUserOrganization = async () => {
+    if (!selectedUser) return;
+
+    try {
+      await api.patch(`/api/auth/users/${selectedUser.id}`, {
+        organization_id: selectedOrgId || null
+      });
+      setShowOrgDialog(false);
+      setSelectedUser(null);
+      setSelectedOrgId('');
+      await loadUsers();
+    } catch (err: any) {
+      setError(err.message || '更新用户企业失败');
     }
   };
 
@@ -181,6 +226,7 @@ const UserManagement: React.FC = () => {
                 <th style={{ padding: '16px', textAlign: 'left', color: '#cbd5e1' }}>用户名</th>
                 <th style={{ padding: '16px', textAlign: 'left', color: '#cbd5e1' }}>显示名称</th>
                 <th style={{ padding: '16px', textAlign: 'left', color: '#cbd5e1' }}>邮箱</th>
+                <th style={{ padding: '16px', textAlign: 'left', color: '#cbd5e1' }}>企业</th>
                 <th style={{ padding: '16px', textAlign: 'left', color: '#cbd5e1' }}>角色</th>
                 <th style={{ padding: '16px', textAlign: 'left', color: '#cbd5e1' }}>状态</th>
                 <th style={{ padding: '16px', textAlign: 'left', color: '#cbd5e1' }}>创建时间</th>
@@ -198,6 +244,26 @@ const UserManagement: React.FC = () => {
                   <td style={{ padding: '16px', color: '#e2e8f0' }}>{user.username}</td>
                   <td style={{ padding: '16px', color: '#e2e8f0' }}>{user.display_name || '-'}</td>
                   <td style={{ padding: '16px', color: '#94a3b8' }}>{user.email || '-'}</td>
+                  <td style={{ padding: '16px', color: '#94a3b8' }}>
+                    {user.organization_names && user.organization_names.length > 0 ? (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                        {user.organization_names.map((name, idx) => (
+                          <span
+                            key={idx}
+                            style={{
+                              padding: '2px 8px',
+                              background: 'rgba(34, 197, 94, 0.2)',
+                              color: '#22c55e',
+                              borderRadius: '4px',
+                              fontSize: '12px',
+                            }}
+                          >
+                            {name}
+                          </span>
+                        ))}
+                      </div>
+                    ) : '-'}
+                  </td>
                   <td style={{ padding: '16px' }}>
                     <span style={{
                       padding: '4px 12px',
@@ -238,6 +304,21 @@ const UserManagement: React.FC = () => {
                       }}
                     >
                       分配角色
+                    </button>
+                    <button
+                      onClick={() => showEditOrganization(user)}
+                      style={{
+                        padding: '6px 12px',
+                        border: '1px solid rgba(34, 197, 94, 0.3)',
+                        background: 'rgba(34, 197, 94, 0.1)',
+                        color: '#22c55e',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        marginRight: '8px',
+                      }}
+                    >
+                      编辑企业
                     </button>
                     <button
                       onClick={() => toggleUserStatus(user.id, user.is_active)}
@@ -380,6 +461,102 @@ const UserManagement: React.FC = () => {
                 }}
               >
                 关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 企业编辑对话框 */}
+      {showOrgDialog && selectedUser && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.7)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+        }}>
+          <div style={{
+            background: '#1e293b',
+            borderRadius: '16px',
+            padding: '32px',
+            width: '90%',
+            maxWidth: '500px',
+          }}>
+            <h2 style={{
+              margin: '0 0 24px 0',
+              fontSize: '20px',
+              color: '#f8fafc',
+            }}>
+              为用户 "{selectedUser.username}" 设置企业
+            </h2>
+
+            <div style={{ marginBottom: '24px' }}>
+              <label style={{
+                display: 'block',
+                fontSize: '14px',
+                color: '#cbd5e1',
+                marginBottom: '8px',
+              }}>
+                选择企业：
+              </label>
+              <select
+                value={selectedOrgId}
+                onChange={(e) => setSelectedOrgId(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '10px',
+                  background: 'rgba(30, 41, 59, 0.5)',
+                  border: '1px solid rgba(148, 163, 184, 0.3)',
+                  borderRadius: '8px',
+                  color: '#e2e8f0',
+                  fontSize: '14px',
+                }}
+              >
+                <option value="">无企业</option>
+                {organizations.map((org) => (
+                  <option key={org.id} value={org.id}>
+                    {org.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+              <button
+                onClick={() => {
+                  setShowOrgDialog(false);
+                  setSelectedUser(null);
+                  setSelectedOrgId('');
+                }}
+                style={{
+                  padding: '10px 24px',
+                  border: '1px solid rgba(148, 163, 184, 0.3)',
+                  background: 'rgba(30, 41, 59, 0.5)',
+                  color: '#e2e8f0',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                }}
+              >
+                取消
+              </button>
+              <button
+                onClick={updateUserOrganization}
+                style={{
+                  padding: '10px 24px',
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #4f46e5, #22c55e)',
+                  color: '#fff',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                }}
+              >
+                保存
               </button>
             </div>
           </div>

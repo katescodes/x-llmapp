@@ -147,7 +147,7 @@ def convert_pdf_to_docx(pdf_path: str, output_dir: Optional[str] = None) -> str:
 
 def extract_blocks_from_pdf(pdf_path: str) -> List[Dict[str, Any]]:
     """
-    从 PDF 提取结构化 blocks（先转 DOCX 再提取）
+    从 PDF 提取结构化 blocks（先转 DOCX 再提取，失败则用PyMuPDF）
     
     Args:
         pdf_path: PDF 文件路径
@@ -157,24 +157,48 @@ def extract_blocks_from_pdf(pdf_path: str) -> List[Dict[str, Any]]:
     """
     logger.info(f"开始从 PDF 提取 blocks: {pdf_path}")
     
-    # 1. PDF -> DOCX
+    # 尝试方法1: PDF -> DOCX -> blocks（更准确）
     try:
         docx_path = convert_pdf_to_docx(pdf_path)
-    except Exception as e:
-        logger.error(f"PDF 转换失败，尝试 fallback: {e}")
-        # TODO: fallback 到纯文本提取（PyMuPDF）
-        raise RuntimeError(f"PDF 提取失败: {str(e)}")
-    
-    # 2. DOCX -> blocks
-    try:
-        blocks = extract_blocks_from_docx(docx_path)
-        return blocks
-    finally:
-        # 清理临时文件
         try:
-            Path(docx_path).unlink()
-        except Exception:
-            pass
+            blocks = extract_blocks_from_docx(docx_path)
+            logger.info(f"PDF 通过 DOCX 转换成功提取: {len(blocks)} 个块")
+            return blocks
+        finally:
+            # 清理临时文件
+            try:
+                Path(docx_path).unlink()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"PDF 转换为 DOCX 失败: {e}，尝试直接解析 PDF")
+    
+    # 尝试方法2: 直接用 PyMuPDF 提取（fallback）
+    try:
+        from app.services.fragment.pdf_blocks import extract_pdf_body_items
+        
+        body_items, diag = extract_pdf_body_items(pdf_path)
+        logger.info(f"PDF 直接解析成功: {diag['blocks']} 个块（{diag['pages']} 页）")
+        
+        # 【重要】按页码和bodyIndex重新排序，确保内容连续
+        body_items_sorted = sorted(body_items, key=lambda x: (x.get('pageNo', 0), x['bodyIndex']))
+        
+        # 转换为标准 blocks 格式
+        blocks = []
+        for idx, item in enumerate(body_items_sorted):
+            blocks.append({
+                "blockId": f"b{idx}",  # 重新分配blockId
+                "type": "p",
+                "styleName": item.get('styleName'),
+                "text": item['text'],
+                "pageNo": item.get('pageNo')
+            })
+        
+        logger.info(f"PDF blocks已按页码重新排序")
+        return blocks
+    except Exception as e:
+        logger.error(f"PDF 直接解析也失败: {e}")
+        raise RuntimeError(f"PDF 提取失败（尝试了转换和直接解析）: {str(e)}")
 
 
 def extract_blocks(file_path: str) -> List[Dict[str, Any]]:
@@ -223,4 +247,64 @@ def get_block_text_snippet(block: Dict[str, Any], max_length: int = 200) -> str:
         return text[:max_length] + f" [表格{len(rows)}行]"
     
     return ""
+
+
+def blocks_to_text(blocks: List[Dict[str, Any]], include_tables: bool = True) -> str:
+    """
+    将 blocks 转换为纯文本内容
+    
+    用于：
+    - 范本内容展示
+    - 全文搜索
+    - 内容预览
+    
+    Args:
+        blocks: blocks 列表
+        include_tables: 是否包含表格内容（默认True）
+        
+    Returns:
+        纯文本内容
+    """
+    parts = []
+    
+    for block in blocks:
+        block_type = block.get("type", "")
+        
+        # 段落类型
+        if block_type == "p":
+            text = block.get("text", "").strip()
+            if text:
+                parts.append(text)
+                parts.append("")  # 段落间空行
+        
+        # 表格类型
+        elif block_type == "table" and include_tables:
+            rows = block.get("rows", [])
+            if not rows:
+                continue
+            
+            # 表格标记
+            parts.append("[表格开始]")
+            
+            # 表头
+            if len(rows) > 0:
+                header = rows[0]
+                parts.append(" | ".join(str(cell).strip() for cell in header))
+                parts.append("-" * 50)  # 分隔线
+            
+            # 表格内容
+            for row in rows[1:]:
+                parts.append(" | ".join(str(cell).strip() for cell in row))
+            
+            parts.append("[表格结束]")
+            parts.append("")
+    
+    # 合并并清理多余空行
+    text = "\n".join(parts)
+    
+    # 清理连续的空行（保留最多一个空行）
+    import re
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()
 

@@ -384,6 +384,13 @@ class TenderDAO:
                 except Exception:
                     pass
         return row
+    
+    def delete_project_info(self, project_id: str):
+        """删除项目信息"""
+        self._execute(
+            "DELETE FROM tender_project_info WHERE project_id=%s",
+            (project_id,),
+        )
 
     # ==================== 风险管理（已删除） ====================
     # tender_risks表已废弃并删除，请使用tender_requirements表

@@ -86,13 +86,14 @@ export const TemplateExtractPanel: FC<TemplateExtractPanelProps> = ({
   const handleExtract = async () => {
     setLoading(true);
     try {
+      const token = localStorage.getItem('auth_token') || localStorage.getItem('token') || '';
       const response = await fetch(
         `/api/apps/tender/projects/${projectId}/templates/extract`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Authorization': `Bearer ${token}`,
           },
           body: JSON.stringify({ mode }),
         }

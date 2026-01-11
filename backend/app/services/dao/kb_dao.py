@@ -36,7 +36,7 @@ def list_kbs() -> List[Dict]:
                 """
                 SELECT 
                     kb.id, kb.name, kb.description, kb.created_at, kb.updated_at, 
-                    kb.category_id, kb.owner_id,
+                    kb.category_id, kb.owner_id, kb.scope, kb.organization_id,
                     cat.name as category_name,
                     cat.display_name as category_display_name,
                     cat.color as category_color,
@@ -63,7 +63,7 @@ def get_kb(kb_id: str) -> Optional[Dict]:
                 """
                 SELECT 
                     kb.id, kb.name, kb.description, kb.created_at, kb.updated_at, 
-                    kb.category_id, kb.owner_id,
+                    kb.category_id, kb.owner_id, kb.scope, kb.organization_id,
                     cat.name as category_name,
                     cat.display_name as category_display_name,
                     cat.color as category_color,

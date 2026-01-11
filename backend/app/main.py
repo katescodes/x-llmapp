@@ -24,6 +24,7 @@ from .routers import (
     permissions,
     custom_rules,
     user_documents,
+    organizations,  # 新增企业管理路由
 )
 from .services.db.postgres import init_db
 from .services.llm_client import get_default_llm_model
@@ -360,6 +361,9 @@ app.include_router(custom_rules.router)
 
 # 用户文档管理
 app.include_router(user_documents.router)
+
+# 企业管理
+app.include_router(organizations.router)
 
 # Legacy tender APIs 已删除
 # if os.getenv("LEGACY_TENDER_APIS_ENABLED", "false").lower() in ("true", "1", "yes"):

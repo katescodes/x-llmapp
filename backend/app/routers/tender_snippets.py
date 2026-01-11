@@ -57,6 +57,7 @@ class SnippetOut(BaseModel):
     title: str
     start_block_id: str
     end_block_id: str
+    content_text: Optional[str] = Field(None, description="范本纯文本内容")
     suggest_outline_titles: List[str]
     confidence: float
     created_at: Optional[str]
@@ -65,6 +66,7 @@ class SnippetOut(BaseModel):
 class SnippetDetailOut(SnippetOut):
     """范本详情输出（包含完整blocks）"""
     blocks_json: List[Dict[str, Any]]
+    content_text: str = Field("", description="范本纯文本内容（完整）")
 
 
 class ApplySnippetRequest(BaseModel):
@@ -155,14 +157,22 @@ async def extract_snippets_from_file(
         
         # 2. 保存到数据库
         db_pool = _get_pool()
+        logger.info(f"📝 准备保存 {len(snippets)} 个范文到数据库")
+        for i, s in enumerate(snippets, 1):
+            logger.info(f"  {i}. {s['title']} (norm_key={s['norm_key']}, confidence={s.get('confidence', 0)})")
+        
         saved_count = save_snippets_to_db(snippets, db_pool)
+        logger.info(f"✅ 保存完成: {saved_count} 个范文已保存到数据库")
         
         # 3. 清理重复范文（保留置信度最高的）
+        logger.info(f"🧹 开始清理重复范文: project={project_id}")
         deleted_count = clean_duplicate_snippets(project_id, db_pool)
         if deleted_count > 0:
-            logger.info(f"清理了 {deleted_count} 个重复范文")
+            logger.info(f"🗑️ 清理了 {deleted_count} 个重复范文")
+        else:
+            logger.info(f"✅ 没有重复范文需要清理")
         
-        logger.info(f"范本提取完成: {saved_count} 个范本已保存")
+        logger.info(f"🎉 范本提取完成: 最终保存 {saved_count - deleted_count} 个范文")
         
         # 3. 返回结果（不包含 blocks_json）
         snippets_out = [
@@ -174,6 +184,7 @@ async def extract_snippets_from_file(
                 title=s["title"],
                 start_block_id=s["start_block_id"],
                 end_block_id=s["end_block_id"],
+                content_text=s.get("content_text", "")[:500] + "..." if len(s.get("content_text", "")) > 500 else s.get("content_text", ""),  # 预览版本，截取前500字
                 suggest_outline_titles=s.get("suggest_outline_titles", []),
                 confidence=s.get("confidence", 0.5),
                 created_at=None  # 新提取的还没有 created_at
@@ -233,6 +244,7 @@ async def list_project_snippets(
                 title=s["title"],
                 start_block_id=s["start_block_id"],
                 end_block_id=s["end_block_id"],
+                    content_text=s.get("content_text", "")[:500] + "..." if len(s.get("content_text", "")) > 500 else s.get("content_text", ""),  # 预览版本
                     suggest_outline_titles=suggest_titles,
                 confidence=s.get("confidence", 0.5),
                 created_at=s.get("created_at")
@@ -318,6 +330,7 @@ async def get_snippet_detail(
             start_block_id=snippet["start_block_id"],
             end_block_id=snippet["end_block_id"],
             blocks_json=snippet.get("blocks_json", []),
+            content_text=snippet.get("content_text", ""),
             suggest_outline_titles=snippet.get("suggest_outline_titles", []),
             confidence=snippet.get("confidence", 0.5),
             created_at=snippet.get("created_at")

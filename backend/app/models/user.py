@@ -2,7 +2,7 @@
 用户模型
 """
 from datetime import datetime
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 from pydantic import BaseModel, EmailStr, Field
 
 # 用户角色类型
@@ -55,6 +55,10 @@ class UserResponse(UserBase):
     is_active: bool
     last_login_at: Optional[datetime] = None
     created_at: datetime
+    organization_id: Optional[str] = None
+    organization_name: Optional[str] = None
+    organization_ids: List[str] = []
+    organization_names: List[str] = []
     
     class Config:
         from_attributes = True

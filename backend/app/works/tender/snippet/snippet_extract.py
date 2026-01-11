@@ -7,7 +7,7 @@ import logging
 import uuid
 from typing import List, Dict, Any, Optional
 
-from app.works.tender.snippet.doc_blocks import extract_blocks
+from app.works.tender.snippet.doc_blocks import extract_blocks, blocks_to_text
 from app.works.tender.snippet.snippet_locator import locate_format_chapter
 from app.works.tender.snippet.snippet_llm import (
     detect_snippets,
@@ -115,9 +115,14 @@ async def extract_format_snippets(
             continue
         
         # 构建范本记录
-        # 使用 project_id + norm_key 生成确定性ID，避免重复
+        # 使用 project_id + source_file_id + start_block_id + end_block_id 生成确定性ID
+        # 确保即使同一个项目有多个相同norm_key的范本，也不会冲突
         import hashlib
-        deterministic_id = hashlib.md5(f"{project_id}_{span['norm_key']}".encode()).hexdigest()[:16]
+        id_string = f"{project_id}_{source_file_id or file_path}_{span['startBlockId']}_{span['endBlockId']}"
+        deterministic_id = hashlib.md5(id_string.encode()).hexdigest()[:16]
+        
+        # 提取纯文本内容
+        content_text = blocks_to_text(snippet_blocks, include_tables=True)
         
         snippet = {
             "id": f"snip_{deterministic_id}",
@@ -128,12 +133,13 @@ async def extract_format_snippets(
             "start_block_id": span["startBlockId"],
             "end_block_id": span["endBlockId"],
             "blocks_json": snippet_blocks,
+            "content_text": content_text,
             "suggest_outline_titles": span.get("suggestOutlineTitles", []),
             "confidence": span.get("confidence", 0.5)
         }
         
         snippets.append(snippet)
-        logger.info(f"范本提取成功: {snippet['title']} ({len(snippet_blocks)} blocks)")
+        logger.info(f"范本提取成功: {snippet['title']} ({len(snippet_blocks)} blocks, {len(content_text)} chars)")
     
     logger.info(f"格式范本提取完成: {len(snippets)} 个有效范本")
     return snippets
@@ -142,6 +148,9 @@ async def extract_format_snippets(
 def clean_duplicate_snippets(project_id: str, db_pool) -> int:
     """
     清理项目中的重复范文（保留置信度最高的）
+    
+    按 (project_id, source_file_id, start_block_id, end_block_id) 去重
+    只有完全相同位置的范本才会被认为是重复的
     
     Args:
         project_id: 项目ID
@@ -154,15 +163,17 @@ def clean_duplicate_snippets(project_id: str, db_pool) -> int:
     
     with db_pool.connection() as conn:
         with conn.cursor() as cur:
-            # 找出重复的范文（相同的 norm_key）
+            # 找出重复的范文（同一文件的相同位置）
             cur.execute("""
                 WITH ranked_snippets AS (
                     SELECT 
                         id,
-                        norm_key,
+                        source_file_id,
+                        start_block_id,
+                        end_block_id,
                         confidence,
                         ROW_NUMBER() OVER (
-                            PARTITION BY project_id, norm_key 
+                            PARTITION BY project_id, source_file_id, start_block_id, end_block_id
                             ORDER BY confidence DESC, created_at DESC
                         ) as rn
                     FROM tender_format_snippets
@@ -203,8 +214,10 @@ def save_snippets_to_db(snippets: List[Dict[str, Any]], db_pool) -> int:
     saved_count = 0
     with db_pool.connection() as conn:
         with conn.cursor() as cur:
-            for snippet in snippets:
+            for i, snippet in enumerate(snippets, 1):
                 try:
+                    logger.info(f"  [{i}/{len(snippets)}] 保存: {snippet['title']} (id={snippet['id']}, start={snippet['start_block_id']}, end={snippet['end_block_id']})")
+                    
                     # 确保 suggest_outline_titles 是列表
                     suggest_titles = snippet.get("suggest_outline_titles", [])
                     if not isinstance(suggest_titles, list):
@@ -214,12 +227,13 @@ def save_snippets_to_db(snippets: List[Dict[str, Any]], db_pool) -> int:
                         """
                         INSERT INTO tender_format_snippets (
                             id, project_id, source_file_id, norm_key, title,
-                            start_block_id, end_block_id, blocks_json,
+                            start_block_id, end_block_id, blocks_json, content_text,
                             suggest_outline_titles, confidence
                         ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
                         ON CONFLICT (id) DO UPDATE SET
+                            content_text = EXCLUDED.content_text,
                             updated_at = CURRENT_TIMESTAMP
                         """,
                         (
@@ -231,6 +245,7 @@ def save_snippets_to_db(snippets: List[Dict[str, Any]], db_pool) -> int:
                             snippet["start_block_id"],
                             snippet["end_block_id"],
                             json.dumps(snippet["blocks_json"], ensure_ascii=False),
+                            snippet.get("content_text", ""),
                             suggest_titles,  # PostgreSQL 会自动处理 Python 列表到 TEXT[] 的转换
                             snippet["confidence"]
                         )
@@ -264,7 +279,7 @@ def get_snippets_by_project(project_id: str, db_pool) -> List[Dict[str, Any]]:
                 """
                 SELECT 
                     id, project_id, source_file_id, norm_key, title,
-                    start_block_id, end_block_id, blocks_json,
+                    start_block_id, end_block_id, blocks_json, content_text,
                     suggest_outline_titles, confidence, created_at
                 FROM tender_format_snippets
                 WHERE project_id = %s
@@ -331,6 +346,7 @@ def get_snippets_by_project(project_id: str, db_pool) -> List[Dict[str, Any]]:
                     "start_block_id": row['start_block_id'],
                     "end_block_id": row['end_block_id'],
                         "blocks_json": blocks,
+                        "content_text": row.get('content_text', ''),
                         "suggest_outline_titles": suggest_titles,
                     "confidence": row['confidence'],
                         "created_at": created_at
@@ -366,7 +382,7 @@ def get_snippet_by_id(snippet_id: str, db_pool) -> Optional[Dict[str, Any]]:
                 """
                 SELECT 
                     id, project_id, source_file_id, norm_key, title,
-                    start_block_id, end_block_id, blocks_json,
+                    start_block_id, end_block_id, blocks_json, content_text,
                     suggest_outline_titles, confidence, created_at
                 FROM tender_format_snippets
                 WHERE id = %s
@@ -413,6 +429,7 @@ def get_snippet_by_id(snippet_id: str, db_pool) -> Optional[Dict[str, Any]]:
                 "start_block_id": row['start_block_id'],
                 "end_block_id": row['end_block_id'],
                 "blocks_json": blocks,
+                "content_text": row.get('content_text', ''),
                 "suggest_outline_titles": suggest_titles,
                 "confidence": row['confidence'],
                 "created_at": row['created_at'].isoformat() if row.get('created_at') else None

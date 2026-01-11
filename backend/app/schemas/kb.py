@@ -25,6 +25,9 @@ class KnowledgeBaseOut(BaseModel):
     category_display_name: Optional[str] = None
     category_color: Optional[str] = None
     category_icon: Optional[str] = None
+    scope: Optional[str] = 'private'
+    owner_id: Optional[str] = None
+    organization_id: Optional[str] = None
     created_at: str
     updated_at: str
 

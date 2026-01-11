@@ -1071,11 +1071,25 @@ class TenderService:
         run_id: Optional[str] = None,
     ):
         """生成目录 - 使用 V2 引擎"""
+        
+        # 🔍 DEBUG: 写入调试日志
+        debug_log = open("/app/tender_service_debug.log", "a")
+        debug_log.write(f"\n=== TenderService.generate_directory START ===\n")
+        debug_log.write(f"project_id: {project_id}\n")
+        debug_log.write(f"model_id: {model_id}\n")
+        debug_log.write(f"run_id: {run_id}\n")
+        debug_log.flush()
+        
         # 1. 检查模式
         from app.core.cutover import get_cutover_config
         cutover = get_cutover_config()
         extract_mode = cutover.get_mode("extract", project_id)
+        debug_log.write(f"extract_mode: {extract_mode.value}\n")
+        debug_log.flush()
+        
         if extract_mode.value != "NEW_ONLY":
+            debug_log.write(f"模式检查失败，退出\n")
+            debug_log.close()
             raise RuntimeError("Legacy directory generation deleted. Set EXTRACT_MODE=NEW_ONLY")
         
         # 2. 创建 platform job (可选)
@@ -1095,14 +1109,23 @@ class TenderService:
         from app.services.db.postgres import _get_pool
         from app.platform.utils.async_runner import run_async
         
+        debug_log.write(f"准备调用 ExtractV2Service\n")
+        debug_log.flush()
+        
         pool = _get_pool()
         extract_v2 = ExtractV2Service(pool, self.llm)
+        
+        debug_log.write(f"开始调用 generate_directory_v2...\n")
+        debug_log.flush()
         
         v2_result = run_async(extract_v2.generate_directory_v2(
             project_id=project_id,
             model_id=model_id,
             run_id=run_id
         ))
+        
+        debug_log.write(f"generate_directory_v2 返回: keys={list(v2_result.keys())}\n")
+        debug_log.flush()
         
         # 4. 提取 nodes 和生成模式信息
         nodes = v2_result.get("data", {}).get("nodes", [])
@@ -1120,12 +1143,21 @@ class TenderService:
         logger.info(f"[generate_directory] normalized nodes -> {len(nodes)}")
         
         # 5. 后处理: 排序 + 构建树 + 生成 numbering
-        nodes_sorted = self._sort_directory_nodes_for_tree(nodes)
-        nodes_with_tree = self._build_directory_tree(nodes_sorted)
+        # 🔥 如果是从招标书原文提取的，跳过树构建（因为已经有正确的parent_id和order_no）
+        if generation_mode == "extracted_from_tender":
+            logger.info(f"[generate_directory] 跳过树构建（已从招标书提取完整结构）")
+            nodes_with_tree = nodes  # 直接使用已有结构
+        else:
+            nodes_sorted = self._sort_directory_nodes_for_tree(nodes)
+            nodes_with_tree = self._build_directory_tree(nodes_sorted)
         
         # 6. 保存（使用replace_directory）
-        self.dao.replace_directory(project_id, nodes_with_tree)
-        logger.info(f"[generate_directory] Saved {len(nodes_with_tree)} nodes")
+        # 🔥 如果是从招标书原文提取的，跳过保存（因为已经在_insert_directory_nodes中保存了）
+        if generation_mode == "extracted_from_tender":
+            logger.info(f"[generate_directory] 跳过保存（已在directory_augment_v1.py中保存）")
+        else:
+            self.dao.replace_directory(project_id, nodes_with_tree)
+            logger.info(f"[generate_directory] Saved {len(nodes_with_tree)} nodes")
         
         # ✨ 7. 自动填充范本（集成：一键完成目录生成+范本填充）
         try:
@@ -1472,18 +1504,36 @@ class TenderService:
 
         flat = []
         def walk(node: dict, prefix: str):
-            # 根节点 numbering 为 1/2/3...
+            # 🔥 保留原始numbering，不要重新生成
             flat.append(node)
             kids = children.get(node["id"], [])
             for idx, c in enumerate(kids, start=1):
-                c["numbering"] = f"{prefix}.{idx}" if prefix else str(idx)
+                # 🔥 只有当numbering为空或不存在时，才自动生成
+                if not c.get("numbering"):
+                    c["numbering"] = f"{prefix}.{idx}" if prefix else str(idx)
                 walk(c, c["numbering"])
 
-        # roots 必须稳定排序
-        roots.sort(key=sort_k)
+        # roots 必须稳定排序（优先按level=1，然后按order_no）
+        def root_sort_key(r):
+            # 优先按numbering中的数字排序（提取（1）、（2）中的数字）
+            import re
+            numbering = r.get("numbering", "")
+            match = re.search(r'[（\(](\d+)[）\)]', numbering)
+            if match:
+                return (0, int(match.group(1)))  # L1节点，按（1）、（2）排序
+            return (1, int(r.get("order_no") or 999))  # 其他节点按order_no排序
+        
+        roots.sort(key=root_sort_key)
+        
         for idx, r in enumerate(roots, start=1):
-            r["numbering"] = str(idx)
+            # 🔥 只有当numbering为空或不存在时，才自动生成
+            if not r.get("numbering"):
+                r["numbering"] = str(idx)
             walk(r, r["numbering"])
+
+        # 🔥 重新分配order_no，按照深度优先遍历的顺序
+        for i, node in enumerate(flat, start=1):
+            node["order_no"] = i
 
         return flat
     
@@ -4309,16 +4359,28 @@ class TenderService:
             
             # 筛选需要生成内容的节点（没有section或section为空）
             nodes_to_generate = []
+            nodes_with_snippet = []  # 已有范本的节点
             for node in nodes:
                 node_id = node.get("id")
                 section = self.dao.get_section_body(project_id, node_id)
                 
-                # 如果没有section或内容为空/占位符，则需要生成
-                if not section or self._is_empty_section(section):
+                # 检查节点是否已有范文内容
+                has_snippet = False
+                if section:
+                    meta_json = node.get("meta_json", {})
+                    snippet_blocks = meta_json.get("snippet_blocks") if isinstance(meta_json, dict) else None
+                    if snippet_blocks and len(snippet_blocks) > 0:
+                        has_snippet = True
+                        nodes_with_snippet.append(node)
+                        logger.info(f"跳过节点（已有范文）: {node.get('title')}")
+                
+                # 如果没有范文，且没有section或内容为空/占位符，则需要生成
+                if not has_snippet and (not section or self._is_empty_section(section)):
                     nodes_to_generate.append(node)
             
             total = len(nodes_to_generate)
             logger.info(f"[TenderService] 需要生成内容的节点数: {total}")
+            logger.info(f"[TenderService] 已有范文的节点数: {len(nodes_with_snippet)}")
             
             if total == 0:
                 if run_id:
@@ -4326,10 +4388,20 @@ class TenderService:
                         run_id,
                         "success",
                         progress=1.0,
-                        message="所有章节已有内容，无需生成",
-                        result_json={"generated": 0, "total": len(nodes), "skipped": len(nodes)},
+                        message=f"所有章节已有内容，无需生成（{len(nodes_with_snippet)}个已有范文）",
+                        result_json={
+                            "generated": 0, 
+                            "total": len(nodes), 
+                            "skipped": len(nodes),
+                            "snippet_count": len(nodes_with_snippet)
+                        },
                     )
-                return {"generated": 0, "total": len(nodes), "skipped": len(nodes)}
+                return {
+                    "generated": 0, 
+                    "total": len(nodes), 
+                    "skipped": len(nodes),
+                    "snippet_count": len(nodes_with_snippet)
+                }
             
             # 创建信号量控制并发
             semaphore = asyncio.Semaphore(max_concurrent)
@@ -4410,6 +4482,7 @@ class TenderService:
                 "failed": failed,
                 "total": total,
                 "skipped": len(nodes) - total,
+                "snippet_count": len(nodes_with_snippet),
             }
             
             # 更新 run 状态
@@ -4419,7 +4492,7 @@ class TenderService:
                         run_id,
                         "success",
                         progress=1.0,
-                        message=f"生成完成！成功 {success_count} 个章节",
+                        message=f"生成完成！成功 {success_count} 个章节，{len(nodes_with_snippet)} 个章节使用范文",
                         result_json=result_json,
                     )
                 else:

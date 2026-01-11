@@ -367,6 +367,11 @@ async def extract_project_info(
         sync: 同步执行模式，1=同步返回结果，0=后台任务（默认）
     """
     dao = TenderDAO(_get_pool(request))
+    
+    # 🔥 删除历史项目信息数据
+    dao.delete_project_info(project_id)
+    logger.info(f"[extract_project_info] 已删除历史项目信息: project_id={project_id}")
+    
     run_id = dao.create_run(project_id, "extract_project_info")
     dao.update_run(run_id, "running", progress=0.01, message="初始化...")
     svc = _svc(request)
@@ -659,15 +664,31 @@ def generate_directory(
     bg: BackgroundTasks,
 ):
     """生成目录"""
+    # 🔍 DEBUG
+    debug_log = open("/app/router_debug.log", "a")
+    debug_log.write(f"\n=== Router generate_directory START ===\n")
+    debug_log.write(f"project_id: {project_id}\n")
+    debug_log.write(f"model_id: {req.model_id}\n")
+    debug_log.flush()
+    
     dao = TenderDAO(_get_pool(request))
     run_id = dao.create_run(project_id, "generate_directory")
+    debug_log.write(f"run_id: {run_id}\n")
+    debug_log.flush()
+    
     dao.update_run(run_id, "running", progress=0.01, message="running")
     svc = _svc(request)
 
     def job():
+        debug_log.write(f"后台任务开始执行...\n")
+        debug_log.flush()
         try:
             svc.generate_directory(project_id, req.model_id, run_id=run_id)
+            debug_log.write(f"svc.generate_directory 执行完成\n")
+            debug_log.close()
         except Exception as e:
+            debug_log.write(f"svc.generate_directory 执行失败: {e}\n")
+            debug_log.close()
             dao.update_run(run_id, "failed", message=str(e))
 
     bg.add_task(job)

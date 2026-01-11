@@ -1,0 +1,234 @@
+.org-page-container {
+  padding: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.org-page-container h1 {
+  margin-bottom: 30px;
+  color: #333;
+}
+
+.org-page-container h2 {
+  margin-bottom: 15px;
+  color: #555;
+  font-size: 1.3em;
+}
+
+.org-page-loading,
+.org-page-error {
+  text-align: center;
+  padding: 40px;
+  font-size: 1.1em;
+  color: #666;
+}
+
+/* 企业信息卡片 */
+.org-info-section {
+  margin-bottom: 30px;
+}
+
+.org-info-card {
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.org-info-row {
+  display: flex;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.org-info-row:last-child {
+  border-bottom: none;
+}
+
+.org-info-row label {
+  font-weight: bold;
+  width: 120px;
+  color: #666;
+}
+
+.org-info-row span {
+  flex: 1;
+  color: #333;
+}
+
+/* 编辑名称 */
+.edit-name-group,
+.name-display-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+
+.edit-name-input {
+  flex: 1;
+  padding: 6px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.btn-edit,
+.btn-save,
+.btn-cancel {
+  padding: 4px 12px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn-edit {
+  background: #007bff;
+  color: white;
+}
+
+.btn-edit:hover {
+  background: #0056b3;
+}
+
+.btn-save {
+  background: #28a745;
+  color: white;
+}
+
+.btn-save:hover {
+  background: #218838;
+}
+
+.btn-cancel {
+  background: #6c757d;
+  color: white;
+}
+
+.btn-cancel:hover {
+  background: #5a6268;
+}
+
+/* 统计卡片 */
+.org-stats-section {
+  margin-bottom: 30px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 15px;
+}
+
+.stat-card {
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+  transition: box-shadow 0.2s;
+}
+
+.stat-card:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.stat-value {
+  font-size: 2em;
+  font-weight: bold;
+  color: #007bff;
+  margin-bottom: 8px;
+}
+
+.stat-label {
+  font-size: 0.9em;
+  color: #666;
+}
+
+/* 成员列表 */
+.org-members-section {
+  margin-bottom: 30px;
+}
+
+.members-table-container {
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.members-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.members-table thead {
+  background: #f8f9fa;
+}
+
+.members-table th {
+  padding: 12px 15px;
+  text-align: left;
+  font-weight: bold;
+  color: #555;
+  border-bottom: 2px solid #ddd;
+}
+
+.members-table td {
+  padding: 12px 15px;
+  border-bottom: 1px solid #f0f0f0;
+  color: #333;
+}
+
+.members-table tbody tr:hover {
+  background: #f8f9fa;
+}
+
+.members-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* 角色徽章 */
+.role-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.role-admin {
+  background: #dc3545;
+  color: white;
+}
+
+.role-employee {
+  background: #007bff;
+  color: white;
+}
+
+.role-customer {
+  background: #28a745;
+  color: white;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .org-page-container {
+    padding: 10px;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .members-table-container {
+    overflow-x: auto;
+  }
+
+  .members-table {
+    min-width: 600px;
+  }
+}

@@ -3,6 +3,7 @@
 将提取的格式范文插入到投标书节点中
 """
 import re
+import json
 import logging
 from typing import Dict, Any, List, Optional
 from psycopg_pool import ConnectionPool
@@ -304,15 +305,30 @@ def apply_snippet_to_node(
                     "message": f"不支持的模式: {mode}"
                 }
             
-            # 7. 更新数据库
+            # 7. 更新数据库 - 存储blocks到meta_json
+            # 获取当前 meta_json
+            cur.execute("""
+                SELECT meta_json FROM tender_directory_nodes
+                WHERE id = %s AND project_id = %s
+            """, (node_id, project_id))
+            
+            row = cur.fetchone()
+            meta_json = row['meta_json'] if row and row['meta_json'] else {}
+            if isinstance(meta_json, str):
+                import json
+                meta_json = json.loads(meta_json)
+            
+            # 将范文blocks存入meta_json
+            meta_json['snippet_blocks'] = snippet['blocks_json']
+            meta_json['snippet_id'] = snippet_id
+            
             cur.execute("""
                 UPDATE tender_directory_nodes
                 SET 
-                    body_content = %s,
-                    source = 'snippet',
+                    meta_json = %s::jsonb,
                     updated_at = NOW()
                 WHERE id = %s AND project_id = %s
-            """, (new_content, node_id, project_id))
+            """, (json.dumps(meta_json, ensure_ascii=False), node_id, project_id))
             
             if cur.rowcount == 0:
                 return {

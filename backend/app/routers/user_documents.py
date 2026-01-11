@@ -341,3 +341,117 @@ def analyze_document(
     except Exception as e:
         logger.error(f"分析文档失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"分析文档失败: {str(e)}")
+
+
+# ==================== 资源共享接口 ====================
+
+@router.post("/documents/{doc_id}/share")
+def share_document_to_organization(
+    doc_id: str,
+    request: Request,
+    user: TokenData = Depends(require_permission("tender.edit"))
+):
+    """
+    共享用户文档到企业
+    只有文档的创建者可以共享
+    """
+    pool = _get_pool()
+    
+    try:
+        with pool.connection() as conn:
+            import psycopg.rows
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                # 检查文档是否存在且用户是否为owner
+                cur.execute("""
+                    SELECT id, doc_name, owner_id, scope 
+                    FROM tender_user_documents 
+                    WHERE id = %s
+                """, [doc_id])
+                
+                doc = cur.fetchone()
+                if not doc:
+                    raise HTTPException(status_code=404, detail="文档不存在")
+                
+                if doc["owner_id"] != user.user_id:
+                    raise HTTPException(status_code=403, detail="只有文档创建者可以共享")
+                
+                if doc["scope"] == 'organization':
+                    return {"success": True, "message": "文档已经是共享状态"}
+                
+                # 更新为共享状态
+                cur.execute("""
+                    UPDATE tender_user_documents 
+                    SET scope = 'organization', updated_at = NOW()
+                    WHERE id = %s
+                """, [doc_id])
+                
+                conn.commit()
+                
+                return {
+                    "success": True,
+                    "message": "文档已共享到企业",
+                    "doc_id": doc_id,
+                    "scope": "organization"
+                }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"共享文档失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"共享失败: {str(e)}")
+
+
+@router.post("/documents/{doc_id}/unshare")
+def unshare_document_from_organization(
+    doc_id: str,
+    request: Request,
+    user: TokenData = Depends(require_permission("tender.edit"))
+):
+    """
+    取消共享用户文档（改回私有）
+    只有文档的创建者可以取消共享
+    """
+    pool = _get_pool()
+    
+    try:
+        with pool.connection() as conn:
+            import psycopg.rows
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                # 检查文档是否存在且用户是否为owner
+                cur.execute("""
+                    SELECT id, doc_name, owner_id, scope 
+                    FROM tender_user_documents 
+                    WHERE id = %s
+                """, [doc_id])
+                
+                doc = cur.fetchone()
+                if not doc:
+                    raise HTTPException(status_code=404, detail="文档不存在")
+                
+                if doc["owner_id"] != user.user_id:
+                    raise HTTPException(status_code=403, detail="只有文档创建者可以取消共享")
+                
+                if doc["scope"] == 'private':
+                    return {"success": True, "message": "文档已经是私有状态"}
+                
+                # 更新为私有状态
+                cur.execute("""
+                    UPDATE tender_user_documents 
+                    SET scope = 'private', updated_at = NOW()
+                    WHERE id = %s
+                """, [doc_id])
+                
+                conn.commit()
+                
+                return {
+                    "success": True,
+                    "message": "文档已取消共享",
+                    "doc_id": doc_id,
+                    "scope": "private"
+                }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"取消共享文档失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"取消共享失败: {str(e)}")

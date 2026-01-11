@@ -252,10 +252,9 @@ export default function TenderWorkspaceV2() {
   
   // 范文相关
   const [snippets, setSnippets] = useState<any[]>([]);
-  const [extractingSnippets, setExtractingSnippets] = useState(false);
   const [snippetMatches, setSnippetMatches] = useState<any[]>([]);
-  const [matchingSnippets, setMatchingSnippets] = useState(false);
   const [showSnippetMatchPanel, setShowSnippetMatchPanel] = useState(false);
+  const [extractingSnippets, setExtractingSnippets] = useState(false);  // 范文提取状态
   
   // 获取/更新项目状态的辅助函数
   const getProjectState = useCallback((projectId: string): ProjectState => {
@@ -267,7 +266,7 @@ export default function TenderWorkspaceV2() {
           risk: null,
           directory: null,
           review: null,
-        }
+        },
       };
       projectStatesRef.current.set(projectId, state);
     }
@@ -921,6 +920,9 @@ export default function TenderWorkspaceV2() {
         `/api/apps/tender/projects/${projectId}/format-snippets`
       );
       
+      console.log(`[loadSnippets] API返回数据:`, result);
+      console.log(`[loadSnippets] API返回数组长度:`, Array.isArray(result) ? result.length : 'not array');
+      
       // 竞态条件保护：加载完成时项目已切换
       if (currentProject?.id !== projectId) {
         console.log(`[loadSnippets] 加载完成时项目已切换，丢弃数据 (当前=${currentProject?.id}, 加载=${projectId})`);
@@ -929,8 +931,10 @@ export default function TenderWorkspaceV2() {
       
       setSnippets(result || []);
       console.log(`✅ 加载范文成功: project=${projectId}, count=${result?.length || 0}`);
+      console.log(`✅ 设置后snippets state长度:`, result?.length);
       if (result && result.length > 0) {
         console.log(`   第1个范文: ${result[0].title} (id=${result[0].id})`);
+        console.log(`   最后1个范文: ${result[result.length-1].title} (id=${result[result.length-1].id})`);
       }
     } catch (err: any) {
       console.error('加载范文失败:', err);
@@ -943,6 +947,7 @@ export default function TenderWorkspaceV2() {
   
   const extractFormatSnippets = async (projectId: string) => {
     setExtractingSnippets(true);
+    
     try {
       // 获取招标文件
       const tenderAssets = assets.filter(a => a.kind === 'tender');
@@ -1015,14 +1020,25 @@ export default function TenderWorkspaceV2() {
     }
   };
   
-  // ==================== 自动加载数据 ====================
+  const [matchingSnippets, setMatchingSnippets] = useState(false);
   
-  // 当项目切换或进入snippets tab时，自动加载范文
-  React.useEffect(() => {
-    if (currentProject && step2SubTab === 'snippets') {
-      loadSnippets(currentProject.id);
+  // 查看范文详情
+  const viewSnippetContent = async (snippetId: string) => {
+    setViewingSnippetId(snippetId);
+    setLoadingSnippetContent(true);
+    try {
+      const result = await api.get(`/api/apps/tender/format-snippets/${snippetId}`);
+      setViewingSnippetContent(result);
+    } catch (err: any) {
+      console.error('加载范文内容失败:', err);
+      alert(`加载失败: ${err.message || err}`);
+      setViewingSnippetId(null);
+    } finally {
+      setLoadingSnippetContent(false);
     }
-  }, [currentProject?.id, step2SubTab]);
+  };
+  
+  // ==================== 自动加载数据 ====================
   
   // ==================== 审核相关 ====================
   
@@ -1182,6 +1198,14 @@ export default function TenderWorkspaceV2() {
     const saved = localStorage.getItem(key) || '';
     setSelectedFormatTemplateId(saved);
   }, [currentProject]);
+  
+  // 当切换到步骤3时，自动加载格式范文数据
+  useEffect(() => {
+    if (activeTab === 3 && currentProject && snippets.length === 0) {
+      console.log('[步骤3] 自动加载格式范文数据:', currentProject.id);
+      loadSnippets(currentProject.id);
+    }
+  }, [activeTab, currentProject?.id]);
   
   // 清理旧的Blob URL
   useEffect(() => {
@@ -2438,44 +2462,114 @@ export default function TenderWorkspaceV2() {
                     </div>
 
                     {/* 范文卡片列表 */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                       {snippets.map((snippet, index) => (
                         <div
                           key={snippet.id}
                           style={{
-                            padding: '16px',
+                            padding: '20px',
                             backgroundColor: 'rgba(255,255,255,0.05)',
                             borderRadius: '8px',
-                            border: '1px solid rgba(255,255,255,0.1)',
-                            transition: 'all 0.2s'
+                            border: '1px solid rgba(255,255,255,0.1)'
                           }}
                         >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                            <div style={{ flex: 1 }}>
-                              <div style={{ 
-                                fontSize: '16px', 
-                                fontWeight: '600', 
-                                color: '#e2e8f0',
-                                marginBottom: '8px'
-                              }}>
-                                {index + 1}. {snippet.title}
-                              </div>
-                              <div style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '4px' }}>
-                                置信度: <span style={{ 
-                                  color: snippet.confidence >= 0.9 ? '#10b981' : 
-                                        snippet.confidence >= 0.7 ? '#fbbf24' : '#ef4444',
-                                  fontWeight: '600'
-                                }}>
-                                  {(snippet.confidence * 100).toFixed(0)}%
-                                </span>
-                              </div>
-                              {snippet.suggest_outline_titles && snippet.suggest_outline_titles.length > 0 && (
-                                <div style={{ fontSize: '12px', color: '#64748b' }}>
-                                  建议匹配: {snippet.suggest_outline_titles.join(', ')}
-                                </div>
-                              )}
-                            </div>
+                          {/* 标题行 */}
+                          <div style={{ 
+                            fontSize: '16px', 
+                            fontWeight: '600', 
+                            color: '#e2e8f0',
+                            marginBottom: '12px',
+                            paddingBottom: '12px',
+                            borderBottom: '1px solid rgba(255,255,255,0.1)'
+                          }}>
+                            📄 {index + 1}. {snippet.title}
                           </div>
+                          
+                          {/* 元信息 */}
+                          <div style={{ 
+                            fontSize: '13px', 
+                            color: '#94a3b8', 
+                            marginBottom: '12px',
+                            display: 'flex',
+                            gap: '16px',
+                            flexWrap: 'wrap'
+                          }}>
+                            <span>类型: <span style={{ color: '#a78bfa' }}>{snippet.norm_key}</span></span>
+                            <span>·</span>
+                            <span>置信度: <span style={{ 
+                              color: snippet.confidence >= 0.9 ? '#10b981' : 
+                                    snippet.confidence >= 0.7 ? '#fbbf24' : '#ef4444',
+                              fontWeight: '600'
+                            }}>
+                              {(snippet.confidence * 100).toFixed(0)}%
+                            </span></span>
+                            {snippet.suggest_outline_titles && snippet.suggest_outline_titles.length > 0 && (
+                              <>
+                                <span>·</span>
+                                <span>💡 建议匹配: {snippet.suggest_outline_titles.join(', ')}</span>
+                              </>
+                            )}
+                          </div>
+                          
+                          {/* 正文内容 */}
+                          {snippet.content_text && (
+                            <div style={{
+                              marginTop: '12px',
+                              padding: '16px',
+                              backgroundColor: 'rgba(0,0,0,0.2)',
+                              borderRadius: '6px',
+                              color: '#cbd5e1',
+                              fontSize: '14px',
+                              lineHeight: '1.8',
+                              whiteSpace: 'pre-wrap',
+                              fontFamily: 'ui-monospace, monospace',
+                              maxHeight: '400px',
+                              overflow: 'auto',
+                              border: '1px solid rgba(255,255,255,0.05)'
+                            }}>
+                              {snippet.content_text.split('\n').map((line: string, i: number) => {
+                                // 识别并高亮表格标记
+                                if (line.includes('[表格开始]')) {
+                                  return (
+                                    <div key={i} style={{ 
+                                      color: '#8b5cf6', 
+                                      fontWeight: 'bold', 
+                                      marginTop: i > 0 ? '12px' : 0,
+                                      marginBottom: '6px'
+                                    }}>
+                                      {line}
+                                    </div>
+                                  );
+                                }
+                                if (line.includes('[表格结束]')) {
+                                  return (
+                                    <div key={i} style={{ 
+                                      color: '#8b5cf6', 
+                                      fontWeight: 'bold',
+                                      marginTop: '6px',
+                                      marginBottom: '12px'
+                                    }}>
+                                      {line}
+                                    </div>
+                                  );
+                                }
+                                // 表格分隔线
+                                if (line.match(/^-+$/)) {
+                                  return <div key={i} style={{ color: '#475569' }}>{line}</div>;
+                                }
+                                // 表格行（包含 | 符号）
+                                if (line.includes('|')) {
+                                  return <div key={i} style={{ color: '#93c5fd' }}>{line}</div>;
+                                }
+                                // 空行
+                                if (!line.trim()) {
+                                  return <div key={i} style={{ height: '0.5em' }}>&nbsp;</div>;
+                                }
+                                // 普通文本
+                                return <div key={i}>{line}</div>;
+                              })}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -2506,37 +2600,70 @@ export default function TenderWorkspaceV2() {
                 display: 'flex',
                 flexDirection: 'column'
               }}>
-                {/* 插入范文按钮 */}
-                {snippets.length > 0 && (
-                  <div style={{ 
-                    padding: '12px 16px', 
-                    backgroundColor: 'rgba(139, 92, 246, 0.1)',
-                    borderBottom: '1px solid rgba(139, 92, 246, 0.2)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px'
-                  }}>
-                    <button
-                      onClick={() => currentProject && matchSnippetsToDirectory(currentProject.id)}
-                      disabled={!currentProject || matchingSnippets || snippets.length === 0}
-                      style={{
-                        padding: '8px 16px',
-                        backgroundColor: matchingSnippets ? '#6b7280' : '#8b5cf6',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: matchingSnippets ? 'not-allowed' : 'pointer',
-                        fontSize: '14px',
-                        fontWeight: '500'
-                      }}
-                    >
-                      {matchingSnippets ? '🔄 匹配中...' : '📋 插入范文'}
-                    </button>
-                    <span style={{ color: '#a78bfa', fontSize: '14px' }}>
-                      已提取 {snippets.length} 个范文，点击匹配到目录节点
-                    </span>
-                  </div>
-                )}
+                {/* 插入范文按钮区域 */}
+                <div style={{ 
+                  padding: '12px 16px', 
+                  backgroundColor: snippets.length > 0 ? 'rgba(139, 92, 246, 0.1)' : 'rgba(251, 191, 36, 0.1)',
+                  borderBottom: snippets.length > 0 ? '1px solid rgba(139, 92, 246, 0.2)' : '1px solid rgba(251, 191, 36, 0.2)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  flexWrap: 'wrap'
+                }}>
+                  {snippets.length > 0 ? (
+                    <>
+                      <button
+                        onClick={() => currentProject && matchSnippetsToDirectory(currentProject.id)}
+                        disabled={!currentProject || matchingSnippets || snippets.length === 0}
+                        style={{
+                          padding: '8px 16px',
+                          backgroundColor: matchingSnippets ? '#6b7280' : '#8b5cf6',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: matchingSnippets ? 'not-allowed' : 'pointer',
+                          fontSize: '14px',
+                          fontWeight: '500'
+                        }}
+                      >
+                        {matchingSnippets ? '🔄 匹配中...' : '📋 插入范文'}
+                      </button>
+                      <span style={{ color: '#a78bfa', fontSize: '14px' }}>
+                        已提取 {snippets.length} 个范文，点击匹配到目录节点
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span style={{ color: '#f59e0b', fontSize: '14px', flex: 1 }}>
+                        ⚠️ 暂无格式范文数据
+                      </span>
+                      <button
+                        onClick={() => {
+                          if (currentProject) {
+                            console.log('[手动刷新] 加载格式范文:', currentProject.id);
+                            loadSnippets(currentProject.id);
+                          }
+                        }}
+                        disabled={!currentProject}
+                        style={{
+                          padding: '6px 12px',
+                          backgroundColor: '#f59e0b',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          fontWeight: '500'
+                        }}
+                      >
+                        🔄 刷新范文数据
+                      </button>
+                      <span style={{ color: '#f59e0b', fontSize: '13px' }}>
+                        或前往"步骤2 → 格式范文"提取
+                      </span>
+                    </>
+                  )}
+                </div>
                 
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                 <DocumentComponentManagement

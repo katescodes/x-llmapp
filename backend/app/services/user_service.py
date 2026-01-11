@@ -50,8 +50,8 @@ def create_user(user_data: UserCreate) -> UserResponse:
             cur.execute("""
                 INSERT INTO users (
                     id, username, password_hash, email, role,
-                    display_name, phone, department, company, is_active
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    display_name, phone, department, company, is_active, organization_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'org_default')
                 RETURNING id, username, email, role, display_name, phone,
                           department, company, avatar_url, is_active,
                           last_login_at, created_at, updated_at
@@ -168,20 +168,38 @@ def get_all_users(role: Optional[UserRole] = None) -> List[UserResponse]:
         with conn.cursor() as cur:
             if role:
                 cur.execute("""
-                    SELECT id, username, email, role, display_name, phone,
-                           department, company, avatar_url, is_active,
-                           last_login_at, created_at
-                    FROM users
-                    WHERE role = %s
-                    ORDER BY created_at DESC
+                    SELECT u.id, u.username, u.email, u.role, u.display_name, u.phone,
+                           u.department, u.company, u.avatar_url, u.is_active,
+                           u.last_login_at, u.created_at, u.organization_id,
+                           o.name as organization_name,
+                           ARRAY_AGG(DISTINCT uom.organization_id) FILTER (WHERE uom.organization_id IS NOT NULL) as organization_ids,
+                           ARRAY_AGG(DISTINCT o2.name) FILTER (WHERE o2.name IS NOT NULL) as organization_names
+                    FROM users u
+                    LEFT JOIN organizations o ON u.organization_id = o.id
+                    LEFT JOIN user_organization_mappings uom ON u.id = uom.user_id
+                    LEFT JOIN organizations o2 ON uom.organization_id = o2.id
+                    WHERE u.role = %s
+                    GROUP BY u.id, u.username, u.email, u.role, u.display_name, u.phone,
+                             u.department, u.company, u.avatar_url, u.is_active,
+                             u.last_login_at, u.created_at, u.organization_id, o.name
+                    ORDER BY u.created_at DESC
                 """, (role,))
             else:
                 cur.execute("""
-                    SELECT id, username, email, role, display_name, phone,
-                           department, company, avatar_url, is_active,
-                           last_login_at, created_at
-                    FROM users
-                    ORDER BY created_at DESC
+                    SELECT u.id, u.username, u.email, u.role, u.display_name, u.phone,
+                           u.department, u.company, u.avatar_url, u.is_active,
+                           u.last_login_at, u.created_at, u.organization_id,
+                           o.name as organization_name,
+                           ARRAY_AGG(DISTINCT uom.organization_id) FILTER (WHERE uom.organization_id IS NOT NULL) as organization_ids,
+                           ARRAY_AGG(DISTINCT o2.name) FILTER (WHERE o2.name IS NOT NULL) as organization_names
+                    FROM users u
+                    LEFT JOIN organizations o ON u.organization_id = o.id
+                    LEFT JOIN user_organization_mappings uom ON u.id = uom.user_id
+                    LEFT JOIN organizations o2 ON uom.organization_id = o2.id
+                    GROUP BY u.id, u.username, u.email, u.role, u.display_name, u.phone,
+                             u.department, u.company, u.avatar_url, u.is_active,
+                             u.last_login_at, u.created_at, u.organization_id, o.name
+                    ORDER BY u.created_at DESC
                 """)
             
             rows = cur.fetchall()
@@ -198,7 +216,11 @@ def get_all_users(role: Optional[UserRole] = None) -> List[UserResponse]:
                     avatar_url=row['avatar_url'],
                     is_active=row['is_active'],
                     last_login_at=row['last_login_at'],
-                    created_at=row['created_at']
+                    created_at=row['created_at'],
+                    organization_id=row.get('organization_id'),
+                    organization_name=row.get('organization_name'),
+                    organization_ids=row.get('organization_ids') or [],
+                    organization_names=row.get('organization_names') or []
                 )
                 for row in rows
             ]

@@ -286,6 +286,9 @@ export interface KnowledgeBase {
   category_display_name?: string | null;
   category_color?: string | null;
   category_icon?: string | null;
+  scope?: 'private' | 'organization';
+  owner_id?: string;
+  organization_id?: string;
   created_at: string;
   updated_at: string;
 }

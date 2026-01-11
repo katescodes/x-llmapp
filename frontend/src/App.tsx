@@ -16,12 +16,28 @@ type Page = "chat" | "settings" | "kb" | "recordings" | "tender" | "declare" | "
 const MainApp: React.FC = () => {
   const { user, logout, isLoading } = useAuth();
   const { canAccessAdminMode, hasPermission, hasAnyPermission } = usePermission();
-  const [currentPage, setCurrentPage] = useState<Page>("chat");
+  
+  // 从 localStorage 读取上次的页面，如果没有则默认为 "chat"
+  const getInitialPage = (): Page => {
+    const savedPage = localStorage.getItem('current_page');
+    if (savedPage && ['chat', 'settings', 'kb', 'recordings', 'tender', 'declare', 'format-templates'].includes(savedPage)) {
+      return savedPage as Page;
+    }
+    return 'chat';
+  };
+  
+  const [currentPage, setCurrentPage] = useState<Page>(getInitialPage());
+
+  // 当页面改变时，保存到 localStorage
+  const handlePageChange = (page: Page) => {
+    setCurrentPage(page);
+    localStorage.setItem('current_page', page);
+  };
 
   // 监听从招投标工作台跳转到格式模板的事件
   React.useEffect(() => {
     const handleNavigateToTemplates = () => {
-      setCurrentPage("format-templates");
+      handlePageChange("format-templates");
     };
     window.addEventListener('navigate-to-templates', handleNavigateToTemplates);
     return () => {
@@ -60,7 +76,7 @@ const MainApp: React.FC = () => {
       <nav className="app-nav">
         <div className="nav-buttons">
         <button
-          onClick={() => setCurrentPage("chat")}
+          onClick={() => handlePageChange("chat")}
           className={`nav-btn ${currentPage === "chat" ? "active" : ""}`}
         >
           💬 对话
@@ -68,7 +84,7 @@ const MainApp: React.FC = () => {
         {/* 知识库 - 需要 kb.view 权限 */}
         {hasPermission("kb.view") && (
           <button
-            onClick={() => setCurrentPage("kb")}
+            onClick={() => handlePageChange("kb")}
             className={`nav-btn ${currentPage === "kb" ? "active" : ""}`}
           >
             📚 知识库
@@ -77,7 +93,7 @@ const MainApp: React.FC = () => {
         {/* 招投标 - 需要 tender.view 权限 */}
         {hasPermission("tender.view") && (
           <button
-            onClick={() => setCurrentPage("tender")}
+            onClick={() => handlePageChange("tender")}
             className={`nav-btn ${currentPage === "tender" ? "active" : ""}`}
           >
             🧾 招投标
@@ -86,7 +102,7 @@ const MainApp: React.FC = () => {
         {/* 申报书 - 需要 declare.view 权限 */}
         {hasPermission("declare.view") && (
           <button
-            onClick={() => setCurrentPage("declare")}
+            onClick={() => handlePageChange("declare")}
             className={`nav-btn ${currentPage === "declare" ? "active" : ""}`}
           >
             📝 申报书
@@ -95,7 +111,7 @@ const MainApp: React.FC = () => {
         {/* 我的录音 - 需要 recording.view 权限 */}
         {hasPermission("recording.view") && (
           <button
-            onClick={() => setCurrentPage("recordings")}
+            onClick={() => handlePageChange("recordings")}
             className={`nav-btn ${currentPage === "recordings" ? "active" : ""}`}
           >
             📼 我的录音
@@ -104,7 +120,7 @@ const MainApp: React.FC = () => {
         {/* 系统设置 - 需要管理员或员工权限 */}
         {canAccessAdminMode && (
           <button
-            onClick={() => setCurrentPage("settings")}
+            onClick={() => handlePageChange("settings")}
             className={`nav-btn ${currentPage === "settings" ? "active" : ""}`}
           >
             ⚙️ 系统设置

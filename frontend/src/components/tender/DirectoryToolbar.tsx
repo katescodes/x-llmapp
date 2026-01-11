@@ -88,7 +88,18 @@ export default function DirectoryToolbar({
       </div>
 
       <div className="kb-doc-meta" style={{ marginTop: 8 }}>
-        说明：生成目录成功后，下方区域会原地切换为"一页模式（目录+正文）"。正文为自动保存。套用格式后可切换到"格式预览"查看整体效果。
+        <div style={{ marginBottom: 6 }}>
+          <strong>说明：</strong>生成目录成功后，下方区域会原地切换为"一页模式（目录+正文）"。正文为自动保存。套用格式后可切换到"格式预览"查看整体效果。
+        </div>
+        <div style={{ padding: '6px 10px', background: 'rgba(59, 130, 246, 0.08)', borderRadius: 4, fontSize: '12px', color: '#475569', lineHeight: '1.6' }}>
+          💡 <strong>目录生成策略：</strong>
+          <br/>
+          • 优先从招标书的"投标文件格式"章节精确提取（规则方法，保持原样）
+          <br/>
+          • 如无标准格式章节，则基于招标要求由AI智能生成（LLM方法）
+          <br/>
+          • 两种方法互为补充，确保目录完整性和准确性
+        </div>
         {generationMode && (
           <div style={{ marginTop: 4, padding: '6px 10px', background: 'rgba(16, 185, 129, 0.1)', borderRadius: 4, fontSize: '13px' }}>
             {generationMode === 'fast' && (

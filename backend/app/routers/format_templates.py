@@ -678,3 +678,114 @@ def download_exported_docx(
     )
 
 
+
+# ==================== 资源共享接口 ====================
+
+@router.post("/format-templates/{template_id}/share")
+def share_template_to_organization(
+    template_id: str,
+    request: Request,
+    user: TokenData = Depends(require_permission("tender.edit"))
+):
+    """
+    共享模板到企业
+    只有模板的创建者可以共享
+    """
+    pool = _get_pool(request)
+    
+    try:
+        with pool.connection() as conn:
+            import psycopg.rows
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                # 检查模板是否存在且用户是否为owner
+                cur.execute("""
+                    SELECT owner_id, scope FROM format_templates 
+                    WHERE id = %s
+                """, [template_id])
+                
+                template = cur.fetchone()
+                if not template:
+                    raise HTTPException(status_code=404, detail="模板不存在")
+                
+                if template["owner_id"] != user.user_id:
+                    raise HTTPException(status_code=403, detail="只有模板创建者可以共享")
+                
+                if template["scope"] == 'organization':
+                    return {"success": True, "message": "模板已经是共享状态"}
+                
+                # 更新为共享状态
+                cur.execute("""
+                    UPDATE format_templates 
+                    SET scope = 'organization', updated_at = NOW()
+                    WHERE id = %s
+                """, [template_id])
+                
+                conn.commit()
+                
+                return {
+                    "success": True,
+                    "message": "模板已共享到企业",
+                    "template_id": template_id,
+                    "scope": "organization"
+                }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"共享模板失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"共享失败: {str(e)}")
+
+
+@router.post("/format-templates/{template_id}/unshare")
+def unshare_template_from_organization(
+    template_id: str,
+    request: Request,
+    user: TokenData = Depends(require_permission("tender.edit"))
+):
+    """
+    取消共享模板（改回私有）
+    只有模板的创建者可以取消共享
+    """
+    pool = _get_pool(request)
+    
+    try:
+        with pool.connection() as conn:
+            import psycopg.rows
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                # 检查模板是否存在且用户是否为owner
+                cur.execute("""
+                    SELECT owner_id, scope FROM format_templates 
+                    WHERE id = %s
+                """, [template_id])
+                
+                template = cur.fetchone()
+                if not template:
+                    raise HTTPException(status_code=404, detail="模板不存在")
+                
+                if template["owner_id"] != user.user_id:
+                    raise HTTPException(status_code=403, detail="只有模板创建者可以取消共享")
+                
+                if template["scope"] == 'private':
+                    return {"success": True, "message": "模板已经是私有状态"}
+                
+                # 更新为私有状态
+                cur.execute("""
+                    UPDATE format_templates 
+                    SET scope = 'private', updated_at = NOW()
+                    WHERE id = %s
+                """, [template_id])
+                
+                conn.commit()
+                
+                return {
+                    "success": True,
+                    "message": "模板已取消共享",
+                    "template_id": template_id,
+                    "scope": "private"
+                }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"取消共享模板失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"取消共享失败: {str(e)}")

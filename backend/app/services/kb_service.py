@@ -24,7 +24,7 @@ def list_kbs_by_owner(owner_id: str):
     with pool.connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, name, description, category_id, created_at, updated_at, owner_id
+                SELECT id, name, description, category_id, created_at, updated_at, owner_id, scope, organization_id
                 FROM knowledge_bases
                 WHERE owner_id = %s
                 ORDER BY created_at DESC

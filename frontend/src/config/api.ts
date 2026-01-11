@@ -120,6 +120,13 @@ export const api = {
       body: JSON.stringify(body) 
     }),
   
+  patch: (path: string, body?: any, options?: RequestOptions) => 
+    request(path, { 
+      ...options, 
+      method: 'PATCH', 
+      body: JSON.stringify(body) 
+    }),
+  
   delete: (path: string, options?: RequestOptions) => 
     request(path, { ...options, method: 'DELETE' }),
 

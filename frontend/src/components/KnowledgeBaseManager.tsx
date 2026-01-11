@@ -8,6 +8,7 @@ import {
 } from "../types";
 import { api } from "../config/api";
 import CategoryManager from "./CategoryManager";
+import ShareButton from "./ShareButton";
 
 const KnowledgeBaseManager: React.FC = () => {
   const [categories, setCategories] = useState<KbCategory[]>([]);
@@ -271,35 +272,47 @@ const KnowledgeBaseManager: React.FC = () => {
             <div className="kb-empty">还没有知识库，先在上方创建一个吧。</div>
           )}
           {kbs.map((kb) => (
-            <button
+            <div
               key={kb.id}
               className={`kb-row ${activeKb?.id === kb.id ? "active" : ""}`}
-              onClick={() => handleSelectKb(kb)}
+              style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
             >
-              <div className="kb-name">
-                {kb.category_icon && <span style={{ marginRight: '6px' }}>{kb.category_icon}</span>}
-                {kb.name}
-              </div>
-              <div className="kb-meta">
-                {kb.category_display_name && (
-                  <span 
-                    style={{
-                      display: 'inline-block',
-                      padding: '2px 6px',
-                      borderRadius: '4px',
-                      fontSize: '11px',
-                      background: kb.category_color || '#6b7280',
-                      color: 'white',
-                      marginRight: '8px',
-                      fontWeight: '500'
-                    }}
-                  >
-                    {kb.category_display_name}
-                  </span>
-                )}
-                {kb.description || "暂无描述"} · 更新于 {new Date(kb.updated_at).toLocaleString()}
-              </div>
-            </button>
+              <button
+                style={{ flex: 1, border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left' }}
+                onClick={() => handleSelectKb(kb)}
+              >
+                <div className="kb-name">
+                  {kb.category_icon && <span style={{ marginRight: '6px' }}>{kb.category_icon}</span>}
+                  {kb.name}
+                </div>
+                <div className="kb-meta">
+                  {kb.category_display_name && (
+                    <span 
+                      style={{
+                        display: 'inline-block',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        background: kb.category_color || '#6b7280',
+                        color: 'white',
+                        marginRight: '8px',
+                        fontWeight: '500'
+                      }}
+                    >
+                      {kb.category_display_name}
+                    </span>
+                  )}
+                  {kb.description || "暂无描述"} · 更新于 {new Date(kb.updated_at).toLocaleString()}
+                </div>
+              </button>
+              <ShareButton
+                resourceType="kb"
+                resourceId={kb.id}
+                resourceName={kb.name}
+                isShared={kb.scope === 'organization'}
+                onShareChange={() => fetchKbs()}
+              />
+            </div>
           ))}
         </div>
       </div>

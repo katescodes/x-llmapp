@@ -16,6 +16,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useAuthFetch, usePermission } from "../hooks/usePermission";
 import PermissionManagementPage from "./PermissionManagementPage";
 import DocumentComponentManagement from "./DocumentComponentManagement";
+import OrganizationPage from "./OrganizationPage";
 
 // ASR配置类型
 interface ASRConfig {
@@ -202,24 +203,26 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
   const canAccessASR = hasPermission('system.asr');
   const canAccessPrompts = hasPermission('system.prompt');
   const canAccessPermissions = isAdmin; // 仅管理员可访问权限管理
+  const canAccessOrganization = hasPermission('organization.view'); // 企业管理权限
   
   // 文档组件管理权限（所有人都可以访问）
   const canAccessDocComponents = true;
   
   // 确定第一个可访问的tab
-  const getFirstAccessibleTab = (): 'llm' | 'embedding' | 'app' | 'asr' | 'prompts' | 'permissions' | 'docComponents' => {
+  const getFirstAccessibleTab = (): 'llm' | 'embedding' | 'app' | 'asr' | 'prompts' | 'permissions' | 'organization' | 'docComponents' => {
     if (canAccessLLM) return 'llm';
     if (canAccessEmbedding) return 'embedding';
     if (canAccessApp) return 'app';
     if (canAccessASR) return 'asr';
     if (canAccessPrompts) return 'prompts';
     if (canAccessPermissions) return 'permissions';
+    if (canAccessOrganization) return 'organization';
     if (canAccessDocComponents) return 'docComponents';
     return 'llm'; // 默认，实际上如果没有任何权限，整个组件不应该被渲染
   };
   
   // Tab state
-  const [currentTab, setCurrentTab] = useState<'llm' | 'embedding' | 'app' | 'asr' | 'prompts' | 'permissions' | 'docComponents'>(getFirstAccessibleTab());
+  const [currentTab, setCurrentTab] = useState<'llm' | 'embedding' | 'app' | 'asr' | 'prompts' | 'permissions' | 'organization' | 'docComponents'>(getFirstAccessibleTab());
   
   // LLM states
   const [models, setModels] = useState<LLMModel[]>([]);
@@ -1235,6 +1238,25 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
             }}
           >
             🔐 权限管理
+          </button>
+        )}
+        {canAccessOrganization && (
+          <button
+            onClick={() => setCurrentTab('organization')}
+            style={{
+              padding: "10px 20px",
+              background: currentTab === 'organization' ? "rgba(79, 70, 229, 0.2)" : "transparent",
+              color: currentTab === 'organization' ? "#22c55e" : "#94a3b8",
+              border: "none",
+              borderBottom: currentTab === 'organization' ? "2px solid #22c55e" : "none",
+              borderRadius: "6px 6px 0 0",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: currentTab === 'organization' ? "600" : "normal",
+              transition: "all 0.2s"
+            }}
+          >
+            🏢 企业管理
           </button>
         )}
         {canAccessDocComponents && (
@@ -3103,6 +3125,16 @@ const SystemSettings: React.FC<LLMSettingsProps> = () => {
           margin: "-20px" // 移除padding以让PermissionManagementPage全屏显示
         }}>
           <PermissionManagementPage />
+        </div>
+      )}
+
+      {/* 企业管理标签页 */}
+      {currentTab === 'organization' && (
+        <div style={{ 
+          height: "calc(100vh - 200px)", 
+          overflow: "auto",
+        }}>
+          <OrganizationPage />
         </div>
       )}
 

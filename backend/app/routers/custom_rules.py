@@ -165,3 +165,129 @@ def list_rules(
     rules = service.list_rules(pack_id)
     
     return rules
+
+
+# ==================== 资源共享接口 ====================
+
+@router.post("/rule-packs/{pack_id}/share")
+def share_rule_pack_to_organization(
+    pack_id: str,
+    request: Request,
+    user: TokenData = Depends(require_permission("tender.edit"))
+):
+    """
+    共享规则包到企业
+    只有规则包的创建者可以共享
+    """
+    pool = _get_pool()
+    
+    try:
+        with pool.connection() as conn:
+            import psycopg.rows
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                # 检查规则包是否存在且用户是否为owner
+                # 规则包通过project_id关联到项目，项目有owner_id
+                cur.execute("""
+                    SELECT rp.id, rp.pack_name, rp.scope, p.owner_id
+                    FROM tender_rule_packs rp
+                    LEFT JOIN tender_projects p ON rp.project_id = p.project_id
+                    WHERE rp.id = %s
+                """, [pack_id])
+                
+                pack = cur.fetchone()
+                if not pack:
+                    raise HTTPException(status_code=404, detail="规则包不存在")
+                
+                # 如果是共享规则包（没有project_id），检查是否有权限
+                # 假设共享规则包只有admin可以共享
+                if pack["owner_id"] is None:
+                    if user.role != "admin":
+                        raise HTTPException(status_code=403, detail="只有管理员可以共享公共规则包")
+                elif pack["owner_id"] != user.user_id:
+                    raise HTTPException(status_code=403, detail="只有规则包创建者可以共享")
+                
+                if pack["scope"] == 'organization':
+                    return {"success": True, "message": "规则包已经是共享状态"}
+                
+                # 更新为共享状态
+                cur.execute("""
+                    UPDATE tender_rule_packs 
+                    SET scope = 'organization', updated_at = NOW()
+                    WHERE id = %s
+                """, [pack_id])
+                
+                conn.commit()
+                
+                return {
+                    "success": True,
+                    "message": "规则包已共享到企业",
+                    "pack_id": pack_id,
+                    "scope": "organization"
+                }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"共享规则包失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"共享失败: {str(e)}")
+
+
+@router.post("/rule-packs/{pack_id}/unshare")
+def unshare_rule_pack_from_organization(
+    pack_id: str,
+    request: Request,
+    user: TokenData = Depends(require_permission("tender.edit"))
+):
+    """
+    取消共享规则包（改回私有）
+    只有规则包的创建者可以取消共享
+    """
+    pool = _get_pool()
+    
+    try:
+        with pool.connection() as conn:
+            import psycopg.rows
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                # 检查规则包是否存在且用户是否为owner
+                cur.execute("""
+                    SELECT rp.id, rp.pack_name, rp.scope, p.owner_id
+                    FROM tender_rule_packs rp
+                    LEFT JOIN tender_projects p ON rp.project_id = p.project_id
+                    WHERE rp.id = %s
+                """, [pack_id])
+                
+                pack = cur.fetchone()
+                if not pack:
+                    raise HTTPException(status_code=404, detail="规则包不存在")
+                
+                # 检查权限
+                if pack["owner_id"] is None:
+                    if user.role != "admin":
+                        raise HTTPException(status_code=403, detail="只有管理员可以取消共享公共规则包")
+                elif pack["owner_id"] != user.user_id:
+                    raise HTTPException(status_code=403, detail="只有规则包创建者可以取消共享")
+                
+                if pack["scope"] == 'private':
+                    return {"success": True, "message": "规则包已经是私有状态"}
+                
+                # 更新为私有状态
+                cur.execute("""
+                    UPDATE tender_rule_packs 
+                    SET scope = 'private', updated_at = NOW()
+                    WHERE id = %s
+                """, [pack_id])
+                
+                conn.commit()
+                
+                return {
+                    "success": True,
+                    "message": "规则包已取消共享",
+                    "pack_id": pack_id,
+                    "scope": "private"
+                }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"取消共享规则包失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"取消共享失败: {str(e)}")

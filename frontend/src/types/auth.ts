@@ -17,6 +17,10 @@ export interface User {
   is_active: boolean;
   last_login_at?: string;
   created_at: string;
+  organization_id?: string;
+  organization_name?: string;
+  organization_ids?: string[];
+  organization_names?: string[];
 }
 
 export interface LoginRequest {
