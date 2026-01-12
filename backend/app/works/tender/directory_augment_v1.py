@@ -297,9 +297,19 @@ def _preprocess_tables_to_text(blocks: List[Dict[str, Any]]) -> List[Dict[str, A
                         "suggested_level": 1  # 🔥 明确标记为L1
                     })
                 
-                # 🔥 转换为文本块，并传入L1纯标题用于建立父子关系
-                text_blocks = _convert_table_rows_to_text_blocks(rows, i, l1_title_pure)
-                print(f"[表格预处理] 转换得到 {len(text_blocks)} 个文本块", file=sys.stderr)
+                # 🔥 判断是否是"投标文件组成"类扁平列表
+                # 检查表格前后的文本是否包含"投标文件组成/格式/编制要求"等关键词
+                is_composition_list = _is_composition_list_table(blocks, i)
+                
+                # 🔥 转换为文本块
+                # 如果是扁平列表，禁用父子关系推断（传入None）
+                # 否则，传入L1纯标题用于建立父子关系
+                text_blocks = _convert_table_rows_to_text_blocks(
+                    rows, i, 
+                    l1_title=None if is_composition_list else l1_title_pure,
+                    force_level_1=is_composition_list  # 强制所有项目为Level 1
+                )
+                print(f"[表格预处理] 转换得到 {len(text_blocks)} 个文本块 (扁平列表: {is_composition_list})", file=sys.stderr)
                 processed_blocks.extend(text_blocks)
                 table_converted_count += 1
             else:
@@ -361,6 +371,34 @@ def _find_l1_title_before_table(blocks: List[Dict[str, Any]], table_index: int) 
     return None
 
 
+def _is_composition_list_table(blocks: List[Dict[str, Any]], table_index: int) -> bool:
+    """
+    判断表格是否是"投标文件组成"类扁平列表
+    
+    检查表格前后10个blocks，查找是否包含：
+    - "投标文件组成"、"投标文件格式"、"文件编制要求"等关键词
+    
+    Returns:
+        True if是扁平列表表格，False otherwise
+    """
+    composition_keywords = [
+        '投标文件组成', '投标文件格式', '文件编制要求', 
+        '投标文件应包括', '响应文件组成', '磋商文件组成'
+    ]
+    
+    # 向前后搜索10个blocks
+    search_range = range(max(0, table_index - 10), min(len(blocks), table_index + 10))
+    
+    for j in search_range:
+        if blocks[j]['type'] != 'p':
+            continue
+        text = blocks[j].get('text', '').strip()
+        if any(kw in text for kw in composition_keywords):
+            return True
+    
+    return False
+
+
 def _is_directory_table(rows: List[List]) -> bool:
     """
     判断表格是否是投标文件目录表格
@@ -392,18 +430,20 @@ def _is_directory_table(rows: List[List]) -> bool:
     return has_content and has_number and not has_spec
 
 
-def _convert_table_rows_to_text_blocks(rows: List[List], table_index: int, l1_title: str = None) -> List[Dict[str, Any]]:
+def _convert_table_rows_to_text_blocks(rows: List[List], table_index: int, l1_title: str = None, force_level_1: bool = False) -> List[Dict[str, Any]]:
     """
     将表格行转换为文本块，并建立层级关系
     
     策略：
     - 使用栈维护当前每个层级的父节点标题
     - 为每个节点设置parent_title，后续可直接使用
+    - 支持force_level_1模式，用于"投标文件组成"类扁平列表
     
     Args:
         rows: 表格行数据
         table_index: 表格索引
         l1_title: L1标题（如"技术资信标"），用于设置L2节点的父节点
+        force_level_1: 是否强制所有项目为Level 1（用于扁平列表）
         
     Returns:
         包含parent_title的文本块列表
@@ -417,7 +457,7 @@ def _convert_table_rows_to_text_blocks(rows: List[List], table_index: int, l1_ti
     content_col_idx = _find_content_column_index(header)
     number_col_idx = 0  # 序号通常在第一列
     
-    print(f"[表格转换] 表头: {header}, 内容列: {content_col_idx}", file=sys.stderr)
+    print(f"[表格转换] 表头: {header}, 内容列: {content_col_idx}, 强制L1: {force_level_1}", file=sys.stderr)
     
     # 🔥 维护层级栈：{level: title}
     parent_stack = {1: l1_title} if l1_title else {}
@@ -445,6 +485,11 @@ def _convert_table_rows_to_text_blocks(rows: List[List], table_index: int, l1_ti
             text = content
         
         # 🔥 根据编号格式推断层级
+        if force_level_1:
+            # 扁平列表模式：所有项目都是Level 1，不设置parent_title
+            suggested_level = 1
+            parent_title = None
+        else:
         suggested_level = _infer_level_from_numbering(numbering)
         
         # 🔥 确定父节点：查找栈中上一层的标题
@@ -779,12 +824,20 @@ def _infer_parent_child_relations(
         }
         
         # 🔥 使用parent_title建立关系
+        # ⚠️ 特殊处理："投标文件组成/投标文件格式"章节通常是扁平列表，不应该推断层级关系
+        # 只有当parent_title明确存在且匹配时，才设置parent_ref
         if parent_title and parent_title in title_to_node:
             node["parent_ref"] = parent_title
             # 将当前节点添加到父节点的children列表
             title_to_children.setdefault(parent_title, []).append(node)
         else:
-            # fallback：使用栈推断
+            # 检查是否是"投标文件组成"类型的扁平列表
+            # 如果level=1或level=2且前面没有明确的父节点，则作为根节点处理
+            # 不使用栈推断，避免错误的父子关系
+            is_composition_list = (level <= 2 and not parent_title)
+            
+            if not is_composition_list:
+                # fallback：仅在非扁平列表场景下使用栈推断
             while stack and stack[-1][0] >= level:
                 stack.pop()
             if stack:
@@ -793,9 +846,16 @@ def _infer_parent_child_relations(
                 title_to_children.setdefault(parent_node["title"], []).append(node)
             else:
                 # 无父节点，是根节点
+                    roots.append(node)
+            else:
+                # "投标文件组成"类扁平列表，全部作为根节点
                 roots.append(node)
         
         title_to_node[title] = node
+        
+        # ⚠️ 关键修复：只有非扁平列表的节点才加入stack
+        # "投标文件组成"类扁平列表的节点不应该加入stack，避免影响后续节点的parent推断
+        if not (level <= 2 and not parent_title):
         stack.append((level, node))
     
     # 🔥 按照深度优先遍历顺序返回

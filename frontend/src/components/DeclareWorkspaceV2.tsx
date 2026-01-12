@@ -527,6 +527,57 @@ export default function DeclareWorkspaceV2() {
     }
   };
 
+  const handleOpenFile = async (asset: DeclareAsset) => {
+    if (!currentProject) return;
+    
+    try {
+      // 通过 API 获取文件内容（会自动带上 Authorization header）
+      const response = await fetch(`${api.baseURL}/api/apps/declare/projects/${currentProject.project_id}/assets/${asset.asset_id}/view`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error('文件加载失败');
+      }
+      
+      // 获取文件内容和类型
+      const blob = await response.blob();
+      const contentType = response.headers.get('Content-Type') || 'application/octet-stream';
+      
+      // 创建带类型的 Blob
+      const typedBlob = new Blob([blob], { type: contentType });
+      const blobUrl = URL.createObjectURL(typedBlob);
+      
+      // 创建一个隐藏的 a 标签来触发打开
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      
+      // 对于 PDF 和图片，使用 window.open；其他文件下载
+      if (contentType.includes('pdf') || contentType.includes('image')) {
+        // 使用 window.open 并确保不被路由拦截
+        const newWindow = window.open('', '_blank');
+        if (newWindow) {
+          newWindow.location.href = blobUrl;
+        }
+      } else {
+        // 其他文件类型：触发下载
+        link.download = asset.filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+      
+      // 延迟释放 URL
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    } catch (err) {
+      alert(`打开文件失败: ${err}`);
+    }
+  };
+
   const handleUploadFiles = async () => {
     if (!currentProject) return;
     
@@ -1530,6 +1581,32 @@ export default function DeclareWorkspaceV2() {
                                   {asset.kind === 'notice' ? '📄 申报通知' : asset.kind === 'company' ? '🏢 企业信息' : '🔬 技术资料'}
                                 </div>
                               </div>
+                              <button
+                                onClick={() => handleOpenFile(asset)}
+                                style={{
+                                  padding: '6px 12px',
+                                  background: 'rgba(79, 70, 229, 0.2)',
+                                  border: '1px solid rgba(79, 70, 229, 0.5)',
+                                  borderRadius: '6px',
+                                  color: '#a5b4fc',
+                                  fontSize: '13px',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  transition: 'all 0.2s',
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.background = 'rgba(79, 70, 229, 0.3)';
+                                  e.currentTarget.style.borderColor = 'rgba(79, 70, 229, 0.8)';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.background = 'rgba(79, 70, 229, 0.2)';
+                                  e.currentTarget.style.borderColor = 'rgba(79, 70, 229, 0.5)';
+                                }}
+                              >
+                                👁️ 打开
+                              </button>
                             </div>
                           ))}
                         </div>

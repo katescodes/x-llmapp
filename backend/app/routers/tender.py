@@ -202,6 +202,79 @@ def delete_asset(project_id: str, asset_id: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to delete asset: {str(e)}")
 
 
+@router.get("/projects/{project_id}/assets/{asset_id}/view")
+async def view_asset(
+    project_id: str,
+    asset_id: str,
+    request: Request
+):
+    """
+    查看/打开资产文件
+    返回文件内容，浏览器会根据Content-Type决定如何处理（在新标签页打开或下载）
+    """
+    from fastapi.responses import FileResponse
+    from urllib.parse import quote
+    import os
+    
+    dao = TenderDAO(_get_pool(request))
+    
+    with dao.pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT filename, storage_path, mime_type, kb_doc_id
+                FROM tender_project_assets
+                WHERE id = %s AND project_id = %s
+            """, [asset_id, project_id])
+            
+            row = cur.fetchone()
+            
+            if not row:
+                raise HTTPException(status_code=404, detail="文件未找到")
+            
+            filename = row['filename']
+            storage_path = row['storage_path']
+            mime_type = row['mime_type'] or 'application/octet-stream'
+            kb_doc_id = row['kb_doc_id']
+            
+            # 对文件名进行 URL 编码以支持中文
+            encoded_filename = quote(filename or 'file')
+            
+            # 检查文件是否存储在磁盘上
+            if storage_path and os.path.exists(storage_path):
+                # 从文件系统读取
+                return FileResponse(
+                    storage_path,
+                    media_type=mime_type,
+                    headers={
+                        'Content-Disposition': f"inline; filename*=UTF-8''{encoded_filename}",
+                    }
+                )
+            elif kb_doc_id:
+                # 文件在知识库中，从 docstore 读取
+                from app.services.docstore import get_docstore
+                docstore = get_docstore()
+                
+                # 获取文档的存储路径
+                doc_info = docstore.get_document(kb_doc_id)
+                if not doc_info:
+                    raise HTTPException(status_code=404, detail="文件内容不存在")
+                
+                # 尝试从 docstore 的存储路径读取
+                doc_storage_path = doc_info.get('storage_path')
+                if doc_storage_path and os.path.exists(doc_storage_path):
+                    return FileResponse(
+                        doc_storage_path,
+                        media_type=mime_type,
+                        headers={
+                            'Content-Disposition': f"inline; filename*=UTF-8''{encoded_filename}",
+                        }
+                    )
+                else:
+                    raise HTTPException(status_code=404, detail="文件内容不存在")
+            else:
+                raise HTTPException(status_code=404, detail="文件内容不存在")
+
+
 @router.post("/projects/{project_id}/assets/import", response_model=List[AssetOut])
 async def import_assets(
     project_id: str,

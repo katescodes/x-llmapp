@@ -226,7 +226,6 @@ def apply_snippet_to_node(
             # PostgreSQL JSONB 直接返回为 Python 对象
             if not isinstance(blocks_json, list):
                 if isinstance(blocks_json, str):
-                    import json
                     blocks_json = json.loads(blocks_json)
                 else:
                     blocks_json = []
@@ -268,7 +267,7 @@ def apply_snippet_to_node(
             if auto_fill and placeholders:
                 # 获取项目信息
                 cur.execute("""
-                    SELECT name, data_json
+                    SELECT name, meta_json
                     FROM tender_projects
                     WHERE project_id = %s
                 """, (project_id,))
@@ -277,13 +276,12 @@ def apply_snippet_to_node(
                 project_info = {}
                 if project_row:
                     project_info["name"] = project_row['name']
-                    data_json = project_row.get('data_json')
-                    if data_json:
-                        if isinstance(data_json, dict):
-                            project_info.update(data_json)
-                        elif isinstance(data_json, str):
-                            import json
-                            project_info.update(json.loads(data_json))
+                    meta_json_data = project_row.get('meta_json')
+                    if meta_json_data:
+                        if isinstance(meta_json_data, dict):
+                            project_info.update(meta_json_data)
+                        elif isinstance(meta_json_data, str):
+                            project_info.update(json.loads(meta_json_data))
                 
                 # 填充占位符
                 filled_text = auto_fill_placeholders(snippet_text, project_info, custom_values)
@@ -305,8 +303,40 @@ def apply_snippet_to_node(
                     "message": f"不支持的模式: {mode}"
                 }
             
-            # 7. 更新数据库 - 存储blocks到meta_json
-            # 获取当前 meta_json
+            # 7. 渲染blocks为HTML
+            content_html = _render_blocks_to_html(blocks_json)
+            
+            # 8. 持久化到 project_section_body 表
+            # 先检查是否已存在
+            cur.execute("""
+                SELECT id FROM project_section_body
+                WHERE project_id = %s AND node_id = %s
+            """, (project_id, node_id))
+            
+            existing = cur.fetchone()
+            
+            if existing:
+                # 更新现有记录
+                cur.execute("""
+                    UPDATE project_section_body
+                    SET 
+                        content_html = %s,
+                        source = 'SNIPPET',
+                        updated_at = NOW()
+                    WHERE project_id = %s AND node_id = %s
+                """, (content_html, project_id, node_id))
+            else:
+                # 插入新记录
+                from app.utils.id import _id
+                body_id = _id("psb")
+                cur.execute("""
+                    INSERT INTO project_section_body (
+                        id, project_id, node_id, source, content_html, 
+                        created_at, updated_at
+                    ) VALUES (%s, %s, %s, 'SNIPPET', %s, NOW(), NOW())
+                """, (body_id, project_id, node_id, content_html))
+            
+            # 9. 同时更新 meta_json（作为备份和标记）
             cur.execute("""
                 SELECT meta_json FROM tender_directory_nodes
                 WHERE id = %s AND project_id = %s
@@ -315,11 +345,10 @@ def apply_snippet_to_node(
             row = cur.fetchone()
             meta_json = row['meta_json'] if row and row['meta_json'] else {}
             if isinstance(meta_json, str):
-                import json
                 meta_json = json.loads(meta_json)
             
             # 将范文blocks存入meta_json
-            meta_json['snippet_blocks'] = snippet['blocks_json']
+            meta_json['snippet_blocks'] = blocks_json
             meta_json['snippet_id'] = snippet_id
             
             cur.execute("""
@@ -395,6 +424,79 @@ def _blocks_to_text(blocks: List[Dict[str, Any]]) -> str:
                 parts.append("")  # 空行分隔
     
     return "\n".join(parts)
+
+
+def _render_blocks_to_html(blocks: List[Dict[str, Any]]) -> str:
+    """
+    将doc_blocks格式的blocks渲染为HTML
+    
+    Args:
+        blocks: blocks_json数据
+    
+    Returns:
+        HTML字符串
+    """
+    html_parts = []
+    
+    for block in blocks:
+        block_type = block.get("type", "")
+        
+        # 段落
+        if block_type == "p":
+            text = block.get("text", "").strip()
+            if text:
+                # 简单处理换行
+                text_html = text.replace("\n", "<br>")
+                html_parts.append(f"<p>{text_html}</p>")
+        
+        # 表格
+        elif block_type == "table":
+            rows = block.get("rows", [])
+            if not rows:
+                continue
+            
+            # 使用更真实的表格样式
+            html_parts.append('''<table style="
+                border-collapse: collapse; 
+                width: 100%; 
+                margin: 16px 0;
+                border: 1px solid #d0d0d0;
+                font-size: 14px;
+            ">''')
+            
+            # 表头
+            if len(rows) > 0:
+                html_parts.append("<thead><tr>")
+                for cell in rows[0]:
+                    cell_text = str(cell).replace("\n", "<br>")
+                    html_parts.append(f'''<th style="
+                        background-color: #f5f5f5; 
+                        font-weight: 600; 
+                        text-align: center; 
+                        padding: 10px 8px;
+                        border: 1px solid #d0d0d0;
+                        color: #333;
+                    ">{cell_text}</th>''')
+                html_parts.append("</tr></thead>")
+            
+            # 表体
+            if len(rows) > 1:
+                html_parts.append("<tbody>")
+                for row in rows[1:]:
+                    html_parts.append("<tr>")
+                    for cell in row:
+                        cell_text = str(cell).replace("\n", "<br>")
+                        html_parts.append(f'''<td style="
+                            padding: 10px 8px;
+                            border: 1px solid #d0d0d0;
+                            vertical-align: top;
+                        ">{cell_text}</td>''')
+                    html_parts.append("</tr>")
+                html_parts.append("</tbody>")
+            
+            html_parts.append("</table>")
+    
+    return "\n".join(html_parts)
 
 
 def batch_apply_snippets(

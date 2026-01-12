@@ -646,6 +646,57 @@ export default function TenderWorkspaceV2() {
       alert(`删除失败: ${err}`);
     }
   };
+
+  const handleOpenTenderFile = async (asset: TenderAsset) => {
+    if (!currentProject) return;
+    
+    try {
+      // 通过 API 获取文件内容（会自动带上 Authorization header）
+      const response = await fetch(`${api.baseURL}/api/apps/tender/projects/${currentProject.id}/assets/${asset.id}/view`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error('文件加载失败');
+      }
+      
+      // 获取文件内容和类型
+      const blob = await response.blob();
+      const contentType = response.headers.get('Content-Type') || 'application/octet-stream';
+      
+      // 创建带类型的 Blob
+      const typedBlob = new Blob([blob], { type: contentType });
+      const blobUrl = URL.createObjectURL(typedBlob);
+      
+      // 创建一个隐藏的 a 标签来触发打开
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      
+      // 对于 PDF 和图片，使用 window.open；其他文件下载
+      if (contentType.includes('pdf') || contentType.includes('image')) {
+        // 使用 window.open 并确保不被路由拦截
+        const newWindow = window.open('', '_blank');
+        if (newWindow) {
+          newWindow.location.href = blobUrl;
+        }
+      } else {
+        // 其他文件类型：触发下载
+        link.download = asset.filename || 'download';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+      
+      // 延迟释放 URL
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    } catch (err) {
+      alert(`打开文件失败: ${err}`);
+    }
+  };
   
   // 计算投标人列表（从已上传的投标文件中提取）
   const bidderOptions = useMemo(() => {
@@ -2072,6 +2123,33 @@ export default function TenderWorkspaceV2() {
                           {asset.size_bytes && ` · ${(asset.size_bytes / 1024).toFixed(1)} KB`}
                         </div>
                       </div>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <button
+                          onClick={() => handleOpenTenderFile(asset)}
+                          style={{
+                            padding: '6px 12px',
+                            background: 'rgba(79, 70, 229, 0.2)',
+                            border: '1px solid rgba(79, 70, 229, 0.5)',
+                            borderRadius: '6px',
+                            color: '#a5b4fc',
+                            fontSize: '13px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            transition: 'all 0.2s',
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = 'rgba(79, 70, 229, 0.3)';
+                            e.currentTarget.style.borderColor = 'rgba(79, 70, 229, 0.8)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = 'rgba(79, 70, 229, 0.2)';
+                            e.currentTarget.style.borderColor = 'rgba(79, 70, 229, 0.5)';
+                          }}
+                        >
+                          👁️ 打开
+                        </button>
                       <button
                         onClick={() => handleDeleteAsset(asset.id)}
                         className="link-button"
@@ -2079,6 +2157,7 @@ export default function TenderWorkspaceV2() {
                       >
                         删除
                       </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -2474,16 +2553,16 @@ export default function TenderWorkspaceV2() {
                           }}
                         >
                           {/* 标题行 */}
-                          <div style={{ 
-                            fontSize: '16px', 
-                            fontWeight: '600', 
-                            color: '#e2e8f0',
+                              <div style={{ 
+                                fontSize: '16px', 
+                                fontWeight: '600', 
+                                color: '#e2e8f0',
                             marginBottom: '12px',
                             paddingBottom: '12px',
                             borderBottom: '1px solid rgba(255,255,255,0.1)'
-                          }}>
+                              }}>
                             📄 {index + 1}. {snippet.title}
-                          </div>
+                              </div>
                           
                           {/* 元信息 */}
                           <div style={{ 
@@ -2497,19 +2576,19 @@ export default function TenderWorkspaceV2() {
                             <span>类型: <span style={{ color: '#a78bfa' }}>{snippet.norm_key}</span></span>
                             <span>·</span>
                             <span>置信度: <span style={{ 
-                              color: snippet.confidence >= 0.9 ? '#10b981' : 
-                                    snippet.confidence >= 0.7 ? '#fbbf24' : '#ef4444',
-                              fontWeight: '600'
-                            }}>
-                              {(snippet.confidence * 100).toFixed(0)}%
+                                  color: snippet.confidence >= 0.9 ? '#10b981' : 
+                                        snippet.confidence >= 0.7 ? '#fbbf24' : '#ef4444',
+                                  fontWeight: '600'
+                                }}>
+                                  {(snippet.confidence * 100).toFixed(0)}%
                             </span></span>
-                            {snippet.suggest_outline_titles && snippet.suggest_outline_titles.length > 0 && (
+                              {snippet.suggest_outline_titles && snippet.suggest_outline_titles.length > 0 && (
                               <>
                                 <span>·</span>
                                 <span>💡 建议匹配: {snippet.suggest_outline_titles.join(', ')}</span>
                               </>
-                            )}
-                          </div>
+                              )}
+                            </div>
                           
                           {/* 正文内容 */}
                           {snippet.content_text && (
@@ -2538,7 +2617,7 @@ export default function TenderWorkspaceV2() {
                                       marginBottom: '6px'
                                     }}>
                                       {line}
-                                    </div>
+                          </div>
                                   );
                                 }
                                 if (line.includes('[表格结束]')) {
@@ -2601,36 +2680,36 @@ export default function TenderWorkspaceV2() {
                 flexDirection: 'column'
               }}>
                 {/* 插入范文按钮区域 */}
-                <div style={{ 
-                  padding: '12px 16px', 
+                  <div style={{ 
+                    padding: '12px 16px', 
                   backgroundColor: snippets.length > 0 ? 'rgba(139, 92, 246, 0.1)' : 'rgba(251, 191, 36, 0.1)',
                   borderBottom: snippets.length > 0 ? '1px solid rgba(139, 92, 246, 0.2)' : '1px solid rgba(251, 191, 36, 0.2)',
-                  display: 'flex',
-                  alignItems: 'center',
+                    display: 'flex',
+                    alignItems: 'center',
                   gap: '12px',
                   flexWrap: 'wrap'
-                }}>
+                  }}>
                   {snippets.length > 0 ? (
                     <>
-                      <button
-                        onClick={() => currentProject && matchSnippetsToDirectory(currentProject.id)}
-                        disabled={!currentProject || matchingSnippets || snippets.length === 0}
-                        style={{
-                          padding: '8px 16px',
-                          backgroundColor: matchingSnippets ? '#6b7280' : '#8b5cf6',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '4px',
-                          cursor: matchingSnippets ? 'not-allowed' : 'pointer',
-                          fontSize: '14px',
-                          fontWeight: '500'
-                        }}
-                      >
-                        {matchingSnippets ? '🔄 匹配中...' : '📋 插入范文'}
-                      </button>
-                      <span style={{ color: '#a78bfa', fontSize: '14px' }}>
-                        已提取 {snippets.length} 个范文，点击匹配到目录节点
-                      </span>
+                    <button
+                      onClick={() => currentProject && matchSnippetsToDirectory(currentProject.id)}
+                      disabled={!currentProject || matchingSnippets || snippets.length === 0}
+                      style={{
+                        padding: '8px 16px',
+                        backgroundColor: matchingSnippets ? '#6b7280' : '#8b5cf6',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: matchingSnippets ? 'not-allowed' : 'pointer',
+                        fontSize: '14px',
+                        fontWeight: '500'
+                      }}
+                    >
+                      {matchingSnippets ? '🔄 匹配中...' : '📋 插入范文'}
+                    </button>
+                    <span style={{ color: '#a78bfa', fontSize: '14px' }}>
+                      已提取 {snippets.length} 个范文，点击匹配到目录节点
+                    </span>
                     </>
                   ) : (
                     <>
@@ -2662,7 +2741,7 @@ export default function TenderWorkspaceV2() {
                         或前往"步骤2 → 格式范文"提取
                       </span>
                     </>
-                  )}
+                )}
                 </div>
                 
                 <div style={{ flex: 1, overflow: 'hidden' }}>

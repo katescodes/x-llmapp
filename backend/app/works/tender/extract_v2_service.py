@@ -564,8 +564,8 @@ class ExtractV2Service:
         model_id: Optional[str],
         run_id: Optional[str] = None,
         use_fast_mode: bool = True,
-        enable_refinement: bool = True,  # 阶段4-A：规则细化
-        enable_bracket_parsing: bool = True,  # 阶段4-B：LLM括号解析
+        enable_refinement: bool = False,  # ❌ 禁用规则细化（会自行创造分册）
+        enable_bracket_parsing: bool = False,  # ❌ 禁用括号解析（避免额外层级）
         enable_template_matching: bool = True,  # ✨ 阶段5：格式范本自动填充
     ) -> Dict[str, Any]:
         """
@@ -665,8 +665,7 @@ class ExtractV2Service:
         
         # 步骤0：清空现有目录节点（避免使用旧数据）
         try:
-            from app.services.db.postgres import get_conn
-            with get_conn() as conn:
+            with self.pool.connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
                         DELETE FROM tender_directory_nodes WHERE project_id = %s
@@ -682,153 +681,13 @@ class ExtractV2Service:
             debug_log.write(f"清空失败: {e}\n")
             debug_log.flush()
         
-        # 步骤1：尝试从招标书原文提取
+        # 步骤1：直接跳过augment，强制使用LLM生成
+        # 原因：augment对于"投标文件组成"等扁平列表的处理不稳定，容易产生错误的父子关系
+        # LLM生成的目录结构更准确、可靠
         extracted_count = 0
-        try:
-            logger.info(f"ExtractV2: 尝试从招标书「投标文件格式」章节提取原文目录...")
-            debug_log.write(f"开始调用augment...\n")
-            debug_log.flush()
-            
-            from app.works.tender.directory_augment_v1 import augment_directory_from_tender_info_v3
-            
-            tender_info = self.dao.get_project_info(project_id)
-            debug_log.write(f"tender_info keys: {list(tender_info.keys()) if tender_info else None}\n")
-            debug_log.flush()
-            
-            augment_result = augment_directory_from_tender_info_v3(
-                project_id=project_id,
-                pool=self.pool,
-                tender_info=tender_info
-            )
-            
-            debug_log.write(f"augment_result: {augment_result}\n")
-            debug_log.flush()
-            
-            extracted_count = augment_result.get("added_count", 0)
-            logger.info(
-                f"ExtractV2: 从招标书原文提取 {extracted_count} 个节点, "
-                f"标题示例: {augment_result.get('enhanced_titles', [])[:3]}"
-            )
-            debug_log.write(f"提取了 {extracted_count} 个节点\n")
-            debug_log.flush()
-            
-        except Exception as e:
-            logger.warning(f"ExtractV2: 从招标书提取目录失败: {e}")
-        
-        # 步骤2：读取数据库中的节点
-        nodes = []
-        generation_mode = "unknown"
-        
-        from app.services.db.postgres import get_conn
-        import psycopg.rows
-        with get_conn() as conn:
-            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-                cur.execute("""
-                    SELECT COUNT(*) as count FROM tender_directory_nodes WHERE project_id = %s
-                """, [project_id])
-                total_count = cur.fetchone()["count"]
-                
-                if total_count >= 5:
-                    # 质量检查：确保提取的节点有合理的层级结构
-                    cur.execute("""
-                        SELECT COUNT(DISTINCT numbering) as unique_numberings,
-                               COUNT(*) FILTER (WHERE level = 1) as l1_count,
-                               COUNT(*) FILTER (WHERE level = 2) as l2_count,
-                               COUNT(*) FILTER (WHERE level = 3) as l3_count,
-                               array_agg(title) FILTER (WHERE level = 1) as l1_titles
-                        FROM tender_directory_nodes WHERE project_id = %s
-                    """, [project_id])
-                    quality_check = cur.fetchone()
-                    
-                    l1_count = quality_check["l1_count"]
-                    l2_count = quality_check["l2_count"]
-                    l3_count = quality_check["l3_count"]
-                    
-                    # 质量标准1：结构检查
-                    # - 如果有L2节点，要求L2 > L1（有层级结构）
-                    # - 如果没有L2节点，允许扁平结构（但需要有多个L1节点）
-                    has_good_structure = (
-                        (l2_count > 0 and l2_count > l1_count) or  # 有层级结构
-                        (l2_count == 0 and l1_count >= 5)          # 扁平结构，至少5个L1
-                    )
-                    
-                    # 质量标准2：L1标题应该包含投标文件格式的典型关键词
-                    l1_titles = quality_check.get("l1_titles") or []
-                    l1_text = "".join(l1_titles).lower() if l1_titles else ""
-                    format_keywords = ["商务", "技术", "资格", "响应", "投标", "报价", "资信", "证明", "文件", "保证金", "授权", "偏差", "清单"]
-                    has_format_keywords = sum(1 for kw in format_keywords if kw in l1_text) >= 3
-                    
-                    # 质量标准3：不应该是招标文件的评标、磋商等章节
-                    invalid_keywords = ["磋商", "评标", "评审", "招标", "开标"]
-                    has_invalid_keywords = sum(1 for kw in invalid_keywords if kw in l1_text) >= 2
-                    
-                    is_high_quality = has_good_structure and has_format_keywords and not has_invalid_keywords
-                    
-                    if is_high_quality:
-                        # 节点足够且质量好，使用原文提取的结果
-                        generation_mode = "extracted_from_tender"
-                        structure_type = "层级结构" if l2_count > 0 else "扁平结构"
-                        print(f"✅ [质量检查] PASS: {structure_type}, L1={l1_count}, L2={l2_count}, L3={l3_count}")
-                        logger.info(f"✅ ExtractV2: 使用从招标书原文提取的 {total_count} 个节点 ({structure_type})")
-                    else:
-                        # 质量不够，记录提取到的节点标题，然后fallback到LLM
-                        l1_titles_str = ", ".join(l1_titles[:5]) if l1_titles else "[]"
-                        if len(l1_titles) > 5:
-                            l1_titles_str += f"... (共{len(l1_titles)}个)"
-                        print(f"⚠️ [质量检查] FAIL: L1={l1_count}, L2={l2_count}, struct_ok={has_good_structure}, format_kw={has_format_keywords}, invalid_kw={has_invalid_keywords}")
-                        print(f"   提取到的L1标题: {l1_titles_str}")
-                        logger.warning(f"⚠️ ExtractV2: 提取的节点质量不够，fallback到LLM")
-                        generation_mode = "llm"
-                        # 清空已提取的节点
-                        cur.execute("DELETE FROM tender_directory_nodes WHERE project_id = %s", [project_id])
-                        conn.commit()
-                        total_count = 0
-                    
-                    if generation_mode == "extracted_from_tender":
-                        cur.execute("""
-                            SELECT id, parent_id, title, level, numbering, is_required, source, 
-                                   evidence_chunk_ids, meta_json, order_no
-                            FROM tender_directory_nodes
-                            WHERE project_id = %s
-                            ORDER BY order_no
-                        """, [project_id])
-                        rows = cur.fetchall()
-                        
-                        for row in rows:
-                            nodes.append({
-                                "id": row.get("id"),  # 🔥 传递id
-                                "parent_id": row.get("parent_id"),  # 🔥 传递parent_id
-                                "title": row["title"],
-                                "level": row["level"],
-                                "numbering": row.get("numbering", ""),
-                                "order_no": row.get("order_no", 0),
-                                "parent_ref": None,
-                                "required": row.get("is_required", True),
-                                "notes": row.get("meta_json", {}).get("notes", "") if row.get("meta_json") else "",
-                                "evidence_chunk_ids": row.get("evidence_chunk_ids", [])
-                            })
-                        
-                        return {
-                            "data": {"nodes": nodes},
-                            "evidence_chunk_ids": [],
-                            "evidence_spans": [],
-                            "retrieval_trace": {},
-                            "generation_mode": generation_mode,
-                            "extracted_stats": {
-                                "total_nodes": total_count,
-                                "source": "tender_format_chapter"
-                            }
-                        }
-                else:
-                    # ⚠️ 提取失败，fallback到LLM
-                    logger.warning(f"⚠️ ExtractV2: 从招标书提取目录不足（只提取到{total_count}个节点），fallback到LLM生成模式")
-                    # 清空已提取的节点，准备使用LLM生成
-                    with get_conn(self.pool) as conn:
-                        conn.execute("""
-                            DELETE FROM tender_directory_nodes 
-                            WHERE project_id = %s
-                        """, (project_id,))
-                        conn.commit()
+        logger.info(f"ExtractV2: 跳过augment，直接使用LLM生成目录（更准确、可靠）")
+        debug_log.write(f"跳过augment，直接使用LLM生成\n")
+        debug_log.flush()
         
         # === LLM 生成模式 ===
         generation_mode = "llm"
@@ -1005,7 +864,17 @@ class ExtractV2Service:
             logger.warning(f"ExtractV2: Template matching failed (non-fatal): {e}")
             template_matching_stats = {"error": str(e)}
         
-        # 9. 返回结果
+        # 9. 保存节点到数据库（如果是LLM生成模式）
+        if generation_mode == "llm" and nodes:
+            try:
+                logger.info(f"ExtractV2: Saving {len(nodes)} LLM-generated nodes to database...")
+                self._save_nodes_to_db(project_id, nodes)
+                logger.info(f"ExtractV2: Successfully saved {len(nodes)} nodes")
+            except Exception as e:
+                logger.error(f"ExtractV2: Failed to save nodes to database: {e}")
+                # 不抛出异常，继续返回结果
+        
+        # 10. 返回结果
         return {
             "data": {"nodes": nodes},
             "evidence_chunk_ids": result.evidence_chunk_ids,
@@ -1729,5 +1598,81 @@ class ExtractV2Service:
         except Exception as e:
             logger.error(f"[补充提取] 失败: {e}", exc_info=True)
             return []
-            raise
+    
+    def _save_nodes_to_db(self, project_id: str, nodes: List[Dict[str, Any]]):
+        """
+        将节点列表保存到 tender_directory_nodes 表
+        
+        参考 directory_augment_v1.py 的实现
+        """
+        import hashlib
+        import json
+        
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                for i, node in enumerate(nodes, 1):
+                    # 生成节点ID（如果没有）
+                    node_id = node.get("id")
+                    if not node_id:
+                        id_str = f"{project_id}_{node.get('title', '')}_{node.get('level', 0)}_{i}"
+                        node_id = f"dn_{hashlib.md5(id_str.encode()).hexdigest()[:16]}"
+                    
+                    # 处理父节点ID
+                    parent_id = node.get("parent_id")
+                    if not parent_id and node.get("parent_ref"):
+                        # 根据 parent_ref 查找父节点ID
+                        cur.execute("""
+                            SELECT id FROM tender_directory_nodes
+                            WHERE project_id = %s AND title = %s
+                            LIMIT 1
+                        """, [project_id, node.get("parent_ref")])
+                        parent_row = cur.fetchone()
+                        if parent_row:
+                            parent_id = parent_row['id']
+                    
+                    # 构建 meta_json
+                    meta_json = {
+                        "notes": node.get("notes", ""),
+                        "volume": node.get("volume", ""),
+                        "template_chunk_ids": node.get("template_chunk_ids", []),
+                    }
+                    if node.get("parent_ref"):
+                        meta_json["parent_ref"] = node.get("parent_ref")
+                    
+                    # INSERT节点
+                    cur.execute("""
+                        INSERT INTO tender_directory_nodes (
+                            id, project_id, parent_id, order_no, level, numbering,
+                            title, is_required, source, evidence_chunk_ids, meta_json,
+                            created_at
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
+                        )
+                        ON CONFLICT (id) DO UPDATE SET
+                            title = EXCLUDED.title,
+                            parent_id = EXCLUDED.parent_id,
+                            order_no = EXCLUDED.order_no,
+                            level = EXCLUDED.level,
+                            numbering = EXCLUDED.numbering,
+                            is_required = EXCLUDED.is_required,
+                            source = EXCLUDED.source,
+                            evidence_chunk_ids = EXCLUDED.evidence_chunk_ids,
+                            meta_json = EXCLUDED.meta_json,
+                            updated_at = CURRENT_TIMESTAMP
+                    """, [
+                        node_id,
+                        project_id,
+                        parent_id,
+                        node.get("order_no", i),
+                        node.get("level", 1),
+                        node.get("numbering", ""),
+                        node.get("title", "未命名"),
+                        node.get("required", True) or node.get("is_required", True),
+                        node.get("source", "LLM_GENERATED"),
+                        node.get("evidence_chunk_ids", []),
+                        json.dumps(meta_json, ensure_ascii=False)
+                    ])
+                
+                conn.commit()
+                logger.info(f"_save_nodes_to_db: Committed {len(nodes)} nodes for project={project_id}")
     

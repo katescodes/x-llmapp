@@ -103,6 +103,8 @@ async function request(path: string, options: RequestOptions = {}): Promise<any>
 
 // 导出便捷方法
 export const api = {
+  baseURL: API_BASE_URL,  // 导出 baseURL 供外部使用
+  
   get: (path: string, options?: RequestOptions) => 
     request(path, { ...options, method: 'GET' }),
   

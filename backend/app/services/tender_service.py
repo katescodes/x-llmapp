@@ -1152,12 +1152,9 @@ class TenderService:
             nodes_with_tree = self._build_directory_tree(nodes_sorted)
         
         # 6. 保存（使用replace_directory）
-        # 🔥 如果是从招标书原文提取的，跳过保存（因为已经在_insert_directory_nodes中保存了）
-        if generation_mode == "extracted_from_tender":
-            logger.info(f"[generate_directory] 跳过保存（已在directory_augment_v1.py中保存）")
-        else:
-            self.dao.replace_directory(project_id, nodes_with_tree)
-            logger.info(f"[generate_directory] Saved {len(nodes_with_tree)} nodes")
+        # ❌ 禁用：节点已在extract_v2_service.py的_save_nodes_to_db中保存
+        # 重复保存会导致source被覆盖为"tender"
+        logger.info(f"[generate_directory] 跳过replace_directory（节点已在_save_nodes_to_db中保存）")
         
         # ✨ 7. 自动填充范本（集成：一键完成目录生成+范本填充）
         try:
@@ -1408,11 +1405,9 @@ class TenderService:
     
     def _normalize_directory_nodes(self, nodes: list) -> list:
         """通用目录规范化：wrapper折叠 + 三分册一级 + 语义纠偏"""
-        nodes = nodes or []
-        nodes = self._collapse_wrapper(nodes)
-        nodes = self._ensure_sections_are_level1(nodes)
-        nodes = self._rebucket_to_sections(nodes)
-        return nodes
+        # ❌ 禁用所有规范化逻辑（自动创造三分册的罪魁祸首）
+        # 直接返回原始nodes，不做任何修改
+        return nodes or []
     
     def _sort_directory_nodes_for_tree(self, nodes: list) -> list:
         """
@@ -1650,13 +1645,112 @@ class TenderService:
         
         return nodes
     
+    def _render_snippet_blocks_to_html(self, blocks: List[Dict]) -> str:
+        """
+        将格式范文的blocks渲染为HTML
+        
+        Args:
+            blocks: doc_blocks格式的blocks列表
+        
+        Returns:
+            HTML字符串
+        """
+        html_parts = []
+        
+        for block in blocks:
+            block_type = block.get("type", "")
+            
+            # 段落
+            if block_type == "p":
+                text = block.get("text", "").strip()
+                if text:
+                    # 简单处理换行和空格
+                    text_html = text.replace("\n", "<br>")
+                    html_parts.append(f"<p>{text_html}</p>")
+            
+            # 表格
+            elif block_type == "table":
+                rows = block.get("rows", [])
+                if not rows:
+                    continue
+                
+                # 使用更真实的表格样式
+                html_parts.append('''<table style="
+                    border-collapse: collapse; 
+                    width: 100%; 
+                    margin: 16px 0;
+                    border: 1px solid #d0d0d0;
+                    font-size: 14px;
+                ">''')
+                
+                # 表头
+                if len(rows) > 0:
+                    html_parts.append("<thead><tr>")
+                    for cell in rows[0]:
+                        cell_text = str(cell).replace("\n", "<br>")
+                        html_parts.append(f'''<th style="
+                            background-color: #f5f5f5; 
+                            font-weight: 600; 
+                            text-align: center; 
+                            padding: 10px 8px;
+                            border: 1px solid #d0d0d0;
+                            color: #333;
+                        ">{cell_text}</th>''')
+                    html_parts.append("</tr></thead>")
+                
+                # 表体
+                if len(rows) > 1:
+                    html_parts.append("<tbody>")
+                    for row in rows[1:]:
+                        html_parts.append("<tr>")
+                        for cell in row:
+                            cell_text = str(cell).replace("\n", "<br>")
+                            html_parts.append(f'''<td style="
+                                padding: 10px 8px;
+                                border: 1px solid #d0d0d0;
+                                vertical-align: top;
+                            ">{cell_text}</td>''')
+                        html_parts.append("</tr>")
+                    html_parts.append("</tbody>")
+                
+                html_parts.append("</table>")
+        
+        return "\n".join(html_parts)
+    
     def get_section_body_content(self, project_id: str, node_id: str) -> Optional[Dict]:
         """
         获取章节正文内容
+        - 优先检查节点的 meta_json.snippet_blocks（格式范文）
         - 如果是用户编辑内容，返回 HTML
         - 如果是范本挂载，返回简化的预览HTML（从源文档生成）
         - 如果是PDF语义匹配，直接返回content_html
         """
+        # 首先检查节点是否有格式范文
+        with self.dao.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT meta_json
+                    FROM tender_directory_nodes
+                    WHERE project_id = %s AND id = %s
+                """, (project_id, node_id))
+                node_row = cur.fetchone()
+                
+                if node_row:
+                    meta_json = node_row.get("meta_json") or {}
+                    snippet_blocks = meta_json.get("snippet_blocks")
+                    snippet_id = meta_json.get("snippet_id")
+                    
+                    if snippet_blocks and isinstance(snippet_blocks, list) and len(snippet_blocks) > 0:
+                        # 有格式范文，渲染snippet_blocks为HTML
+                        html = self._render_snippet_blocks_to_html(snippet_blocks)
+                        return {
+                            "source": "SNIPPET",
+                            "contentHtml": html,
+                            "fragmentId": None,
+                            "snippetId": snippet_id
+                        }
+        
+        # 没有格式范文，检查 project_section_body
         body = self.dao.get_section_body(project_id, node_id)
         if not body:
             return None

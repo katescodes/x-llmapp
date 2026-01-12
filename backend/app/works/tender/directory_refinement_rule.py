@@ -149,7 +149,7 @@ def _load_tender_requirements(pool: Any, project_id: str) -> List[Dict[str, Any]
                 sql = """
                     SELECT id, requirement_id, dimension, req_type, requirement_text,
                            is_hard, allow_deviation, eval_method, must_reject,
-                           evidence_chunk_ids, meta_json
+                           evidence_chunk_ids
                     FROM tender_requirements
                     WHERE project_id = %s
                     ORDER BY dimension, requirement_id
