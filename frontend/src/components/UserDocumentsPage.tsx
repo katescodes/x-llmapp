@@ -7,11 +7,13 @@
  * 3. 查看和管理文档列表
  * 4. 删除文档
  * 5. AI分析文档（提取关键信息）
+ * 6. 共享文档到企业
  */
 
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { API_BASE_URL } from '../config/api';
+import ShareButton from './ShareButton';
 
 const API_BASE = API_BASE_URL;
 
@@ -49,6 +51,8 @@ interface UserDocument {
   is_analyzed: boolean;
   analysis_json: any;
   owner_id?: string;
+  scope?: string;
+  organization_id?: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -563,44 +567,53 @@ export default function UserDocumentsPage({ projectId, onBack, embedded = false 
                         </div>
                       )}
                     </div>
-                    <div style={{ display: 'flex', gap: '4px' }}>
-                      {!doc.is_analyzed && (
+                    <div style={{ display: 'flex', gap: '4px', flexDirection: 'column' }}>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        {!doc.is_analyzed && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleAnalyzeDocument(doc.id);
+                            }}
+                            style={{
+                              background: 'none',
+                              border: '1px solid #667eea',
+                              color: '#667eea',
+                              cursor: 'pointer',
+                              fontSize: '12px',
+                              padding: '4px 8px',
+                              borderRadius: '4px',
+                            }}
+                            title="AI分析"
+                          >
+                            🔍 分析
+                          </button>
+                        )}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleAnalyzeDocument(doc.id);
+                            handleDeleteDocument(doc.id, doc.doc_name);
                           }}
                           style={{
                             background: 'none',
-                            border: '1px solid #667eea',
-                            color: '#667eea',
+                            border: 'none',
+                            color: '#ff6b6b',
                             cursor: 'pointer',
-                            fontSize: '12px',
+                            fontSize: '14px',
                             padding: '4px 8px',
-                            borderRadius: '4px',
                           }}
-                          title="AI分析"
+                          title="删除文档"
                         >
-                          🔍 分析
+                          🗑️
                         </button>
-                      )}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteDocument(doc.id, doc.doc_name);
-                        }}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: '#ff6b6b',
-                          cursor: 'pointer',
-                          fontSize: '14px',
-                          padding: '4px 8px',
-                        }}
-                        title="删除文档"
-                      >
-                        🗑️
-                      </button>
+                      </div>
+                      <ShareButton
+                        resourceType="document"
+                        resourceId={doc.id}
+                        resourceName={doc.doc_name}
+                        isShared={doc.scope === 'organization'}
+                        onShareChange={() => loadDocuments(selectedCategory?.id)}
+                      />
                     </div>
                   </div>
                 </div>

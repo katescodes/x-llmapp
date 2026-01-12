@@ -326,14 +326,22 @@ class CustomRuleService:
         列出自定义规则包
         
         Args:
-            project_id: 项目ID（可选，不传则返回所有共享规则包）
-            owner_id: 所有者ID（可选）
+            project_id: 项目ID（可选，用于项目级规则包）
+            owner_id: 所有者ID（可选，用于权限过滤）
             
         Returns:
-            规则包列表
+            规则包列表（包含私有的+企业共享的）
         """
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
+                # 获取用户的企业ID
+                user_org_id = None
+                if owner_id:
+                    cur.execute("SELECT organization_id FROM users WHERE id = %s", [owner_id])
+                    user_row = cur.fetchone()
+                    if user_row:
+                        user_org_id = user_row['organization_id']
+                
                 sql = """
                 SELECT 
                     rp.id,
@@ -342,23 +350,37 @@ class CustomRuleService:
                     rp.project_id,
                     rp.priority,
                     rp.is_active,
+                    rp.scope,
+                    rp.organization_id,
                     rp.created_at,
                     rp.updated_at,
-                    COUNT(r.id) as rule_count
+                    COUNT(r.id) as rule_count,
+                    p.owner_id
                 FROM tender_rule_packs rp
                 LEFT JOIN tender_rules r ON r.rule_pack_id = rp.id
+                LEFT JOIN tender_projects p ON rp.project_id = p.project_id
                 WHERE rp.pack_type = 'custom'
                 """
                 params = []
                 
                 if project_id:
+                    # 项目级规则包：只返回该项目的
                     sql += " AND rp.project_id = %s"
                     params.append(project_id)
                 else:
-                    # 不传project_id时，只返回共享规则包（project_id IS NULL）
-                    sql += " AND rp.project_id IS NULL"
+                    # 非项目级规则包：返回"我创建的私有" + "企业共享"
+                    if owner_id and user_org_id:
+                        sql += """ AND (
+                            (p.owner_id = %s AND COALESCE(rp.scope, 'private') = 'private')
+                            OR (rp.organization_id = %s AND rp.scope = 'organization')
+                        )"""
+                        params.extend([owner_id, user_org_id])
+                    elif owner_id:
+                        # 没有企业ID，只返回用户创建的
+                        sql += " AND p.owner_id = %s"
+                        params.append(owner_id)
                 
-                sql += " GROUP BY rp.id, rp.pack_name, rp.pack_type, rp.project_id, rp.priority, rp.is_active, rp.created_at, rp.updated_at ORDER BY rp.created_at DESC"
+                sql += " GROUP BY rp.id, rp.pack_name, rp.pack_type, rp.project_id, rp.priority, rp.is_active, rp.scope, rp.organization_id, rp.created_at, rp.updated_at, p.owner_id ORDER BY rp.created_at DESC"
                 
                 cur.execute(sql, params)
                 rows = cur.fetchall()

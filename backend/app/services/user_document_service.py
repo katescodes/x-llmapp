@@ -293,6 +293,7 @@ class UserDocumentService:
         self,
         project_id: Optional[str] = None,
         category_id: Optional[str] = None,
+        owner_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         列出用户文档
@@ -300,9 +301,21 @@ class UserDocumentService:
         Args:
             project_id: 项目ID（可选，为空则列出所有文档）
             category_id: 分类ID（可选）
+            owner_id: 所有者ID（可选，用于权限过滤）
+        
+        Returns:
+            文档列表（包含私有的+企业共享的）
         """
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
+                # 获取用户的企业ID
+                user_org_id = None
+                if owner_id:
+                    cur.execute("SELECT organization_id FROM users WHERE id = %s", [owner_id])
+                    user_row = cur.fetchone()
+                    if user_row:
+                        user_org_id = user_row['organization_id']
+                
                 # 构建WHERE条件
                 where_clauses = []
                 params = []
@@ -315,6 +328,18 @@ class UserDocumentService:
                     where_clauses.append("d.category_id = %s")
                     params.append(category_id)
                 
+                # 添加权限过滤：私有的（我创建的） + 企业共享的
+                if owner_id and user_org_id:
+                    where_clauses.append("""(
+                        (d.owner_id = %s AND COALESCE(d.scope, 'private') = 'private')
+                        OR (d.organization_id = %s AND d.scope = 'organization')
+                    )""")
+                    params.extend([owner_id, user_org_id])
+                elif owner_id:
+                    # 没有企业ID，只返回用户创建的
+                    where_clauses.append("d.owner_id = %s")
+                    params.append(owner_id)
+                
                 where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
                 
                 cur.execute(
@@ -323,6 +348,7 @@ class UserDocumentService:
                         d.id, d.project_id, d.category_id, d.doc_name, d.filename, d.file_type,
                         d.mime_type, d.file_size, d.storage_path, d.kb_doc_id, d.doc_tags,
                         d.description, d.is_analyzed, d.analysis_json, d.meta_json, d.owner_id,
+                        d.scope, d.organization_id,
                         d.created_at, d.updated_at,
                         c.category_name
                     FROM tender_user_documents d

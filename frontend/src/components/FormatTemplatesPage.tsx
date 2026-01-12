@@ -7,6 +7,7 @@ import { api, API_BASE_URL } from '../config/api';
 import { FormatTemplate } from '../types/tender';
 import RichTocPreview from './template/RichTocPreview';
 import { templateSpecToTemplateStyle, templateSpecToTocItems } from './template/templatePreviewUtils';
+import ShareButton from './ShareButton';
 import '../styles.css';
 
 type Props = {
@@ -422,7 +423,14 @@ export default function FormatTemplatesPage({ embedded, onBack }: Props) {
                       )}
                     </div>
 
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '12px', alignItems: 'center' }}>
+                      <ShareButton
+                        resourceType="template"
+                        resourceId={t.id}
+                        resourceName={t.name}
+                        isShared={t.scope === 'organization'}
+                        onShareChange={() => loadTemplates()}
+                      />
                       <button
                         className="sidebar-btn"
                         style={{ flex: 1, fontSize: '12px' }}

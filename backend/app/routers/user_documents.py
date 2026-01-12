@@ -226,6 +226,7 @@ def list_documents(
     documents = service.list_documents(
         project_id=project_id,
         category_id=category_id,
+        owner_id=user.user_id if user else None,
     )
     
     return documents

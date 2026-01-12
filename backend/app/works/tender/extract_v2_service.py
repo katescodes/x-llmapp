@@ -1604,31 +1604,58 @@ class ExtractV2Service:
         将节点列表保存到 tender_directory_nodes 表
         
         参考 directory_augment_v1.py 的实现
+        
+        ⚠️ 重要：正确计算 order_no，确保子节点紧跟在父节点之后
         """
         import hashlib
         import json
         
+        # ✨ 步骤1：重新计算 order_no，确保显示顺序正确
+        # 原因：LLM返回的节点是扁平列表，子节点可能与父节点不相邻
+        # 目标：Level 1节点按顺序排列，每个Level 1的子节点紧跟其后
+        
+        # 先为所有节点生成ID（如果没有）
+        for i, node in enumerate(nodes):
+            if not node.get("id"):
+                id_str = f"{project_id}_{node.get('title', '')}_{node.get('level', 0)}_{i}"
+                node["id"] = f"dn_{hashlib.md5(id_str.encode()).hexdigest()[:16]}"
+        
+        # 建立 title -> id 映射（用于 parent_ref 解析）
+        title_to_id = {node.get("title"): node.get("id") for node in nodes if node.get("title")}
+        
+        # 解析 parent_id
+        for node in nodes:
+            if not node.get("parent_id") and node.get("parent_ref"):
+                parent_title = node.get("parent_ref")
+                node["parent_id"] = title_to_id.get(parent_title)
+        
+        # 重新计算 order_no：先Level 1，再每个Level 1的子节点
+        new_order = 1
+        for node in nodes:
+            if node.get("level") == 1:  # Level 1 节点
+                node["_computed_order_no"] = new_order
+                new_order += 1
+                
+                # 找到这个Level 1节点的所有子节点
+                node_id = node.get("id")
+                for child in nodes:
+                    if child.get("parent_id") == node_id:
+                        child["_computed_order_no"] = new_order
+                        new_order += 1
+        
+        # 对于没有被分配order_no的节点（孤立节点），按原顺序分配
+        for node in nodes:
+            if "_computed_order_no" not in node:
+                node["_computed_order_no"] = new_order
+                new_order += 1
+                logger.warning(f"Node '{node.get('title')}' (level={node.get('level')}) has no parent, assigned order_no={new_order-1}")
+        
+        # ✨ 步骤2：保存到数据库
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
-                for i, node in enumerate(nodes, 1):
-                    # 生成节点ID（如果没有）
+                for node in nodes:
                     node_id = node.get("id")
-                    if not node_id:
-                        id_str = f"{project_id}_{node.get('title', '')}_{node.get('level', 0)}_{i}"
-                        node_id = f"dn_{hashlib.md5(id_str.encode()).hexdigest()[:16]}"
-                    
-                    # 处理父节点ID
                     parent_id = node.get("parent_id")
-                    if not parent_id and node.get("parent_ref"):
-                        # 根据 parent_ref 查找父节点ID
-                        cur.execute("""
-                            SELECT id FROM tender_directory_nodes
-                            WHERE project_id = %s AND title = %s
-                            LIMIT 1
-                        """, [project_id, node.get("parent_ref")])
-                        parent_row = cur.fetchone()
-                        if parent_row:
-                            parent_id = parent_row['id']
                     
                     # 构建 meta_json
                     meta_json = {
@@ -1663,7 +1690,7 @@ class ExtractV2Service:
                         node_id,
                         project_id,
                         parent_id,
-                        node.get("order_no", i),
+                        node.get("_computed_order_no"),  # ✅ 使用重新计算的 order_no
                         node.get("level", 1),
                         node.get("numbering", ""),
                         node.get("title", "未命名"),
@@ -1674,5 +1701,5 @@ class ExtractV2Service:
                     ])
                 
                 conn.commit()
-                logger.info(f"_save_nodes_to_db: Committed {len(nodes)} nodes for project={project_id}")
+                logger.info(f"_save_nodes_to_db: Committed {len(nodes)} nodes for project={project_id} with corrected order_no")
     

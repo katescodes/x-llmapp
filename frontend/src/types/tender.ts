@@ -88,6 +88,9 @@ export type FormatTemplate = {
   description?: string | null;
   style_config: Record<string, any>;
   is_public: boolean;
+  scope?: string;
+  organization_id?: string;
+  owner_id?: string;
   template_sha256?: string | null;
   template_spec_version?: string | null;
   template_spec_analyzed_at?: string | null;

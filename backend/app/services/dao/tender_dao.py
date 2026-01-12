@@ -804,17 +804,44 @@ class TenderDAO:
         return row
 
     def list_format_templates(self, owner_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """列出格式模板"""
+        """
+        列出格式模板
+        
+        Args:
+            owner_id: 所有者ID（可选，用于权限过滤）
+            
+        Returns:
+            模板列表（包含私有的+企业共享的+公开的）
+        """
         if owner_id:
-            rows = self._fetchall(
-                """
-                SELECT * FROM format_templates
-                WHERE owner_id=%s OR is_public=true
-                ORDER BY created_at DESC
-                """,
-                (owner_id,),
-            )
+            # 获取用户的企业ID
+            user_row = self._fetchone("SELECT organization_id FROM users WHERE id=%s", (owner_id,))
+            user_org_id = user_row.get("organization_id") if user_row else None
+            
+            if user_org_id:
+                # 返回：我创建的私有 + 企业共享 + 全局公开（兼容旧数据）
+                rows = self._fetchall(
+                    """
+                    SELECT * FROM format_templates
+                    WHERE (owner_id=%s AND COALESCE(scope, 'private') = 'private')
+                       OR (organization_id=%s AND scope = 'organization')
+                       OR is_public=true
+                    ORDER BY created_at DESC
+                    """,
+                    (owner_id, user_org_id),
+                )
+            else:
+                # 没有企业ID，返回：我创建的 + 全局公开
+                rows = self._fetchall(
+                    """
+                    SELECT * FROM format_templates
+                    WHERE owner_id=%s OR is_public=true
+                    ORDER BY created_at DESC
+                    """,
+                    (owner_id,),
+                )
         else:
+            # 未登录，只返回全局公开
             rows = self._fetchall(
                 "SELECT * FROM format_templates WHERE is_public=true ORDER BY created_at DESC",
                 (),

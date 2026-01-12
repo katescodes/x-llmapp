@@ -1152,9 +1152,15 @@ class TenderService:
             nodes_with_tree = self._build_directory_tree(nodes_sorted)
         
         # 6. 保存（使用replace_directory）
-        # ❌ 禁用：节点已在extract_v2_service.py的_save_nodes_to_db中保存
-        # 重复保存会导致source被覆盖为"tender"
-        logger.info(f"[generate_directory] 跳过replace_directory（节点已在_save_nodes_to_db中保存）")
+        # ✅ 强制保存：确保节点一定被保存到数据库
+        # 如果 extract_v2_service 已保存，这里会更新；如果未保存，这里会插入
+        logger.info(f"[generate_directory] 保存 {len(nodes_with_tree)} 个节点到数据库")
+        try:
+            self.dao.replace_directory(project_id, nodes_with_tree)
+            logger.info(f"[generate_directory] 节点保存成功")
+        except Exception as e:
+            logger.error(f"[generate_directory] 节点保存失败: {e}", exc_info=True)
+            raise ValueError(f"目录节点保存失败: {str(e)}")
         
         # ✨ 7. 自动填充范本（集成：一键完成目录生成+范本填充）
         try:

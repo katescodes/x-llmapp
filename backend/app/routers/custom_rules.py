@@ -209,12 +209,22 @@ def share_rule_pack_to_organization(
                 if pack["scope"] == 'organization':
                     return {"success": True, "message": "规则包已经是共享状态"}
                 
-                # 更新为共享状态
+                # 获取用户的企业ID
+                cur.execute("SELECT organization_id FROM users WHERE id = %s", [user.user_id])
+                user_row = cur.fetchone()
+                user_org_id = user_row['organization_id'] if user_row else None
+                
+                if not user_org_id:
+                    raise HTTPException(status_code=400, detail="用户没有关联企业，无法共享")
+                
+                # 更新为共享状态，并设置企业ID
                 cur.execute("""
                     UPDATE tender_rule_packs 
-                    SET scope = 'organization', updated_at = NOW()
+                    SET scope = 'organization', 
+                        organization_id = %s,
+                        updated_at = NOW()
                     WHERE id = %s
-                """, [pack_id])
+                """, [user_org_id, pack_id])
                 
                 conn.commit()
                 
@@ -270,10 +280,12 @@ def unshare_rule_pack_from_organization(
                 if pack["scope"] == 'private':
                     return {"success": True, "message": "规则包已经是私有状态"}
                 
-                # 更新为私有状态
+                # 更新为私有状态，并清除企业ID
                 cur.execute("""
                     UPDATE tender_rule_packs 
-                    SET scope = 'private', updated_at = NOW()
+                    SET scope = 'private', 
+                        organization_id = NULL,
+                        updated_at = NOW()
                     WHERE id = %s
                 """, [pack_id])
                 

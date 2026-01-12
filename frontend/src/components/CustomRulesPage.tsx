@@ -6,11 +6,13 @@
  * 2. 查看规则包列表
  * 3. 查看规则详情
  * 4. 删除规则包
+ * 5. 共享规则包到企业
  */
 
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { API_BASE_URL } from '../config/api';
+import ShareButton from './ShareButton';
 
 const API_BASE = API_BASE_URL;
 
@@ -51,6 +53,9 @@ interface CustomRulePack {
   priority: number;
   is_active: boolean;
   rule_count?: number;
+  scope?: string;
+  organization_id?: string;
+  owner_id?: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -322,7 +327,7 @@ export default function CustomRulesPage({ projectId, onBack, embedded = false }:
                   }}
                   onClick={() => handleSelectPack(pack)}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '8px' }}>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: 600, marginBottom: '4px', color: '#ffffff' }}>
                         {pack.pack_name}
@@ -331,6 +336,15 @@ export default function CustomRulesPage({ projectId, onBack, embedded = false }:
                         {pack.rule_count || 0} 条规则
                       </div>
                     </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <ShareButton
+                      resourceType="rule-pack"
+                      resourceId={pack.id}
+                      resourceName={pack.pack_name}
+                      isShared={pack.scope === 'organization'}
+                      onShareChange={() => loadRulePacks()}
+                    />
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
