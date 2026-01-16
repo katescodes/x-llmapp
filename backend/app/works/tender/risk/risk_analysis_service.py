@@ -86,18 +86,29 @@ class RiskAnalysisService:
                 )
             )
         
-        # 2. 分类处理
+        # 2. 分类处理（基于consequence而不是is_hard）
         must_reject_table = []
         checklist_table = []
         
         for req in requirements:
-            if req["is_hard"]:
-                # 硬性要求 -> must_reject_table
-                risk_row = self._build_risk_row(req)
+            # 获取consequence字段（优先使用LLM输出的值）
+            consequence = req.get("consequence")
+            
+            # 如果没有consequence，回退到旧逻辑（is_hard）以保证兼容性
+            if not consequence:
+                if req.get("is_hard"):
+                    consequence = "废标/无效"
+                else:
+                    consequence = "关键要求"
+            
+            # 基于consequence分类
+            if consequence == "废标/无效":
+                # 废标/无效 -> must_reject_table
+                risk_row = self._build_risk_row(req, consequence)
                 must_reject_table.append(risk_row)
             else:
-                # 软性要求 -> checklist_table
-                checklist_row = self._build_checklist_row(req)
+                # 关键要求/扣分/加分 -> checklist_table
+                checklist_row = self._build_checklist_row(req, consequence)
                 checklist_table.append(checklist_row)
                 
                 # ❌ 已删除：自动生成的偏离提醒（冗余信息，用户体验差）
@@ -139,8 +150,19 @@ class RiskAnalysisService:
                 """, (project_id,))
                 
                 rows = cur.fetchall()
-                return [
-                    {
+                result = []
+                for row in rows:
+                    # 从value_schema_json中提取evidence_text和consequence
+                    value_schema = row.get('value_schema_json') or {}
+                    evidence_text = None
+                    consequence = None
+                    if isinstance(value_schema, dict):
+                        # evidence_text和consequence都在meta_json中
+                        meta_json = value_schema.get('meta', {})
+                        evidence_text = meta_json.get('evidence_text')
+                        consequence = meta_json.get('consequence')  # 新增：读取LLM输出的consequence
+                    
+                    result.append({
                         "id": row['id'],
                         "requirement_id": row['requirement_id'],
                         "dimension": row['dimension'],
@@ -148,11 +170,12 @@ class RiskAnalysisService:
                         "requirement_text": row['requirement_text'],
                         "is_hard": row['is_hard'],
                         "allow_deviation": row['allow_deviation'],
-                        "value_schema_json": row['value_schema_json'],
+                        "value_schema_json": value_schema,
                         "evidence_chunk_ids": row.get('evidence_chunk_ids') or [],
-                    }
-                    for row in rows
-                ]
+                        "evidence_text": evidence_text,
+                        "consequence": consequence,  # 新增：传递consequence给后续逻辑
+                    })
+                return result
     
     def _infer_consequence(self, requirement_text: str, dimension: str) -> str:
         """
@@ -246,9 +269,11 @@ class RiskAnalysisService:
             else:
                 return "这是关键硬性要求，不满足可能导致废标或重大风险。"
     
-    def _build_risk_row(self, req: Dict[str, Any]) -> RiskRow:
+    def _build_risk_row(self, req: Dict[str, Any], consequence: str = None) -> RiskRow:
         """构建废标项行"""
-        consequence = self._infer_consequence(req["requirement_text"], req["dimension"])
+        # 优先使用传入的consequence（从LLM输出），如果没有则推断
+        if not consequence:
+            consequence = self._infer_consequence(req["requirement_text"], req["dimension"])
         severity = self._infer_severity(consequence, req["dimension"], req["req_type"])
         suggestion = self._generate_suggestion(req["req_type"], req["dimension"], consequence)
         
@@ -261,15 +286,17 @@ class RiskAnalysisService:
             allow_deviation=req["allow_deviation"],
             value_schema_json=req["value_schema_json"],
             evidence_chunk_ids=req["evidence_chunk_ids"],
+            evidence_text=req.get("evidence_text"),  # 新增：原文证据
             consequence=consequence,
             severity=severity,
             suggestion=suggestion,
         )
     
-    def _build_checklist_row(self, req: Dict[str, Any]) -> ChecklistRow:
+    def _build_checklist_row(self, req: Dict[str, Any], consequence: str = None) -> ChecklistRow:
         """构建注意事项行 - 与 RiskRow 保持一致的字段结构"""
-        # 软性要求也需要推断consequence
-        consequence = self._infer_consequence(req["requirement_text"], req["dimension"])
+        # 优先使用传入的consequence（从LLM输出），如果没有则推断
+        if not consequence:
+            consequence = self._infer_consequence(req["requirement_text"], req["dimension"])
         
         # 软性要求的 severity 通常较低
         if req["req_type"] == "scoring":
@@ -291,6 +318,7 @@ class RiskAnalysisService:
             allow_deviation=req["allow_deviation"],
             value_schema_json=req["value_schema_json"],
             evidence_chunk_ids=req["evidence_chunk_ids"],
+            evidence_text=req.get("evidence_text"),  # 新增：原文证据
             consequence=consequence,
             severity=severity,
             suggestion=suggestion,
@@ -361,6 +389,14 @@ class RiskAnalysisService:
         checklist: List[ChecklistRow],
     ) -> RiskAnalysisStats:
         """计算统计信息"""
+        # 按consequence统计（4类）
+        all_rows = must_reject + checklist
+        veto_count = sum(1 for r in all_rows if r.consequence == "废标/无效")
+        critical_count = sum(1 for r in all_rows if r.consequence == "关键要求")
+        deduct_count = sum(1 for r in all_rows if r.consequence == "扣分")
+        bonus_count = sum(1 for r in all_rows if r.consequence == "加分")
+        
+        # 按severity统计
         high_count = sum(1 for r in must_reject if r.severity == "high")
         medium_count = sum(1 for r in must_reject if r.severity == "medium")
         low_count = sum(1 for r in must_reject if r.severity == "low")
@@ -372,6 +408,10 @@ class RiskAnalysisService:
         
         return RiskAnalysisStats(
             total_requirements=total,
+            veto_count=veto_count,
+            critical_count=critical_count,
+            deduct_count=deduct_count,
+            bonus_count=bonus_count,
             must_reject_count=len(must_reject),
             checklist_count=len(checklist),
             high_severity_count=high_count,

@@ -68,6 +68,7 @@ def _serialize_directory_nodes(flat_nodes: List[dict]) -> List[dict]:
             "volume": r.get("volume") or "",
             "evidence_chunk_ids": r.get("evidence_chunk_ids") or [],
             "bodyMeta": r.get("bodyMeta") or {"source": "EMPTY", "fragmentId": None, "hasContent": False},
+            "meta_json": r.get("meta_json") or {},  # ✅ 添加meta_json字段（包含snippet_id和snippet_blocks）
         }
         for r in flat_nodes
     ]
@@ -411,6 +412,16 @@ async def extract_requirements(
             dao.update_run(run_id, "failed", progress=0.0, message=str(e))
             raise
     
+    # 创建同步包装函数（FastAPI BackgroundTasks要求）
+    def job_sync():
+        """同步包装函数"""
+        import asyncio
+        try:
+            asyncio.run(job())
+        except Exception as e:
+            logger.error(f"Background job failed: {e}", exc_info=True)
+            dao.update_run(run_id, "failed", progress=0.0, message=str(e))
+    
     if run_sync:
         # 同步执行
         try:
@@ -420,7 +431,7 @@ async def extract_requirements(
             raise HTTPException(status_code=500, detail=str(e))
     else:
         # 后台执行
-        bg.add_task(lambda: asyncio.run(job()))
+        bg.add_task(job_sync)
         return {"run_id": run_id, "status": "running", "message": "Task started in background"}
 
 # ==================== 项目信息抽取 ====================
@@ -1139,6 +1150,16 @@ async def run_unified_audit(
             dao.update_run(run_id, "failed", message=str(e))
             raise
     
+    # 创建同步包装函数（FastAPI BackgroundTasks要求）
+    def job_sync():
+        """同步包装函数"""
+        import asyncio
+        try:
+            asyncio.run(job())
+        except Exception as e:
+            logger.error(f"Background job failed: {e}", exc_info=True)
+            dao.update_run(run_id, "failed", progress=0.0, message=str(e))
+    
     if run_sync:
         # 同步执行
         try:
@@ -1160,8 +1181,8 @@ async def run_unified_audit(
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
     else:
-        # 异步执行
-        bg.add_task(lambda: asyncio.run(job()))
+        # 后台执行
+        bg.add_task(job_sync)
         return {"run_id": run_id, "bidder_name": bidder_name, "status": "running"}
 
 
@@ -1413,6 +1434,11 @@ async def analyze_user_intent(
         )
 
 
+class FormatSnippet(BaseModel):
+    """格式范文摘要"""
+    id: str
+    title: str
+
 class GenerateSectionContentReq(BaseModel):
     """生成单个章节内容请求"""
     title: str = Field(..., description="章节标题")
@@ -1420,6 +1446,7 @@ class GenerateSectionContentReq(BaseModel):
     node_id: Optional[str] = Field(None, description="节点ID（用于自动保存）")
     requirements: Optional[str] = Field(None, description="用户自定义要求")
     original_content: Optional[str] = Field(None, description="原始内容（用于对比）")
+    format_snippets: Optional[List[FormatSnippet]] = Field(None, description="已提取的格式范文列表")
 
 
 @router.post("/projects/{project_id}/sections/generate")
@@ -1438,6 +1465,21 @@ async def generate_section_content(
     svc = _svc(request)
     dao = TenderDAO(_get_pool(request))
     
+    # ✅ 检查节点是否已挂载范本 - 静默跳过，返回成功
+    if req.node_id:
+        nodes = dao.list_directory(project_id)
+        node = next((n for n in nodes if n.get("id") == req.node_id), None)
+        if node and node.get("meta_json"):
+            meta_json = node.get("meta_json", {})
+            if meta_json.get("snippet_blocks"):
+                logger.info(f"[sections/generate] 节点已挂载范本，跳过AI生成: node_id={req.node_id}")
+                # 返回成功，但标记为跳过
+                return {
+                    "status": "skipped",
+                    "message": "该章节已挂载范本，已自动跳过AI生成",
+                    "content": None
+                }
+    
     # 构建项目上下文
     project = dao.get_project(project_id)
     if not project:
@@ -1449,6 +1491,11 @@ async def generate_section_content(
     if req.requirements:
         project_context += f"\n\n【用户自定义要求】\n{req.requirements}"
     
+    # 准备格式范文信息（转换为字典列表）
+    format_snippets_data = None
+    if req.format_snippets:
+        format_snippets_data = [{"id": s.id, "title": s.title} for s in req.format_snippets]
+    
     # 生成内容
     result = await svc._generate_section_content(
         project_id=project_id,
@@ -1457,6 +1504,7 @@ async def generate_section_content(
         project_context=project_context,
         requirements=req.requirements,  # ✅ 传递用户要求
         model_id=model_id,
+        format_snippets=format_snippets_data,  # ✅ 传递格式范文信息
     )
     
     content = result.get("content", "")
@@ -1512,7 +1560,6 @@ async def get_node_template(
         }
     
     # 3. 检索模板内容
-    from app.services.db.postgres import _get_pool
     from app.platform.retrieval.facade import RetrievalFacade
     
     pool = _get_pool(request)
@@ -1569,6 +1616,59 @@ async def get_node_template(
             "source_chunks": [],
             "error": str(e)
         }
+
+
+@router.delete("/projects/{project_id}/directory/{node_id}/template-mount")
+def remove_template_mount(
+    project_id: str,
+    node_id: str,
+    request: Request,
+):
+    """
+    删除章节的范本挂载
+    - 清除 source="TEMPLATE_SAMPLE" 和 fragment_id
+    - 保留其他内容（如AI生成的内容）
+    """
+    dao = TenderDAO(_get_pool(request))
+    
+    # 检查项目是否存在
+    project = dao.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # 获取当前章节正文
+    section_body = dao.get_section_body(project_id, node_id)
+    
+    if not section_body:
+        raise HTTPException(status_code=404, detail="Section body not found")
+    
+    # 检查是否有范本挂载
+    if section_body.get("source") != "TEMPLATE_SAMPLE" or not section_body.get("fragment_id"):
+        return {
+            "success": False,
+            "message": "该章节未挂载范本"
+        }
+    
+    # 删除范本挂载：将 source 和 fragment_id 清空
+    # 如果有 content_html，保留它但将 source 改为 None
+    content_html = section_body.get("content_html")
+    content_json = section_body.get("content_json")
+    
+    dao.upsert_section_body(
+        project_id=project_id,
+        node_id=node_id,
+        source=None,  # 清除 source
+        fragment_id=None,  # 清除 fragment_id
+        content_html=content_html,  # 保留原有内容
+        content_json=content_json,
+    )
+    
+    logger.info(f"[remove_template_mount] 已删除范本挂载: project_id={project_id}, node_id={node_id}")
+    
+    return {
+        "success": True,
+        "message": "已删除范本挂载"
+    }
 
 
 @router.post("/projects/{project_id}/generate-full-content", response_model=RunOut)

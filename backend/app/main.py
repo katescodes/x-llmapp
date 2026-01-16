@@ -26,16 +26,80 @@ from .routers import (
     user_documents,
     organizations,  # 新增企业管理路由
 )
-from .services.db.postgres import init_db
+from .services.db.postgres import init_db, _get_pool
 from .services.llm_client import get_default_llm_model
 import httpx
 import json
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
 init_db()
 app = FastAPI(title="亿林亿问 Backend", version="0.2.0")
+
+
+# ========== 应用生命周期管理 ==========
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时的初始化"""
+    logger.info("🚀 应用启动中...")
+    
+    # 启动任务监控器（自动清理卡死的任务）
+    try:
+        import os
+        import psycopg
+        from psycopg.rows import dict_row
+        from app.services.task_monitor import TaskMonitor
+        
+        # 创建独立的数据库连接（不使用连接池）
+        monitor_conn = psycopg.connect(
+            host=os.getenv("POSTGRES_HOST", "postgres"),
+            port=int(os.getenv("POSTGRES_PORT", "5432")),
+            dbname=os.getenv("POSTGRES_DB", "localgpt"),
+            user=os.getenv("POSTGRES_USER", "localgpt"),
+            password=os.getenv("POSTGRES_PASSWORD", "localgpt"),
+            row_factory=dict_row,
+            autocommit=False
+        )
+        
+        # 创建并启动监控器
+        # 超时阈值：10分钟，检查间隔：60秒
+        monitor = TaskMonitor(monitor_conn, timeout_minutes=20, check_interval_seconds=60)
+        
+        # 保存到app.state以便后续访问
+        app.state.task_monitor = monitor
+        app.state.task_monitor_conn = monitor_conn
+        
+        # 启动监控循环
+        monitor.start()
+        
+        logger.info("✅ 任务监控器已启动（超时阈值：10分钟，检查间隔：60秒）")
+    except Exception as e:
+        logger.error(f"❌ 任务监控器启动失败: {e}", exc_info=True)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭时的清理"""
+    logger.info("🛑 应用关闭中...")
+    
+    # 停止任务监控器
+    if hasattr(app.state, "task_monitor"):
+        try:
+            await app.state.task_monitor.stop()
+            logger.info("✅ 任务监控器已停止")
+        except Exception as e:
+            logger.error(f"❌ 任务监控器停止失败: {e}")
+    
+    # 关闭数据库连接
+    if hasattr(app.state, "task_monitor_conn"):
+        try:
+            app.state.task_monitor_conn.close()
+            logger.info("✅ 任务监控器数据库连接已关闭")
+        except Exception as e:
+            logger.error(f"❌ 任务监控器数据库连接关闭失败: {e}")
 
 
 # LLM Orchestrator 包装器 - 用于 TenderService

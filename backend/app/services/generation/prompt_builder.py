@@ -207,6 +207,18 @@ class PromptBuilder:
         if context.requirements and "custom_requirements" in context.requirements:
             custom_requirements = context.requirements["custom_requirements"]
         
+        # ✅ 提取格式范文信息
+        format_snippets = []
+        format_snippets_list = ""
+        if context.requirements and "format_snippets" in context.requirements:
+            format_snippets = context.requirements["format_snippets"]
+            # 构建格式范文列表文本
+            if format_snippets:
+                snippet_lines = []
+                for i, snippet in enumerate(format_snippets, 1):
+                    snippet_lines.append(f"{i}. **{snippet.get('title', '未命名')}**")
+                format_snippets_list = "\n".join(snippet_lines)
+        
         template_context = {
             "section_title": context.section_title,
             "section_level": context.section_level,
@@ -214,7 +226,10 @@ class PromptBuilder:
             "has_materials": has_materials,
             "materials": materials_text,
             "min_words": min_words,
-            "custom_requirements": custom_requirements  # ✅ 传递用户要求
+            "custom_requirements": custom_requirements,  # ✅ 传递用户要求
+            "format_snippets": len(format_snippets) > 0,  # ✅ 是否有格式范文
+            "format_snippets_count": len(format_snippets),  # ✅ 格式范文数量
+            "format_snippets_list": format_snippets_list  # ✅ 格式范文列表
         }
         
         try:
@@ -250,6 +265,22 @@ class PromptBuilder:
                 )
             
             parts.append("")
+            
+            # ✅ 如果有格式范文信息，展示给AI
+            if context.requirements and "format_snippets" in context.requirements:
+                format_snippets = context.requirements["format_snippets"]
+                if format_snippets:
+                    parts.append(f"【📋 可用格式范文】")
+                    parts.append(f"系统已从招标文件中提取了以下 {len(format_snippets)} 个格式范文：")
+                    parts.append("")
+                    for i, snippet in enumerate(format_snippets, 1):
+                        parts.append(f"{i}. {snippet.get('title', '未命名')}")
+                    parts.append("")
+                    parts.append("⚠️ **使用指导**")
+                    parts.append("- 如果当前章节标题与上述格式范文匹配或相似，强烈建议参考相应的格式范文")
+                    parts.append("- 格式范文通常包含标准的格式、必要的条款和填写示例")
+                    parts.append("- 如适用，请生成符合该格式范文结构的内容")
+                    parts.append("")
             
             # ✅ 如果有用户自定义要求，优先展示
             if context.requirements and "custom_requirements" in context.requirements:
@@ -382,25 +413,98 @@ class PromptBuilder:
             return "\n".join(parts)
     
     def _format_project_info(self, project_info: Dict[str, Any]) -> str:
-        """格式化项目信息"""
+        """
+        格式化项目信息 - 完整版
+        
+        ✅ 确保所有客户信息都被提取和展示
+        """
         lines = []
         
-        # 常见字段映射
-        field_map = {
+        # ===== 核心项目信息 =====
+        core_fields = {
             "project_name": "项目名称",
-            "tenderee": "招标人",
+            "project_number": "项目编号",
+            "procurement_method": "采购方式",
             "budget": "预算金额",
-            "project_overview": "项目概况",
-            "requirements": "基本要求"
+            "max_price": "最高限价",
         }
         
-        for key, label in field_map.items():
+        for key, label in core_fields.items():
+            value = project_info.get(key)
+            if value:
+                lines.append(f"**{label}**：{value}")
+        
+        # ===== 招标人/采购人信息（重要！） =====
+        lines.append("")
+        lines.append("**📋 招标人/采购人信息**（以下信息来自招标文件，不得编造）")
+        
+        tenderee_fields = {
+            "tenderee": "招标人",
+            "owner_name": "采购人名称",
+            "agency_name": "代理机构",
+            "contact_person": "联系人",
+            "contact_phone": "联系电话",
+            "contact_email": "联系邮箱",
+        }
+        
+        has_tenderee_info = False
+        for key, label in tenderee_fields.items():
+            value = project_info.get(key)
+            if value:
+                lines.append(f"{label}：{value}")
+                has_tenderee_info = True
+        
+        if not has_tenderee_info:
+            lines.append("（招标人信息待补充 - 请使用【待补充】标记）")
+        
+        # ===== 投标/响应信息 =====
+        lines.append("")
+        lines.append("**📅 投标信息**")
+        
+        bid_fields = {
+            "bid_deadline": "投标截止时间",
+            "bid_opening_time": "开标时间",
+            "bid_opening_location": "开标地点",
+            "submission_address": "文件递交地址",
+            "bid_bond_amount": "保证金金额",
+        }
+        
+        for key, label in bid_fields.items():
             value = project_info.get(key)
             if value:
                 lines.append(f"{label}：{value}")
         
-        if not lines:
-            lines.append("（项目信息不足）")
+        # ===== 项目范围和要求 =====
+        scope_data = project_info.get("project_scope") or project_info.get("project_overview")
+        if scope_data:
+            lines.append("")
+            lines.append("**📝 项目范围**")
+            
+            # 确保scope是字符串类型
+            if isinstance(scope_data, dict):
+                # 如果是字典，提取可能的字段
+                scope_str = (
+                    scope_data.get("project_scope") or 
+                    scope_data.get("description") or 
+                    scope_data.get("content") or 
+                    str(scope_data)
+                )
+            else:
+                scope_str = str(scope_data)
+            
+            lines.append(scope_str)
+        
+        # ===== 重要提示 =====
+        lines.append("")
+        lines.append("⚠️ **重要提示**")
+        lines.append("- 以上所有信息均来自真实的招标文件，**严禁编造或臆测**")
+        lines.append("- 生成内容时必须使用上述真实信息，如信息不足请标注【待补充】")
+        lines.append("- 投标人（我方）的公司信息应从企业资料中获取，不得编造")
+        
+        # 检查是否有足够的实质性内容（只对字符串类型检查）
+        content_lines = [l for l in lines if isinstance(l, str) and l and not l.startswith("**") and not l.startswith("-") and not l.startswith("⚠️")]
+        if not lines or len(content_lines) < 3:
+            lines.append("（项目信息不足 - 请标注【待补充】并提示用户完善）")
         
         return "\n".join(lines)
     

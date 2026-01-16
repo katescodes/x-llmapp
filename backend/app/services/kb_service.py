@@ -118,12 +118,14 @@ def list_documents(kb_id: str):
     支持：
     - 项目关联的文档（tender/declare）
     - 独立上传的文档
+    
+    注意：旧的 kb_documents 表已迁移，不再支持
     """
     get_kb_or_raise(kb_id)
     
     from app.services.db.postgres import _get_pool
     
-    # 从 documents 表读取（新系统）
+    # 先查询新的 documents 表
     pool = _get_pool()
     with pool.connection() as conn:
         with conn.cursor() as cur:

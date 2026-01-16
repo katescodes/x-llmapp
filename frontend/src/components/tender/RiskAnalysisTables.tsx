@@ -21,6 +21,7 @@ export interface RiskAnalysisTablesProps {
 export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.Element {
   const { data, onOpenEvidence } = props;
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [consequenceFilter, setConsequenceFilter] = useState<string>('all');
 
   const toggleExpand = (id: string) => {
     setExpandedRows((prev) => {
@@ -77,16 +78,32 @@ export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.
   // 后果类型颜色
   const getConsequenceColor = (consequence: string) => {
     switch (consequence) {
+      case '废标/无效':
       case 'reject':
         return '#ef4444';
+      case '关键要求':
       case 'hard_requirement':
         return '#f97316';
+      case '扣分':
       case 'score_loss':
         return '#fbbf24';
+      case '加分':
+        return '#10b981';
       default:
         return '#94a3b8';
     }
   };
+
+  // 合并两个表的数据
+  const allRows = [...data.must_reject_table, ...data.checklist_table];
+  
+  // 根据consequence筛选
+  const filteredRows = consequenceFilter === 'all' 
+    ? allRows 
+    : allRows.filter(row => row.consequence === consequenceFilter);
+  
+  // 获取实际存在的consequence类型（用于下拉框选项）
+  const availableConsequences = Array.from(new Set(allRows.map(row => row.consequence).filter(Boolean)));
 
   // 渲染值约束
   const renderValueSchema = (schema: any) => {
@@ -110,21 +127,25 @@ export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.
         }}
       >
         <StatCard label="总要求数" value={data.stats.total_requirements} color="#60a5fa" />
-        <StatCard label="废标项" value={data.stats.must_reject_count} color="#ef4444" />
-        <StatCard label="注意事项" value={data.stats.checklist_count} color="#fbbf24" />
-        <StatCard label="高严重性" value={data.stats.high_severity_count} color="#ef4444" />
-        <StatCard label="中严重性" value={data.stats.medium_severity_count} color="#fbbf24" />
-        <StatCard label="低严重性" value={data.stats.low_severity_count} color="#94a3b8" />
+        <StatCard label="废标/无效" value={data.stats.veto_count || 0} color="#ef4444" />
+        <StatCard label="关键要求" value={data.stats.critical_count || 0} color="#f97316" />
+        <StatCard label="扣分" value={data.stats.deduct_count || 0} color="#fbbf24" />
+        <StatCard label="加分" value={data.stats.bonus_count || 0} color="#10b981" />
       </div>
 
-      {/* 表1：废标项 / 关键硬性要求 */}
+      {/* 招标要求列表（合并表格） */}
       <div>
+        <div style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          justifyContent: 'space-between',
+          marginBottom: '12px',
+        }}>
         <h3
           style={{
             fontSize: '16px',
             fontWeight: 600,
             color: '#e5e7eb',
-            marginBottom: '12px',
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
@@ -134,17 +155,41 @@ export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.
             style={{
               width: '4px',
               height: '16px',
-              background: '#ef4444',
+                background: '#60a5fa',
               borderRadius: '2px',
             }}
           />
-          废标项 / 关键硬性要求
+            招标要求列表
           <span style={{ fontSize: '14px', color: '#94a3b8', fontWeight: 400 }}>
-            ({data.must_reject_table.length})
+              (共{allRows.length}条，显示{filteredRows.length}条)
           </span>
         </h3>
 
-        {data.must_reject_table.length === 0 ? (
+          {/* 类别筛选 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <label style={{ fontSize: '14px', color: '#94a3b8' }}>类别：</label>
+            <select
+              value={consequenceFilter}
+              onChange={(e) => setConsequenceFilter(e.target.value)}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '6px',
+                border: '1px solid #374151',
+                background: '#1f2937',
+                color: '#e5e7eb',
+                fontSize: '14px',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="all">全部</option>
+              {availableConsequences.map(consequence => (
+                <option key={consequence} value={consequence}>{consequence}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {filteredRows.length === 0 ? (
           <div
             className="kb-empty"
             style={{
@@ -175,16 +220,14 @@ export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.
               >
                 <tr>
                   <th style={thStyle}>维度</th>
-                  <th style={thStyle}>类型</th>
-                  <th style={thStyle}>后果</th>
+                  <th style={thStyle}>类别</th>
                   <th style={thStyle}>严重性</th>
                   <th style={thStyle}>招标要求</th>
-                  <th style={thStyle}>建议</th>
-                  <th style={thStyle}>证据</th>
+                  <th style={{...thStyle, minWidth: '300px'}}>原文证据</th>
                 </tr>
               </thead>
               <tbody>
-                {data.must_reject_table.map((row) => (
+                {filteredRows.map((row) => (
                   <tr
                     key={row.id}
                     style={{
@@ -204,11 +247,6 @@ export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.
                         }}
                       >
                         {DIMENSION_LABELS[row.dimension] || row.dimension}
-                      </span>
-                    </td>
-                    <td style={tdStyle}>
-                      <span style={{ fontSize: '12px', color: '#94a3b8' }}>
-                        {REQ_TYPE_LABELS[row.req_type] || row.req_type}
                       </span>
                     </td>
                     <td style={tdStyle}>
@@ -265,208 +303,33 @@ export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.
                         )}
                       </div>
                     </td>
-                    <td style={{ ...tdStyle, maxWidth: '200px', fontSize: '12px', color: '#94a3b8' }}>
-                      {row.suggestion}
-                    </td>
-                    <td style={tdStyle}>
-                      {row.evidence_chunk_ids.length > 0 && (
-                        <button
-                          onClick={() => onOpenEvidence(row.evidence_chunk_ids, row.requirement_text)}
-                          className="link-button"
-                          style={{
-                            fontSize: '11px',
-                            padding: '3px 6px',
-                            border: '1px solid rgba(148, 163, 184, 0.3)',
-                            borderRadius: '4px',
-                          }}
-                        >
-                          证据({row.evidence_chunk_ids.length})
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {/* 表2：注意事项 / 得分点 */}
-      <div>
-        <h3
-          style={{
-            fontSize: '16px',
-            fontWeight: 600,
-            color: '#e5e7eb',
-            marginBottom: '12px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}
-        >
-          <span
-            style={{
-              width: '4px',
-              height: '16px',
-              background: '#fbbf24',
-              borderRadius: '2px',
-            }}
-          />
-          注意事项 / 得分点
-          <span style={{ fontSize: '14px', color: '#94a3b8', fontWeight: 400 }}>
-            ({data.checklist_table.length})
-          </span>
-        </h3>
-
-        {data.checklist_table.length === 0 ? (
-          <div
-            className="kb-empty"
-            style={{
-              padding: '24px',
-              textAlign: 'center',
-              background: 'rgba(15, 23, 42, 0.6)',
-              borderRadius: '8px',
-            }}
-          >
-            暂无注意事项
-          </div>
-        ) : (
-          <div
-            className="source-card"
-            style={{ padding: '0' }}
-          >
-            <table
-              style={{
-                width: '100%',
-                borderCollapse: 'collapse',
-                fontSize: '13px',
-              }}
-            >
-              <thead
-                style={{
-                  background: 'rgba(15, 23, 42, 0.8)',
-                }}
-              >
-                <tr>
-                  <th style={thStyle}>维度</th>
-                  <th style={thStyle}>类型</th>
-                  <th style={thStyle}>后果</th>
-                  <th style={thStyle}>严重性</th>
-                  <th style={thStyle}>招标要求</th>
-                  <th style={thStyle}>建议</th>
-                  <th style={thStyle}>证据</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.checklist_table.map((row) => (
-                  <tr
-                    key={row.id}
-                    style={{
-                      borderBottom: '1px solid rgba(148, 163, 184, 0.1)',
-                      background: 'rgba(15, 23, 42, 0.4)',
-                    }}
-                  >
-                    <td style={tdStyle}>
-                      <span
-                        style={{
-                          fontSize: '11px',
-                          padding: '2px 6px',
-                          borderRadius: '4px',
-                          background: `${getDimensionColor(row.dimension)}15`,
-                          color: getDimensionColor(row.dimension),
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {DIMENSION_LABELS[row.dimension] || row.dimension}
-                      </span>
-                    </td>
-                    <td style={tdStyle}>
-                      <span
-                        style={{
-                          fontSize: '11px',
-                          padding: '2px 6px',
-                          borderRadius: '4px',
-                          background: 'rgba(96, 165, 250, 0.15)',
-                          color: '#60a5fa',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {REQ_TYPE_LABELS[row.req_type] || row.req_type}
-                      </span>
-                    </td>
-                    <td style={tdStyle}>
-                      <span
-                        style={{
-                          fontSize: '11px',
-                          padding: '2px 6px',
-                          borderRadius: '4px',
-                          background: `${getConsequenceColor(row.consequence)}15`,
-                          color: getConsequenceColor(row.consequence),
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {CONSEQUENCE_LABELS[row.consequence] || row.consequence}
-                      </span>
-                    </td>
-                    <td style={tdStyle}>
-                      <span
-                        style={{
-                          fontSize: '11px',
-                          padding: '2px 6px',
-                          borderRadius: '4px',
-                          border: `1px solid ${getSeverityColor(row.severity)}40`,
-                          color: getSeverityColor(row.severity),
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {SEVERITY_LABELS[row.severity] || row.severity}
-                      </span>
-                    </td>
-                    <td style={{ ...tdStyle, maxWidth: '300px' }}>
+                    <td style={{ ...tdStyle, maxWidth: '400px' }}>
                       <div>
                         <div
                           style={{
-                            color: '#e5e7eb',
+                            color: '#94a3b8',
+                            fontSize: '12px',
                             lineHeight: '1.4',
-                            display: expandedRows.has(row.id) ? 'block' : '-webkit-box',
-                            WebkitLineClamp: expandedRows.has(row.id) ? 'unset' : 2,
+                            display: expandedRows.has(`evidence_${row.id}`) ? 'block' : '-webkit-box',
+                            WebkitLineClamp: expandedRows.has(`evidence_${row.id}`) ? 'unset' : 3,
                             WebkitBoxOrient: 'vertical',
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                           }}
+                          title={row.evidence_text || ''}
                         >
-                          {row.requirement_text}
+                          {row.evidence_text || '暂无原文证据'}
                         </div>
-                        {row.requirement_text.length > 100 && (
+                        {row.evidence_text && row.evidence_text.length > 150 && (
                           <button
-                            onClick={() => toggleExpand(row.id)}
+                            onClick={() => toggleExpand(`evidence_${row.id}`)}
                             className="link-button"
                             style={{ fontSize: '11px', marginTop: '4px', color: '#60a5fa' }}
                           >
-                            {expandedRows.has(row.id) ? '收起' : '展开'}
+                            {expandedRows.has(`evidence_${row.id}`) ? '收起' : '展开'}
                           </button>
                         )}
                       </div>
-                    </td>
-                    <td style={{ ...tdStyle, maxWidth: '200px', fontSize: '12px', color: '#94a3b8' }}>
-                      {row.suggestion}
-                    </td>
-                    <td style={tdStyle}>
-                      {row.evidence_chunk_ids.length > 0 && (
-                        <button
-                          onClick={() => onOpenEvidence(row.evidence_chunk_ids, row.requirement_text)}
-                          className="link-button"
-                          style={{
-                            fontSize: '11px',
-                            padding: '3px 6px',
-                            border: '1px solid rgba(148, 163, 184, 0.3)',
-                            borderRadius: '4px',
-                          }}
-                        >
-                          证据({row.evidence_chunk_ids.length})
-                        </button>
-                      )}
                     </td>
                   </tr>
                 ))}
@@ -475,6 +338,7 @@ export default function RiskAnalysisTables(props: RiskAnalysisTablesProps): JSX.
           </div>
         )}
       </div>
+
     </div>
   );
 }

@@ -88,12 +88,15 @@ interface DocumentNode {
   level: number;
   children?: DocumentNode[];
   notes?: string;  // 章节说明（来自申报指南/招标书）
+  snippetId?: string;  // 挂载的范文ID
+  hasSnippet?: boolean;  // 是否已挂载范文
 }
 
 interface DocumentContent {
   nodeId: string;
   html: string;
   status: 'draft' | 'generated' | 'final';
+  bodyMeta?: any;  // 保存完整的 body_meta（包括 source, fragment_id）
 }
 
 interface TemplateData {
@@ -120,6 +123,8 @@ const convertTenderDirectoryToDocNodes = (tenderNodes: any[]): DocumentNode[] =>
       level: node.level || 1,
       children: [],
       notes: node.meta_json?.notes || node.notes || '',  // 提取章节说明
+      snippetId: node.meta_json?.snippet_id || null,  // 提取范文ID
+      hasSnippet: !!(node.meta_json?.snippet_blocks && node.meta_json.snippet_blocks.length > 0),  // 检查是否有范文块
     };
     idMap.set(docNode.id, docNode);
   });
@@ -158,12 +163,14 @@ interface DocumentComponentManagementProps {
   initialDirectory?: any[];  // 初始目录数据（从招投标/申报书传入）
   projectId?: string;  // 项目ID
   moduleType?: 'tender' | 'declare';  // 模块类型：招投标或申报书
+  formatSnippets?: Array<{id: string, title: string}>;  // 格式范文摘要（用于AI生成时的提示）
 }
 
 export default function DocumentComponentManagement({
   embedded = false,
   initialDirectory,
   projectId,
+  formatSnippets = [],
   moduleType = 'tender',  // 默认为招投标
 }: DocumentComponentManagementProps = {}) {
   // -------------------- 状态管理 --------------------
@@ -210,6 +217,11 @@ export default function DocumentComponentManagement({
       setContents({});
       // 清空当前选中的节点，因为节点ID可能已经改变
       setSelectedNodeId(null);
+      
+      // 自动展开第一层节点
+      const firstLevelNodeIds = newDirectory.filter(n => n.level === 1).map(n => n.id);
+      setExpandedNodes(new Set(firstLevelNodeIds));
+      
       console.log('[DocumentComponentManagement] 目录已更新，节点数:', newDirectory.length);
       
       // 如果有projectId，加载已有的章节内容
@@ -267,6 +279,7 @@ export default function DocumentComponentManagement({
               nodeId: dirNode.id,
               html: node.body_meta.content_html,
               status: 'generated',
+              bodyMeta: node.body_meta,  // 保存完整的 body_meta
             };
           }
         });
@@ -285,11 +298,11 @@ export default function DocumentComponentManagement({
   // 内容数据
   const [contents, setContents] = useState<Record<string, DocumentContent>>({});
 
-  // 加载已保存的内容（从数据库）
+  // 加载已保存的内容（从数据库）6
   const [isLoadingSavedContent, setIsLoadingSavedContent] = useState(false);
 
   // 当前选中的节点（用于高亮）
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>('1');
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   // 模板数据（招投标专用）
   const [templateData, setTemplateData] = useState<TemplateData | null>(null);
@@ -300,7 +313,7 @@ export default function DocumentComponentManagement({
   const [editingNodeTitle, setEditingNodeTitle] = useState('');
 
   // 展开的节点
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['1', '2']));
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
   // 统一的文档内容（所有章节合并）
   const [unifiedContent, setUnifiedContent] = useState('');
@@ -459,6 +472,13 @@ export default function DocumentComponentManagement({
   // 加载模板数据（仅招投标模块）
   useEffect(() => {
     if (!selectedNodeId || !projectId || !embedded || moduleType !== 'tender') {
+      setTemplateData(null);
+      return;
+    }
+    
+    // 检查node_id格式（必须是 dn_ 开头）
+    if (!selectedNodeId.startsWith('dn_')) {
+      console.warn('[加载模板] 跳过无效的node_id:', selectedNodeId);
       setTemplateData(null);
       return;
     }
@@ -706,6 +726,48 @@ export default function DocumentComponentManagement({
       }
     }
     return null;
+  };
+
+  // 删除范本挂载
+  const handleRemoveTemplateMount = async (nodeId: string) => {
+    if (!projectId || !embedded) return;
+    
+    if (!confirm('确定要删除此章节的范本挂载吗？')) return;
+    
+    try {
+      const response = await fetch(`/api/apps/tender/projects/${projectId}/directory/${nodeId}/template-mount`, {
+        method: 'DELETE',
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        // 更新内容，清除 bodyMeta 中的 source 和 fragment_id
+        setContents(prev => {
+          const content = prev[nodeId];
+          if (content) {
+            return {
+              ...prev,
+              [nodeId]: {
+                ...content,
+                bodyMeta: {
+                  ...content.bodyMeta,
+                  source: null,
+                  fragment_id: null,
+                },
+              },
+            };
+          }
+          return prev;
+        });
+        alert('范本挂载已删除');
+      } else {
+        alert(data.message || '删除失败');
+      }
+    } catch (error) {
+      console.error('删除范本挂载失败:', error);
+      alert('删除失败，请稍后重试');
+    }
   };
 
   // -------------------- 内容编辑 --------------------
@@ -1055,6 +1117,12 @@ export default function DocumentComponentManagement({
 
     console.log('[生成内容] embedded:', embedded, 'projectId:', projectId, 'node:', node);
 
+    // ✅ 检查是否已挂载范本（招投标专用）- 静默跳过
+    if (moduleType === 'tender' && node.hasSnippet) {
+      console.log('[跳过生成] 该章节已挂载范本，无需AI生成:', node.title);
+      return;
+    }
+
     // 如果是嵌入模式且有projectId，调用真实的后端API
     if (embedded && projectId) {
       console.log('[生成内容] 调用真实API');
@@ -1091,6 +1159,7 @@ export default function DocumentComponentManagement({
             level: node.level,
             node_id: nodeId,  // ✅ 传递node_id，后端会自动保存
             requirements: requirements || undefined,
+            format_snippets: formatSnippets && formatSnippets.length > 0 ? formatSnippets : undefined,  // ✅ 传递格式范文信息
         });
         
         // 竞速：API调用 vs 超时
@@ -1098,6 +1167,23 @@ export default function DocumentComponentManagement({
         clearTimeout(timeoutId!); // 清除超时
 
         console.log('[生成内容] API返回数据:', data);
+        
+        // ✅ 检查是否跳过生成（已挂载范本）
+        if (data.status === 'skipped') {
+          console.log('[生成内容] 章节已挂载范本，跳过生成');
+          // 清除"生成中"状态
+          setContents((prev) => {
+            const newContents: Record<string, DocumentContent> = {};
+            Object.keys(prev).forEach(key => {
+              if (key !== nodeId) {
+                newContents[key] = prev[key];
+              }
+            });
+            return newContents;
+          });
+          return;
+        }
+        
         const generatedHtml = data.content || '<p>生成失败</p>';
         
         console.log('[生成内容] 原始内容长度:', generatedHtml.length);
@@ -1134,7 +1220,7 @@ export default function DocumentComponentManagement({
             [nodeId]: {
               nodeId,
               html: processedHtml,
-              status: 'generated',
+              status: 'generated' as const,
             },
           };
           console.log('[生成内容] ✅ 更新contents state:', nodeId, 'HTML长度:', processedHtml.length);
@@ -1404,13 +1490,10 @@ export default function DocumentComponentManagement({
         flexDirection: 'column',
         background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
         color: '#f8fafc',
-        minHeight: embedded ? '100%' : '100vh',      // ✅ 最小高度
-        height: embedded ? '100%' : 'auto',          // ✅ 嵌入模式填满容器
-        position: embedded ? 'absolute' : 'relative', // ✅ 嵌入模式绝对定位
-        top: embedded ? 0 : 'auto',
-        left: embedded ? 0 : 'auto',
-        right: embedded ? 0 : 'auto',
-        bottom: embedded ? 0 : 'auto',
+        minHeight: embedded ? '100%' : '100vh',
+        height: embedded ? '100%' : 'auto',
+        width: '100%',  // ✅ 宽度100%而不是绝对定位
+        flex: embedded ? 1 : 'none',  // ✅ 使用flex布局而不是absolute
       }}
     >
       {/* 标题栏（只在非嵌入模式显示） */}
@@ -1744,6 +1827,15 @@ export default function DocumentComponentManagement({
                   const contentHtml = content?.html || '';
                   const hasContent = contentHtml.trim().length > 0;
 
+                  // 🔍 调试日志：检查node数据
+                  if (node.title && (node.title.includes('磋商声明书') || node.title.includes('授权委托书') || node.title.includes('报价明细'))) {
+                    console.log(`[节点调试] ${node.title}:`, {
+                      hasSnippet: node.hasSnippet,
+                      snippetId: node.snippetId,
+                      bodyMeta: content?.bodyMeta,
+                    });
+                  }
+
                   return (
                     <div
                       key={node.id}
@@ -1927,6 +2019,53 @@ export default function DocumentComponentManagement({
                               加载模板中...
                             </div>
                           )}
+                        </div>
+                      )}
+
+                      {/* 范本挂载提示（招投标专用） - 支持两种系统 */}
+                      {moduleType === 'tender' && (
+                        // 新系统：snippet_blocks 或 旧系统：TEMPLATE_SAMPLE
+                        (node.hasSnippet || (content?.bodyMeta?.source === 'TEMPLATE_SAMPLE' && content?.bodyMeta?.fragment_id))
+                      ) && (
+                        <div
+                          style={{
+                            marginBottom: 12,
+                            padding: 10,
+                            background: 'rgba(251, 191, 36, 0.12)',
+                            borderRadius: 6,
+                            color: '#92400e',
+                            fontSize: 12,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 12,
+                          }}
+                        >
+                          <div style={{ flex: 1 }}>
+                            📄 该章节已挂载范本，导出时将保真拷贝源文档格式
+                            {node.snippetId && (
+                              <span style={{ marginLeft: 8, fontSize: 11, opacity: 0.7 }}>
+                                (ID: {node.snippetId.substring(0, 12)}...)
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => handleRemoveTemplateMount(node.id)}
+                            style={{
+                              padding: '4px 12px',
+                              background: '#dc2626',
+                              color: '#ffffff',
+                              border: 'none',
+                              borderRadius: 4,
+                              cursor: 'pointer',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              whiteSpace: 'nowrap',
+                            }}
+                            title="删除范本挂载"
+                          >
+                            🗑️ 删除挂载
+                          </button>
                         </div>
                       )}
 

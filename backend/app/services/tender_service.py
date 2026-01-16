@@ -2740,12 +2740,14 @@ class TenderService:
         
         source = body.get("source")
         
-        # 用户编辑内容优先
+        # 优先级：USER > TEMPLATE_SAMPLE > AI
+        
+        # 1. 用户编辑内容优先
         if source == "USER" and body.get("content_html"):
             HtmlToDocxInserter.insert(doc, body["content_html"])
             return
         
-        # 范本挂载
+        # 2. 范本挂载（优先于AI生成）
         if source == "TEMPLATE_SAMPLE" and body.get("fragment_id"):
             fragment = self.dao.get_fragment_by_id(body["fragment_id"])
             if fragment:
@@ -2766,6 +2768,12 @@ class TenderService:
                     except Exception as e:
                         # 拷贝失败，添加错误提示
                         doc.add_paragraph(f"[范本内容拷贝失败: {str(e)}]")
+                return
+        
+        # 3. AI生成内容（最低优先级）
+        if source == "AI" and body.get("content_html"):
+            HtmlToDocxInserter.insert(doc, body["content_html"])
+            return
     
     def _generate_docx_with_spec(
         self,
@@ -3973,6 +3981,7 @@ class TenderService:
         }
 
     # ==================== 语义目录生成 ====================
+    # ❌ 已废弃：该功能已不再使用
 
     def generate_semantic_outline(
         self,
@@ -3981,32 +3990,14 @@ class TenderService:
         max_depth: int = 5,
     ) -> Dict[str, Any]:
         """
-        生成语义目录（从评分/要求推导）
+        ❌ 已废弃：语义目录生成功能已不再使用
         
-        现在直接调用 works/tender/outline 的统一入口
-        
-        Args:
-            project_id: 项目ID
-            mode: 生成模式 FAST/FULL
-            max_depth: 最大层级
-            
-        Returns:
-            语义目录结果
+        废弃时间：2026-01-12
+        废弃原因：前端未使用该功能，且V1提取方法存在遗漏风险
+        替代方案：使用 extract_requirements_v2 提取招标要求
         """
-        from app.works.tender.outline.outline_v2_service import generate_outline_v2
-        
-        # 获取项目信息（用于owner_id）
-        project = self.dao.get_project(project_id)
-        owner_id = project.get("owner_id") if project else None
-        
-        # 调用统一入口
-        return generate_outline_v2(
-            pool=self.pool,
-            project_id=project_id,
-            owner_id=owner_id,
-            mode=mode,
-            max_depth=max_depth,
-            llm_orchestrator=self.llm,
+        raise NotImplementedError(
+            "❌ 语义目录生成功能已废弃，请使用 extract_requirements_v2 提取招标要求"
         )
 
     def _flatten_outline_nodes(
@@ -4319,6 +4310,7 @@ class TenderService:
         project_context: str,
         requirements: Optional[str] = None,  # ✅ 新增：用户自定义要求
         model_id: Optional[str] = None,
+        format_snippets: Optional[List[Dict[str, str]]] = None,  # ✅ 新增：格式范文列表
     ) -> Dict[str, Any]:
         """
         为单个章节生成内容（使用统一组件）
@@ -4378,13 +4370,19 @@ class TenderService:
         if requirements:
             requirements_dict = {"custom_requirements": requirements}
         
+        # ✅ 如果有格式范文，添加到requirements_dict中
+        if format_snippets:
+            if requirements_dict is None:
+                requirements_dict = {}
+            requirements_dict["format_snippets"] = format_snippets
+        
         prompt_context = PromptContext(
             document_type="tender",
             section_title=title,
             section_level=level,
             project_info=project_info_dict,
             retrieval_result=retrieval_result,
-            requirements=requirements_dict  # ✅ 传递用户要求
+            requirements=requirements_dict  # ✅ 传递用户要求和格式范文
         )
         prompt = prompt_builder.build(prompt_context)
         
@@ -4459,28 +4457,25 @@ class TenderService:
             
             # 筛选需要生成内容的节点（没有section或section为空）
             nodes_to_generate = []
-            nodes_with_snippet = []  # 已有范本的节点
+            nodes_with_template = []  # 已有范本挂载的节点
             for node in nodes:
                 node_id = node.get("id")
                 section = self.dao.get_section_body(project_id, node_id)
                 
-                # 检查节点是否已有范文内容
-                has_snippet = False
-                if section:
-                    meta_json = node.get("meta_json", {})
-                    snippet_blocks = meta_json.get("snippet_blocks") if isinstance(meta_json, dict) else None
-                    if snippet_blocks and len(snippet_blocks) > 0:
-                        has_snippet = True
-                        nodes_with_snippet.append(node)
-                        logger.info(f"跳过节点（已有范文）: {node.get('title')}")
+                # ✅ 检查节点是否已挂载范本（source="TEMPLATE_SAMPLE"）
+                has_template = False
+                if section and section.get("source") == "TEMPLATE_SAMPLE" and section.get("fragment_id"):
+                    has_template = True
+                    nodes_with_template.append(node)
+                    logger.info(f"跳过节点（已挂载范本）: {node.get('title')}, fragment_id={section.get('fragment_id')}")
                 
-                # 如果没有范文，且没有section或内容为空/占位符，则需要生成
-                if not has_snippet and (not section or self._is_empty_section(section)):
+                # 如果没有范本，且没有section或内容为空/占位符，则需要生成
+                if not has_template and (not section or self._is_empty_section(section)):
                     nodes_to_generate.append(node)
             
             total = len(nodes_to_generate)
             logger.info(f"[TenderService] 需要生成内容的节点数: {total}")
-            logger.info(f"[TenderService] 已有范文的节点数: {len(nodes_with_snippet)}")
+            logger.info(f"[TenderService] 已挂载范本的节点数: {len(nodes_with_template)}")
             
             if total == 0:
                 if run_id:
@@ -4488,19 +4483,19 @@ class TenderService:
                         run_id,
                         "success",
                         progress=1.0,
-                        message=f"所有章节已有内容，无需生成（{len(nodes_with_snippet)}个已有范文）",
+                        message=f"所有章节已有内容，无需生成（{len(nodes_with_template)}个已挂载范本）",
                         result_json={
                             "generated": 0, 
                             "total": len(nodes), 
                             "skipped": len(nodes),
-                            "snippet_count": len(nodes_with_snippet)
+                            "template_count": len(nodes_with_template)
                         },
                     )
                 return {
                     "generated": 0, 
                     "total": len(nodes), 
                     "skipped": len(nodes),
-                    "snippet_count": len(nodes_with_snippet)
+                    "template_count": len(nodes_with_template)
                 }
             
             # 创建信号量控制并发

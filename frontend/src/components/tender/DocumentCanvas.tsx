@@ -14,6 +14,8 @@ type Props = {
   bodyByNodeId: Record<string, string>; // nodeId -> html
   bodyMetaByNodeId?: Record<string, any>;
   onNodeClick?: (nodeId: string) => void; // 点击目录节点时的回调
+  projectId?: string; // 项目ID（用于删除挂载）
+  onTemplateMountRemoved?: () => void; // 删除挂载后的回调
 };
 
 function indentForLevel(lvl: number, vars?: any): number {
@@ -30,8 +32,35 @@ export default function DocumentCanvas({
   bodyByNodeId,
   bodyMetaByNodeId,
   onNodeClick,
+  projectId,
+  onTemplateMountRemoved,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 删除范本挂载
+  const handleRemoveTemplateMount = async (nodeId: string) => {
+    if (!projectId) return;
+    
+    if (!confirm('确定要删除此章节的范本挂载吗？')) return;
+    
+    try {
+      const response = await fetch(`/api/apps/tender/projects/${projectId}/directory/${nodeId}/template-mount`, {
+        method: 'DELETE',
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        alert('范本挂载已删除');
+        onTemplateMountRemoved?.();
+      } else {
+        alert(data.message || '删除失败');
+      }
+    } catch (error) {
+      console.error('删除范本挂载失败:', error);
+      alert('删除失败，请稍后重试');
+    }
+  };
 
   const paperStyle: React.CSSProperties = useMemo(() => {
     const fontFamily = tocStyleVars?.fontFamily;
@@ -182,9 +211,34 @@ export default function DocumentCanvas({
                       borderRadius: 6,
                       color: "#92400e",
                       fontSize: 12,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 12,
                     }}
                   >
-                    💡 该章节已挂载范本，导出时将保真拷贝源文档格式
+                    <div style={{ flex: 1 }}>
+                      📄 该章节已挂载范本，导出时将保真拷贝源文档格式
+                    </div>
+                    {projectId && (
+                      <button
+                        onClick={() => handleRemoveTemplateMount(n.id)}
+                        style={{
+                          padding: "4px 12px",
+                          background: "#dc2626",
+                          color: "#ffffff",
+                          border: "none",
+                          borderRadius: 4,
+                          cursor: "pointer",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          whiteSpace: "nowrap",
+                        }}
+                        title="删除范本挂载"
+                      >
+                        🗑️ 删除挂载
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

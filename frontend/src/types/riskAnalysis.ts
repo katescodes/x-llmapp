@@ -11,6 +11,7 @@ export interface RiskRow {
   allow_deviation: boolean;
   value_schema_json: any;
   evidence_chunk_ids: string[];
+  evidence_text?: string;  // 原文证据（完整版）
   // 派生字段
   consequence: 'reject' | 'hard_requirement' | 'score_loss';
   severity: 'high' | 'medium' | 'low';
@@ -26,6 +27,7 @@ export interface ChecklistRow {
   allow_deviation: boolean;
   value_schema_json: any;
   evidence_chunk_ids: string[];
+  evidence_text?: string;  // 原文证据（完整版）
   // 派生字段 - 与 RiskRow 保持一致
   consequence: 'reject' | 'hard_requirement' | 'score_loss';
   severity: 'high' | 'medium' | 'low';
@@ -34,6 +36,14 @@ export interface ChecklistRow {
 
 export interface RiskAnalysisStats {
   total_requirements: number;
+  
+  // 新增：按consequence分类统计（4类）
+  veto_count?: number;
+  critical_count?: number;
+  deduct_count?: number;
+  bonus_count?: number;
+  
+  // 保留旧字段（兼容性）
   must_reject_count: number;
   checklist_count: number;
   high_severity_count: number;

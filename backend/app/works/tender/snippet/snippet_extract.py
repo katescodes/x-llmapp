@@ -114,6 +114,17 @@ async def extract_format_snippets(
             logger.warning(f"范本切片失败: {span.get('title')}")
             continue
         
+        # ✨ 过滤目录项：如果所有块都是TOC样式，则跳过
+        toc_blocks = [b for b in snippet_blocks if 'toc' in b.get('styleName', '').lower()]
+        if len(toc_blocks) == len(snippet_blocks):
+            logger.warning(f"跳过目录项: {span.get('title')} (全部为TOC样式)")
+            continue
+        
+        # 如果大部分是TOC（>80%），也跳过
+        if len(toc_blocks) > len(snippet_blocks) * 0.8:
+            logger.warning(f"跳过目录项: {span.get('title')} ({len(toc_blocks)}/{len(snippet_blocks)} 为TOC)")
+            continue
+        
         # 构建范本记录
         # 使用 project_id + source_file_id + start_block_id + end_block_id 生成确定性ID
         # 确保即使同一个项目有多个相同norm_key的范本，也不会冲突

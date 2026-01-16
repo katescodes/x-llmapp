@@ -178,14 +178,51 @@ def main():
     if not args.project_id and not args.all:
         parser.error("必须指定 --project-id 或 --all")
     
-    if args.dry_run:
-        logger.warning("⚠️  DRY RUN MODE: 不会实际更新数据库")
-        return
-    
     # 获取数据库连接
     pool = _get_pool()
     
     try:
+        if args.dry_run:
+            logger.warning("⚠️  DRY RUN MODE: 只识别不更新数据库")
+            # 在dry-run模式下，只打印第一个项目的识别结果
+            if args.project_id:
+                # 查看识别结果但不更新
+                with pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT dv.id
+                            FROM tender_project_documents tpd
+                            JOIN doc_versions dv ON dv.asset_id = tpd.asset_id
+                            WHERE tpd.project_id = %s AND tpd.doc_role = 'tender'
+                            ORDER BY dv.created_at DESC
+                            LIMIT 1
+                        """, [args.project_id])
+                        doc_version_row = cur.fetchone()
+                        if doc_version_row:
+                            doc_version_id = doc_version_row[0]
+                            cur.execute("""
+                                SELECT id, content_text, meta_json
+                                FROM doc_segments
+                                WHERE doc_version_id = %s
+                                AND (
+                                    meta_json->>'is_potential_template' IS NULL
+                                    OR meta_json->>'is_potential_template' = 'false'
+                                )
+                                ORDER BY segment_no
+                                LIMIT 10
+                            """, [doc_version_id])
+                            chunks = cur.fetchall()
+                            logger.info(f"找到 {len(chunks)} 个未标记的chunks（显示前10个）")
+                            for chunk_id, content_text, meta_json in chunks:
+                                template_info = identify_potential_template(
+                                    chunk_text=content_text,
+                                    chunk_meta=meta_json or {},
+                                )
+                                if template_info:
+                                    logger.info(f"✓ Chunk {chunk_id[:8]}... 识别为范本 (score={template_info.get('template_score')})")
+                                    logger.info(f"  内容预览: {content_text[:100]}...")
+            return
+        
         if args.project_id:
             # 处理单个项目
             total, marked = mark_templates_for_project(pool, args.project_id)

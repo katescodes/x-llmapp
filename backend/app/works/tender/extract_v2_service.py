@@ -420,26 +420,9 @@ class ExtractV2Service:
             
             raise
     
-    # extract_risks_v2 已删除，请使用 extract_requirements_v1
-    # risks模块已废弃，统一使用requirements模块提取招标要求
-    
-    async def extract_requirements_v1(
-        self,
-        project_id: str,
-        model_id: Optional[str],
-        run_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        ❌ 已废弃：V1招标要求提取已废弃
-        
-        请使用 extract_requirements_v2（标准清单方式）
-        
-        废弃时间：2025-12-29
-        废弃原因：V2标准清单方式提供更高质量的数据（100% norm_key覆盖）
-        """
-        raise NotImplementedError(
-            "❌ V1招标要求提取已废弃，请使用 extract_requirements_v2（标准清单方式）"
-        )
+    # ❌ extract_risks_v2 和 extract_requirements_v1 已删除
+    # V1版本使用关键词召回存在遗漏废标条款的风险，已彻底移除
+    # 请使用 extract_requirements_v2（框架式自主提取方式）
     
     def _infer_routing_fields(self, req: Dict[str, Any]) -> tuple:
         """
@@ -1159,38 +1142,163 @@ class ExtractV2Service:
             from .framework_prompt_builder import FrameworkPromptBuilder
             
             prompt_builder = FrameworkPromptBuilder()
-            logger.info("Using framework-guided autonomous extraction")
+            logger.info("Using simplified 3-stage high-recall retrieval strategy (universal)")
             
             # 2. 检索招标文件上下文
-            logger.info("Retrieving tender document context...")
+            logger.info("Retrieving tender document context with simplified 3-stage + expansion...")
             
-            # 使用RetrievalFacade检索
-            # ✅ 扩展查询词以支持多种招标/采购类型（工程、货物、服务、磋商等）
-            context_chunks = await self.retriever.retrieve(
-                query="招标文件 投标人须知 评分标准 技术要求 资格条件 商务条款 工期 质保 价格 磋商 资信 报价 方案 合同 授权 资质 保证金 承诺 证明 材料",
+            # 🎯 优化策略：简洁+高效+通用
+            # 核心原则（经验总结）：
+            # 1. 简洁query（每个query不超过4-5个核心词，避免语义稀释）
+            # 2. 大范围检索（top_k保持400/300，不降低）
+            # 3. 邻近扩展（确保上下文完整，解决表格切分问题）
+            # 4. 让LLM处理更多context（600 chunks），给予更多自主权
+            
+            # 🎯 V4.0优化：5阶段检索 - 废标项全覆盖
+            # 目标：确保所有类型的废标项都能被检索到
+            
+            # 阶段1：明确废标关键词（扩充版）
+            logger.info("Stage 1/5: Explicit rejection keywords (expanded)...")
+            stage1_chunks = await self.retriever.retrieve(
+                query="废标 否决 无效 拒绝 作废 取消资格 不予受理 不合格 不响应 投标无效",
                 project_id=project_id,
                 doc_types=["tender"],
-                top_k=150,  # 获取足够多的上下文
+                top_k=800,
             )
+            logger.info(f"Stage 1: Retrieved {len(stage1_chunks)} explicit rejection chunks")
             
-            logger.info(f"Retrieved {len(context_chunks)} context chunks")
+            # 阶段2：实质性响应和资格要求（新增）
+            logger.info("Stage 2/5: Substantive response & qualification requirements...")
+            stage2_chunks = await self.retriever.retrieve(
+                query="实质性响应 实质性要求 不允许偏离 投标人须 资格条件 投标人应 投标人必须",
+                project_id=project_id,
+                doc_types=["tender"],
+                top_k=600,
+            )
+            logger.info(f"Stage 2: Retrieved {len(stage2_chunks)} substantive/qualification chunks")
+            
+            # 阶段3：特殊标记符号（新增专门检索）
+            logger.info("Stage 3/5: Special markers (▲★* symbols)...")
+            stage3_chunks = await self.retriever.retrieve(
+                query="▲ ★ * 带▲ 带★ 星号 标注 不允许负偏离",
+                project_id=project_id,
+                doc_types=["tender"],
+                top_k=400,
+            )
+            logger.info(f"Stage 3: Retrieved {len(stage3_chunks)} special marker chunks")
+            
+            # 阶段4：重要章节和评分标准
+            logger.info("Stage 4/5: Important chapters and scoring standards...")
+            stage4_chunks = await self.retriever.retrieve(
+                query="投标人须知 评审办法 评分标准 技术要求 采购需求 磋商需求",
+                project_id=project_id,
+                doc_types=["tender"],
+                top_k=800,
+            )
+            logger.info(f"Stage 4: Retrieved {len(stage4_chunks)} chapter/scoring chunks")
+            
+            # 阶段5：负面表述和程序要求
+            logger.info("Stage 5/5: Negative expressions and procedural requirements...")
+            stage5_chunks = await self.retriever.retrieve(
+                query="不得 禁止 严禁 投标保证金 样品 原件 签字盖章 最高限价 控制价",
+                project_id=project_id,
+                doc_types=["tender"],
+                top_k=600,
+            )
+            logger.info(f"Stage 5: Retrieved {len(stage5_chunks)} negative/procedural chunks")
+            
+            # 合并去重（优先级：stage1 > stage2 > stage3 > stage4 > stage5）
+            seen_ids = set()
+            initial_chunks = []
+            
+            for chunk in stage1_chunks:
+                if chunk.chunk_id not in seen_ids:
+                    initial_chunks.append(chunk)
+                    seen_ids.add(chunk.chunk_id)
+            
+            for chunk in stage2_chunks:
+                if chunk.chunk_id not in seen_ids:
+                    initial_chunks.append(chunk)
+                    seen_ids.add(chunk.chunk_id)
+            
+            for chunk in stage3_chunks:
+                if chunk.chunk_id not in seen_ids:
+                    initial_chunks.append(chunk)
+                    seen_ids.add(chunk.chunk_id)
+            
+            for chunk in stage4_chunks:
+                if chunk.chunk_id not in seen_ids:
+                    initial_chunks.append(chunk)
+                    seen_ids.add(chunk.chunk_id)
+            
+            for chunk in stage5_chunks:
+                if chunk.chunk_id not in seen_ids:
+                    initial_chunks.append(chunk)
+                    seen_ids.add(chunk.chunk_id)
+            
+            logger.info(f"Combined: {len(initial_chunks)} unique chunks from 5 stages before expansion")
+            
+            # 🎯 V3.9优化：添加稳定排序，消除检索层不确定性（解决35/46波动问题）
+            # 排序键：(score DESC, chunk_id ASC) 确保相似度相同时按chunk_id排序（确定性）
+            initial_chunks.sort(key=lambda x: (
+                -getattr(x, 'score', 0),  # 按相似度降序
+                x.chunk_id  # 相似度相同时，按chunk_id升序（确定性第二排序键）
+            ))
+            logger.info("Applied stable sorting by (score DESC, chunk_id ASC) to ensure deterministic retrieval")
+            
+            # 🔑 关键优化：邻近chunk扩展（解决上下文截断问题）
+            logger.info("Expanding with adjacent chunks for complete context...")
+            context_chunks = await self._expand_with_adjacent_chunks(
+                initial_chunks, 
+                project_id, 
+                expansion_window=2  # 前后各扩展2个chunk（解决"外，其他工作不得分包。"类截断问题）
+            )
+            logger.info(f"After expansion: {len(context_chunks)} chunks (added {len(context_chunks) - len(initial_chunks)} adjacent)")
+            
+            # 注意：扩展后不再排序，因为SimpleChunk没有score属性，保持文档自然顺序
             
             # 拼接上下文（使用实际segment_id作为标记）
+            # 🚀 V4.0优化：送入LLM 1000个chunks（平衡容量和token限制）
+            max_chunks = min(1000, len(context_chunks))  # 使用前1000个chunks
             context_text = "\n\n".join([
                 f"[SEG:{chunk.chunk_id}] {chunk.text}"
-                for i, chunk in enumerate(context_chunks[:100])  # 限制token数
+                for i, chunk in enumerate(context_chunks[:max_chunks])
             ])
             
+            logger.info(f"Using {max_chunks} chunks for LLM extraction (out of {len(context_chunks)} retrieved, 5-stage strategy)")
+            
             # 构建segment_id映射表（用于后续evidence验证）
-            segment_id_map = {chunk.chunk_id: chunk for chunk in context_chunks[:100]}
+            segment_id_map = {chunk.chunk_id: chunk for chunk in context_chunks[:max_chunks]}
             
             if len(context_text) < 100:
                 logger.warning("Context text too short, may not have enough information")
             
+            # 🎯 新增：规则引擎预提取（Phase 3优化）
+            logger.info("Running rule-based extraction first...")
+            from .rule_extractor import TenderRuleExtractor
+            
+            rule_extractor = TenderRuleExtractor()
+            rule_results = rule_extractor.extract(context_text, max_results=200)
+            rule_requirements = rule_extractor.convert_to_requirements(rule_results)
+            
+            logger.info(f"Rule engine extracted {len(rule_requirements)} requirements with 100% confidence")
+            
             # 3. 构建Prompt并调用LLM（框架式自主提取）
             prompt = prompt_builder.build_prompt(context_text)
             
-            logger.info(f"Built framework prompt, length: {len(prompt)} chars")
+            # 估算token数量（1 token ≈ 4个字符，中文更高效）
+            estimated_tokens = len(prompt) // 3  # 保守估计
+            logger.info(
+                f"Built framework prompt: {len(prompt)} chars, "
+                f"~{estimated_tokens} tokens (estimated), "
+                f"chunks: {max_chunks}"
+            )
+            
+            if estimated_tokens > 100000:
+                logger.warning(
+                    f"⚠️ Prompt可能太长 (~{estimated_tokens} tokens)，"
+                    f"如果遇到max_tokens错误，请减少max_chunks"
+                )
             
             # 调用LLM进行自主提取
             messages = [{"role": "user", "content": prompt}]
@@ -1198,8 +1306,8 @@ class ExtractV2Service:
                 messages=messages,
                 model_id=model_id,
                 response_format={"type": "json_object"},
-                temperature=0.1,
-                max_tokens=16000,  # 自主提取可能输出较多要求
+                temperature=0.0,  # 🎯 设置为0以确保完全确定性，消除提取数量波动
+                max_tokens=20000,  # 🚀 平衡token限制：足够提取大量要求，同时避免超过上下文限制
             )
             
             # 提取content
@@ -1223,6 +1331,21 @@ class ExtractV2Service:
                     "schema_version": "requirements_v2_framework"
                 }
             
+            # 🎯 合并规则引擎结果和LLM结果
+            logger.info(f"Merging rule-based ({len(rule_requirements)}) and LLM-based ({len(llm_requirements)}) results...")
+            
+            # 合并并去重（规则结果优先，置信度更高）
+            merged_requirements = self._merge_rule_and_llm_results(rule_requirements, llm_requirements)
+            
+            logger.info(
+                f"After merging: {len(merged_requirements)} requirements "
+                f"(rule: {len(rule_requirements)}, llm: {len(llm_requirements)}, "
+                f"deduplicated: {len(rule_requirements) + len(llm_requirements) - len(merged_requirements)})"
+            )
+            
+            # 使用合并后的结果
+            llm_requirements = merged_requirements
+            
             # 5. 验证并转换为数据库格式
             # 获取文档版本ID
             doc_version_id = await self._get_doc_version_id(project_id, "tender")
@@ -1235,21 +1358,10 @@ class ExtractV2Service:
             
             logger.info(f"Converted to DB format: {len(requirements)} requirements")
             
-            # 6. 去重（基于内容相似度）
-            seen_texts = {}
-            unique_requirements = []
-            for req in requirements:
-                text = req.get("requirement_text", "").strip()
-                text_normalized = text[:100].lower()  # 使用前100字符作为指纹
-                
-                if text_normalized and text_normalized not in seen_texts:
-                    seen_texts[text_normalized] = req.get("item_id")
-                    unique_requirements.append(req)
-                else:
-                    logger.warning(f"Duplicate content: {req.get('item_id')}")
-            
-            requirements = unique_requirements
-            logger.info(f"After deduplication: {len(requirements)} requirements")
+            # 6. 去重（放开限制：关闭后端去重，信任LLM的判断）
+            # 原逻辑：seen_texts = {} 基于前100字符去重
+            # 新逻辑：完全信任LLM，Prompt中已有去重指导，不在后端强制去重
+            logger.info(f"Skipping backend deduplication, total requirements: {len(requirements)}")
             
             # 7. 后处理：推断eval_method, must_reject等字段
             from .requirement_postprocessor import generate_bid_response_extraction_guide
@@ -1302,14 +1414,25 @@ class ExtractV2Service:
                         
                         # 合并meta_json到value_schema_json
                         meta_json = req.get("meta_json", {})
-                        if meta_json and value_schema:
-                            # 如果已有value_schema，合并meta信息
-                            combined_schema = value_schema if isinstance(value_schema, dict) else {}
-                            combined_schema.update({"meta": meta_json})
+                        if meta_json:
+                            # 提取value_schema的原始dict（如果已经是Json对象，需要先获取其内容）
+                            if value_schema:
+                                # 如果value_schema是Json对象，取其obj属性；如果是dict，直接使用
+                                if isinstance(value_schema, Json):
+                                    combined_schema = dict(value_schema.obj) if hasattr(value_schema, 'obj') else {}
+                                elif isinstance(value_schema, dict):
+                                    combined_schema = dict(value_schema)
+                                else:
+                                    combined_schema = {}
+                            else:
+                                combined_schema = {}
+                            
+                            # 合并meta信息
+                            combined_schema["meta"] = meta_json
                             value_schema = Json(combined_schema)
-                        elif meta_json and not value_schema:
-                            # 如果没有value_schema，将meta作为value_schema
-                            value_schema = Json(meta_json)
+                        elif not value_schema:
+                            # 如果没有value_schema也没有meta_json，设置为None
+                            value_schema = None
                         
                         cur.execute("""
                             INSERT INTO tender_requirements (
@@ -1412,6 +1535,168 @@ class ExtractV2Service:
             logger.warning(f"Failed to get doc_version_id: {e}")
         
         return None
+    
+    def _merge_rule_and_llm_results(
+        self,
+        rule_requirements: List[Dict],
+        llm_requirements: List[Dict]
+    ) -> List[Dict]:
+        """
+        合并规则引擎和LLM的提取结果，智能去重
+        
+        策略：
+        1. 规则提取的结果优先（置信度100%）
+        2. LLM提取的结果如果与规则结果高度相似，则丢弃
+        3. LLM提取的独特结果保留
+        
+        Args:
+            rule_requirements: 规则引擎提取的要求
+            llm_requirements: LLM提取的要求
+            
+        Returns:
+            合并后的要求列表
+        """
+        from difflib import SequenceMatcher
+        
+        def text_similarity(a: str, b: str) -> float:
+            """计算两个文本的相似度"""
+            return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+        
+        # 开始合并
+        merged = []
+        
+        # 1. 先添加所有规则结果（100%保留）
+        for req in rule_requirements:
+            req["extraction_source"] = "RULE"
+            merged.append(req)
+        
+        # 2. 检查每个LLM结果
+        for llm_req in llm_requirements:
+            llm_text = llm_req.get("requirement_text", "")
+            
+            # 检查是否与规则结果重复
+            is_duplicate = False
+            for rule_req in rule_requirements:
+                rule_text = rule_req.get("requirement_text", "")
+                
+                # 如果相似度>80%，认为是重复
+                similarity = text_similarity(llm_text, rule_text)
+                if similarity > 0.8:
+                    is_duplicate = True
+                    logger.debug(
+                        f"LLM result is duplicate of rule result (similarity={similarity:.2f}): "
+                        f"{llm_text[:50]}..."
+                    )
+                    break
+            
+            # 如果不重复，添加到结果中
+            if not is_duplicate:
+                llm_req["extraction_source"] = "LLM"
+                merged.append(llm_req)
+        
+        return merged
+    
+    async def _expand_with_adjacent_chunks(
+        self,
+        chunks: List[Any],
+        project_id: str,
+        expansion_window: int = 1
+    ) -> List[Any]:
+        """
+        扩展chunks以包含邻近的chunks，解决上下文截断问题
+        
+        Args:
+            chunks: 初始检索到的chunks
+            project_id: 项目ID
+            expansion_window: 前后各扩展几个chunk（默认1）
+        
+        Returns:
+            扩展后的chunks列表（按position排序，去重）
+        """
+        if not chunks:
+            return chunks
+        
+        # 收集需要扩展的chunk_ids
+        chunk_ids_to_expand = [chunk.chunk_id for chunk in chunks]
+        
+        # 从数据库查询这些chunks的position和doc_version_id
+        try:
+            with self.pool.connection() as conn:
+                with conn.cursor() as cur:
+                    # 查询chunks的position信息
+                    cur.execute(
+                        """
+                        SELECT id, doc_version_id, position, content_text
+                        FROM doc_segments
+                        WHERE id = ANY(%s)
+                        ORDER BY doc_version_id, position
+                        """,
+                        (chunk_ids_to_expand,)
+                    )
+                    rows = cur.fetchall()
+                    
+                    if not rows:
+                        return chunks
+                    
+                    # 构建position映射
+                    chunk_info = {}
+                    for row in rows:
+                        chunk_info[row[0]] = {
+                            'doc_version_id': row[1],
+                            'position': row[2],
+                            'content_text': row[3]
+                        }
+                    
+                    # 计算需要的position范围
+                    positions_to_fetch = set()
+                    doc_versions = set()
+                    for chunk_id, info in chunk_info.items():
+                        doc_version_id = info['doc_version_id']
+                        position = info['position']
+                        doc_versions.add(doc_version_id)
+                        
+                        # 添加邻近positions
+                        for offset in range(-expansion_window, expansion_window + 1):
+                            positions_to_fetch.add((doc_version_id, position + offset))
+                    
+                    # 查询所有需要的chunks
+                    expanded_chunks = []
+                    for doc_version_id, position in positions_to_fetch:
+                        cur.execute(
+                            """
+                            SELECT id, content_text
+                            FROM doc_segments
+                            WHERE doc_version_id = %s AND position = %s
+                            """,
+                            (doc_version_id, position)
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            # 创建简单的chunk对象
+                            class SimpleChunk:
+                                def __init__(self, chunk_id, text, pos):
+                                    self.chunk_id = chunk_id
+                                    self.text = text
+                                    self.position = pos
+                            
+                            expanded_chunks.append(SimpleChunk(row[0], row[1], position))
+                    
+                    # 按position排序
+                    expanded_chunks.sort(key=lambda c: c.position)
+                    
+                    # 去重（保留第一次出现的）
+                    seen_ids = set()
+                    unique_chunks = []
+                    for chunk in expanded_chunks:
+                        if chunk.chunk_id not in seen_ids:
+                            unique_chunks.append(chunk)
+                            seen_ids.add(chunk.chunk_id)
+                    
+                    return unique_chunks
+                    
+        except Exception as e:
+            logger.warning(f"Failed to expand chunks: {e}, returning original chunks")
+            return chunks
     
     async def _update_project_meta(self, project_id: str, meta_update: Dict[str, Any]):
         """更新项目meta_json"""
@@ -1544,7 +1829,7 @@ class ExtractV2Service:
                 messages=messages,
                 model_id=model_id,
                 response_format={"type": "json_object"},
-                temperature=0.1,
+                temperature=0.0,  # 🎯 设置为0以确保完全确定性
                 max_tokens=4096,
             )
             

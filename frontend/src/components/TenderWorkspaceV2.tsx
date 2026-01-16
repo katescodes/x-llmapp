@@ -180,10 +180,39 @@ const SnippetMatchPanel: React.FC<{
 export default function TenderWorkspaceV2() {
   // ========== 状态管理 ==========
   
-  // 视图状态
-  const [viewMode, setViewMode] = useState<'projectList' | 'projectDetail' | 'formatTemplates' | 'customRules' | 'userDocuments'>('projectList');
-  const [activeTab, setActiveTab] = useState(1); // 1-4对应4个步骤
-  const [step2SubTab, setStep2SubTab] = useState<'info' | 'requirements' | 'directory' | 'snippets'>('info');
+  // ✨ 从 localStorage 恢复视图模式
+  const [viewMode, setViewMode] = useState<'projectList' | 'projectDetail' | 'formatTemplates' | 'customRules' | 'userDocuments'>(() => {
+    const saved = localStorage.getItem('tender_viewMode');
+    return (saved as any) || 'projectList';
+  });
+  
+  // ✨ 从 localStorage 恢复上次的标签页状态
+  const [activeTab, setActiveTab] = useState(() => {
+    const saved = localStorage.getItem('tender_activeTab');
+    return saved ? parseInt(saved, 10) : 1;
+  });
+  
+  const [step2SubTab, setStep2SubTab] = useState<'info' | 'requirements' | 'directory' | 'snippets'>(() => {
+    const saved = localStorage.getItem('tender_step2SubTab');
+    return (saved as 'info' | 'requirements' | 'directory' | 'snippets') || 'info';
+  });
+  
+  // ✨ 包装函数：切换标签页时保存到 localStorage
+  const changeActiveTab = useCallback((tab: number) => {
+    setActiveTab(tab);
+    localStorage.setItem('tender_activeTab', tab.toString());
+  }, []);
+  
+  const changeStep2SubTab = useCallback((subTab: 'info' | 'requirements' | 'directory' | 'snippets') => {
+    setStep2SubTab(subTab);
+    localStorage.setItem('tender_step2SubTab', subTab);
+  }, []);
+  
+  // ✨ 包装函数：切换视图模式时保存到 localStorage
+  const changeViewMode = useCallback((mode: 'projectList' | 'projectDetail' | 'formatTemplates' | 'customRules' | 'userDocuments') => {
+    setViewMode(mode);
+    localStorage.setItem('tender_viewMode', mode);
+  }, []);
   
   // 项目状态（为每个项目保存独立状态）
   const projectStatesRef = useRef<Map<string, ProjectState>>(new Map());
@@ -385,13 +414,37 @@ export default function TenderWorkspaceV2() {
 
   // ========== 生命周期 ==========
   
+  // ✨ 初始化：加载项目列表
   useEffect(() => {
     loadProjects();
   }, []);
   
+  // ✨ 恢复上次打开的项目（在项目列表加载后）
+  useEffect(() => {
+    if (projects.length === 0) return;
+    
+    const savedProjectId = localStorage.getItem('tender_currentProjectId');
+    const savedViewMode = localStorage.getItem('tender_viewMode');
+    
+    if (savedProjectId && savedViewMode === 'projectDetail' && !currentProject) {
+      // 从项目列表中找到该项目
+      const project = projects.find(p => p.id === savedProjectId);
+      if (project) {
+        setCurrentProject(project);
+        console.log('[恢复状态] 项目:', project.name);
+      } else {
+        // 项目不存在，清除保存的状态
+        localStorage.removeItem('tender_currentProjectId');
+        changeViewMode('projectList');
+      }
+    }
+  }, [projects]);
+  
   useEffect(() => {
     if (currentProject) {
       loadAssets();
+      // 保存当前项目ID
+      localStorage.setItem('tender_currentProjectId', currentProject.id);
     }
   }, [currentProject]);
 
@@ -418,7 +471,7 @@ export default function TenderWorkspaceV2() {
       setNewProjectDesc('');
       setShowCreateForm(false);
       setCurrentProject(data);
-      setViewMode('projectDetail');
+      changeViewMode('projectDetail');
     } catch (err) {
       alert(`创建失败: ${err}`);
     }
@@ -485,7 +538,8 @@ export default function TenderWorkspaceV2() {
       setProjects(projects.filter(p => p.id !== deletingProject.id));
       if (currentProject?.id === deletingProject.id) {
         setCurrentProject(null);
-        setViewMode('projectList');
+        localStorage.removeItem('tender_currentProjectId');
+        changeViewMode('projectList');
       }
       setDeletingProject(null);
       setDeletePlan(null);
@@ -824,13 +878,20 @@ export default function TenderWorkspaceV2() {
     }
     
     try {
+      console.log('[loadRequirements] 开始加载:', projectId);
       const data = await api.get(`/api/apps/tender/projects/${projectId}/risk-analysis`);
+      console.log('[loadRequirements] 收到数据:', data);
       
       if (currentProject && currentProject.id !== projectId) {
         console.log('[loadRequirements] 加载完成时项目已切换，丢弃数据');
         return;
       }
       
+      console.log('[loadRequirements] 设置requirements state:', {
+        must_reject: data?.must_reject_table?.length,
+        checklist: data?.checklist_table?.length,
+        total: data?.stats?.total_requirements
+      });
       setRequirements(data);
     } catch (err) {
       console.error('加载要求失败:', err);
@@ -1433,7 +1494,7 @@ export default function TenderWorkspaceV2() {
         <div style={{ flex: 1, overflow: 'auto', padding: '16px' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <button
-              onClick={() => setViewMode("projectList")}
+              onClick={() => changeViewMode("projectList")}
               className="sidebar-btn"
               style={{ 
                 width: '100%',
@@ -1459,7 +1520,7 @@ export default function TenderWorkspaceV2() {
             </button>
 
             <button
-              onClick={() => setViewMode("formatTemplates")}
+              onClick={() => changeViewMode("formatTemplates")}
               className="sidebar-btn"
               style={{ 
                 width: '100%',
@@ -1485,7 +1546,7 @@ export default function TenderWorkspaceV2() {
             </button>
 
             <button
-              onClick={() => setViewMode("customRules")}
+              onClick={() => changeViewMode("customRules")}
               className="sidebar-btn"
               style={{ 
                 width: '100%',
@@ -1511,7 +1572,7 @@ export default function TenderWorkspaceV2() {
             </button>
 
             <button
-              onClick={() => setViewMode("userDocuments")}
+              onClick={() => changeViewMode("userDocuments")}
               className="sidebar-btn"
               style={{ 
                 width: '100%',
@@ -1833,8 +1894,8 @@ export default function TenderWorkspaceV2() {
                   <div
                     onClick={() => {
                       setCurrentProject(project);
-                      setViewMode('projectDetail');
-                      setActiveTab(1);
+                      changeViewMode('projectDetail');
+                      changeActiveTab(1);
                     }}
                     style={{ cursor: 'pointer', paddingRight: '32px' }}
             >
@@ -1972,8 +2033,9 @@ export default function TenderWorkspaceV2() {
         <div>
           <button 
             onClick={() => {
-              setViewMode('projectList');
+              changeViewMode('projectList');
               setCurrentProject(null);
+              localStorage.removeItem('tender_currentProjectId');
             }}
             className="link-button"
             style={{ marginRight: '16px' }}
@@ -2001,7 +2063,7 @@ export default function TenderWorkspaceV2() {
           <button
             key={tab.id}
             onClick={() => {
-              setActiveTab(tab.id);
+              changeActiveTab(tab.id);
               if (tab.id === 4) loadRulePacks();
             }}
             className={activeTab === tab.id ? 'pill-button' : 'link-button'}
@@ -2183,7 +2245,7 @@ export default function TenderWorkspaceV2() {
               ].map(tab => (
                 <button
                   key={tab.id}
-                  onClick={() => setStep2SubTab(tab.id)}
+                  onClick={() => changeStep2SubTab(tab.id)}
                   style={{
                     padding: '10px 20px',
                     background: step2SubTab === tab.id ? 'rgba(139, 92, 246, 0.2)' : 'transparent',
@@ -2671,26 +2733,21 @@ export default function TenderWorkspaceV2() {
             flexDirection: 'column',
             overflow: 'hidden'  // ✅ 防止双滚动条
           }}>
-            {directory.length > 0 ? (
+            {/* 插入范文按钮区域 - 固定在顶部，始终可见 */}
+            {directory.length > 0 && (
               <div style={{ 
-                flex: 1,  // ✅ 占据剩余空间
-                position: 'relative',  // ✅ 为内部absolute/fixed定位提供参考
-                overflow: 'hidden',  // ✅ 防止溢出
+                padding: '12px 16px', 
+                backgroundColor: snippets.length > 0 ? 'rgba(139, 92, 246, 0.1)' : 'rgba(251, 191, 36, 0.1)',
+                borderBottom: snippets.length > 0 ? '1px solid rgba(139, 92, 246, 0.2)' : '1px solid rgba(251, 191, 36, 0.2)',
                 display: 'flex',
-                flexDirection: 'column'
+                alignItems: 'center',
+                gap: '12px',
+                flexWrap: 'wrap',
+                flexShrink: 0,  // ✅ 防止被压缩
+                zIndex: 10,  // ✅ 确保在最上层
               }}>
-                {/* 插入范文按钮区域 */}
-                  <div style={{ 
-                    padding: '12px 16px', 
-                  backgroundColor: snippets.length > 0 ? 'rgba(139, 92, 246, 0.1)' : 'rgba(251, 191, 36, 0.1)',
-                  borderBottom: snippets.length > 0 ? '1px solid rgba(139, 92, 246, 0.2)' : '1px solid rgba(251, 191, 36, 0.2)',
-                    display: 'flex',
-                    alignItems: 'center',
-                  gap: '12px',
-                  flexWrap: 'wrap'
-                  }}>
-                  {snippets.length > 0 ? (
-                    <>
+                {snippets.length > 0 ? (
+                  <>
                     <button
                       onClick={() => currentProject && matchSnippetsToDirectory(currentProject.id)}
                       disabled={!currentProject || matchingSnippets || snippets.length === 0}
@@ -2710,47 +2767,50 @@ export default function TenderWorkspaceV2() {
                     <span style={{ color: '#a78bfa', fontSize: '14px' }}>
                       已提取 {snippets.length} 个范文，点击匹配到目录节点
                     </span>
-                    </>
-                  ) : (
-                    <>
-                      <span style={{ color: '#f59e0b', fontSize: '14px', flex: 1 }}>
-                        ⚠️ 暂无格式范文数据
-                      </span>
-                      <button
-                        onClick={() => {
-                          if (currentProject) {
-                            console.log('[手动刷新] 加载格式范文:', currentProject.id);
-                            loadSnippets(currentProject.id);
-                          }
-                        }}
-                        disabled={!currentProject}
-                        style={{
-                          padding: '6px 12px',
-                          backgroundColor: '#f59e0b',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '4px',
-                          cursor: 'pointer',
-                          fontSize: '13px',
-                          fontWeight: '500'
-                        }}
-                      >
-                        🔄 刷新范文数据
-                      </button>
-                      <span style={{ color: '#f59e0b', fontSize: '13px' }}>
-                        或前往"步骤2 → 格式范文"提取
-                      </span>
-                    </>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ color: '#f59e0b', fontSize: '14px', flex: 1 }}>
+                      ⚠️ 暂无格式范文数据
+                    </span>
+                    <button
+                      onClick={() => {
+                        if (currentProject) {
+                          console.log('[手动刷新] 加载格式范文:', currentProject.id);
+                          loadSnippets(currentProject.id);
+                        }
+                      }}
+                      disabled={!currentProject}
+                      style={{
+                        padding: '6px 12px',
+                        backgroundColor: '#f59e0b',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        fontWeight: '500'
+                      }}
+                    >
+                      🔄 刷新范文数据
+                    </button>
+                    <span style={{ color: '#f59e0b', fontSize: '13px' }}>
+                      或前往"步骤2 → 格式范文"提取
+                    </span>
+                  </>
                 )}
-                </div>
-                
-                <div style={{ flex: 1, overflow: 'hidden' }}>
+              </div>
+            )}
+            
+            {/* 内容区域 */}
+            {directory.length > 0 ? (
+              <div style={{ flex: 1, overflow: 'hidden' }}>
                 <DocumentComponentManagement
                   embedded={true}
                   initialDirectory={directory}
                   projectId={currentProject?.id}
+                  formatSnippets={snippets.map(s => ({ id: s.id, title: s.title }))}
                 />
-                </div>
               </div>
             ) : (
               <div className="kb-empty">

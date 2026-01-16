@@ -533,7 +533,8 @@ class TenderDAO:
                     meta = {}
             r["notes"] = meta.get("notes") or ""
             r["volume"] = meta.get("volume") or ""
-            # 保留 meta_json 供其他用途
+            # 保留 meta_json 供其他用途（如snippet_id, snippet_blocks）
+            r["meta_json"] = meta  # ✅ 显式保留meta_json
         return rows
     
     def update_node_meta_json(self, node_id: str, meta_json: Dict[str, Any]) -> None:
