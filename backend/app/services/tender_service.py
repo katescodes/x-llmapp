@@ -4360,7 +4360,8 @@ class TenderService:
             document_type="tender",
             project_info=project_info_dict
         )
-        retrieval_result = await retriever.retrieve(retrieval_context, top_k=5)
+        # ✅ 增加top_k从5到15，获取更多相关资料以生成更详细的内容
+        retrieval_result = await retriever.retrieve(retrieval_context, top_k=15)
         
         # Step 3: 构建Prompt（使用统一组件）
         prompt_builder = PromptBuilder()

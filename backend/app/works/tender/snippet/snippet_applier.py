@@ -85,15 +85,17 @@ def identify_placeholders(text: str) -> List[Dict[str, Any]]:
 def auto_fill_placeholders(
     text: str,
     project_info: Optional[Dict[str, Any]] = None,
-    custom_values: Optional[Dict[str, str]] = None
+    custom_values: Optional[Dict[str, str]] = None,
+    project_id: Optional[str] = None
 ) -> str:
     """
-    自动填充文本中的占位符
+    自动填充文本中的占位符（增强版：使用智能提取引擎）
     
     Args:
         text: 包含占位符的文本
         project_info: 项目信息（从 tender_info_v3 或 tender_projects 获取）
         custom_values: 自定义填充值
+        project_id: 项目ID（用于从知识库提取字段）
     
     Returns:
         填充后的文本
@@ -101,73 +103,121 @@ def auto_fill_placeholders(
     if not text:
         return text
     
-    # 识别所有占位符
-    placeholders = identify_placeholders(text)
-    
-    if not placeholders:
-        return text
-    
-    # 构建填充映射
-    fill_map = {}
-    
-    # 从项目信息中提取常用字段
-    if project_info:
-        # 项目名称
-        project_name = project_info.get("project_name") or project_info.get("name")
-        if project_name:
-            fill_map["项目名称"] = project_name
-            fill_map["project_name"] = project_name
-            fill_map["工程名称"] = project_name
+    # ✨ 新增：使用增强的字段提取和占位符检测
+    try:
+        from app.works.tender.field_extractor import TenderFieldExtractor
+        from app.works.tender.placeholder_detector import PlaceholderDetector
         
-        # 招标单位
-        tender_unit = project_info.get("tender_unit") or project_info.get("buyer_name")
-        if tender_unit:
-            fill_map["招标单位"] = tender_unit
-            fill_map["招标人"] = tender_unit
-            fill_map["采购人"] = tender_unit
+        extractor = TenderFieldExtractor()
+        detector = PlaceholderDetector()
         
-        # 预算金额
-        budget = project_info.get("budget") or project_info.get("estimated_price")
-        if budget:
-            fill_map["预算金额"] = str(budget)
-            fill_map["投标报价"] = str(budget)
+        # 1. 从知识库提取字段（如果提供了project_id）
+        extracted_fields = {}
+        if project_id:
+            logger.info(f"[AutoFill] 从项目 {project_id} 的知识库提取字段...")
+            extracted_fields = extractor.extract_from_project(project_id)
+            logger.info(f"[AutoFill] 提取到 {len(extracted_fields)} 个字段")
         
-        # 工期
-        duration = project_info.get("duration") or project_info.get("construction_period")
-        if duration:
-            fill_map["工期"] = str(duration)
-            fill_map["工程工期"] = str(duration)
+        # 2. 从project_info补充字段（兼容旧逻辑）
+        if project_info:
+            # 项目名称
+            project_name = project_info.get("project_name") or project_info.get("name")
+            if project_name and not extracted_fields.get("project_name"):
+                extracted_fields["project_name"] = project_name
+            
+            # 招标单位
+            tender_unit = project_info.get("tender_unit") or project_info.get("buyer_name")
+            if tender_unit and not extracted_fields.get("purchaser_name"):
+                extracted_fields["purchaser_name"] = tender_unit
+        
+        # 3. 自定义值覆盖
+        if custom_values:
+            # 将custom_values的键映射到标准字段名
+            for key, value in custom_values.items():
+                # 尝试查找匹配的标准字段名
+                if key in ["项目名称", "project_name", "工程名称"]:
+                    extracted_fields["project_name"] = value
+                elif key in ["招标人", "采购人", "招标单位"]:
+                    extracted_fields["purchaser_name"] = value
+                # 其他直接添加
+                else:
+                    extracted_fields[key] = value
+        
+        # 4. 使用增强的占位符检测和填充
+        filled_text = detector.fill_placeholders(text, extracted_fields)
+        
+        return filled_text
     
-    # 自定义值优先
-    if custom_values:
-        fill_map.update(custom_values)
-    
-    # 按位置从后向前替换（避免位置偏移）
-    result = text
-    for placeholder in sorted(placeholders, key=lambda x: x["start"], reverse=True):
-        key = placeholder["key"]
+    except Exception as e:
+        logger.error(f"[AutoFill] 增强填充失败，回退到旧逻辑: {e}")
         
-        # 查找匹配的填充值
-        fill_value = None
+        # 回退到旧逻辑
+        placeholders = identify_placeholders(text)
         
-        # 精确匹配
-        if key in fill_map:
-            fill_value = fill_map[key]
-        else:
-            # 模糊匹配
-            for map_key, map_value in fill_map.items():
-                if map_key in key or key in map_key:
-                    fill_value = map_value
-                    break
+        if not placeholders:
+            return text
         
-        # 如果找到了填充值，进行替换
-        if fill_value:
-            start = placeholder["start"]
-            end = placeholder["end"]
-            result = result[:start] + str(fill_value) + result[end:]
-            logger.debug(f"Filled placeholder '{placeholder['placeholder']}' with '{fill_value}'")
-    
-    return result
+        # 构建填充映射
+        fill_map = {}
+        
+        # 从项目信息中提取常用字段
+        if project_info:
+            # 项目名称
+            project_name = project_info.get("project_name") or project_info.get("name")
+            if project_name:
+                fill_map["项目名称"] = project_name
+                fill_map["project_name"] = project_name
+                fill_map["工程名称"] = project_name
+            
+            # 招标单位
+            tender_unit = project_info.get("tender_unit") or project_info.get("buyer_name")
+            if tender_unit:
+                fill_map["招标单位"] = tender_unit
+                fill_map["招标人"] = tender_unit
+                fill_map["采购人"] = tender_unit
+            
+            # 预算金额
+            budget = project_info.get("budget") or project_info.get("estimated_price")
+            if budget:
+                fill_map["预算金额"] = str(budget)
+                fill_map["投标报价"] = str(budget)
+            
+            # 工期
+            duration = project_info.get("duration") or project_info.get("construction_period")
+            if duration:
+                fill_map["工期"] = str(duration)
+                fill_map["工程工期"] = str(duration)
+        
+        # 自定义值优先
+        if custom_values:
+            fill_map.update(custom_values)
+        
+        # 按位置从后向前替换（避免位置偏移）
+        result = text
+        for placeholder in sorted(placeholders, key=lambda x: x["start"], reverse=True):
+            key = placeholder["key"]
+            
+            # 查找匹配的填充值
+            fill_value = None
+            
+            # 精确匹配
+            if key in fill_map:
+                fill_value = fill_map[key]
+            else:
+                # 模糊匹配
+                for map_key, map_value in fill_map.items():
+                    if map_key in key or key in map_key:
+                        fill_value = map_value
+                        break
+            
+            # 如果找到了填充值，进行替换
+            if fill_value:
+                start = placeholder["start"]
+                end = placeholder["end"]
+                result = result[:start] + str(fill_value) + result[end:]
+                logger.debug(f"Filled placeholder '{placeholder['placeholder']}' with '{fill_value}'")
+        
+        return result
 
 
 def apply_snippet_to_node(
@@ -283,8 +333,13 @@ def apply_snippet_to_node(
                         elif isinstance(meta_json_data, str):
                             project_info.update(json.loads(meta_json_data))
                 
-                # 填充占位符
-                filled_text = auto_fill_placeholders(snippet_text, project_info, custom_values)
+                # ✨ 填充占位符（使用增强引擎，传入project_id）
+                filled_text = auto_fill_placeholders(
+                    snippet_text, 
+                    project_info, 
+                    custom_values,
+                    project_id=project_id  # 新增参数
+                )
                 
                 # 计算填充了多少个
                 filled_placeholders = identify_placeholders(filled_text)

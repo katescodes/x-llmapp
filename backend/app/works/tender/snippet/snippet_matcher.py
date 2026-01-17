@@ -33,6 +33,7 @@ def normalize_title(title: str) -> str:
     标题归一化
     - 去除编号
     - 去除修饰词
+    - 去除所有空格
     - 统一格式
     """
     if not title:
@@ -48,6 +49,9 @@ def normalize_title(title: str) -> str:
     
     # 去除括号内容（如 "投标函（格式）" -> "投标函"）
     title = re.sub(r'[（\(].*?[）\)]', '', title)
+    
+    # ✅ 去除所有空格（解决"投 标 函"与"投标函"匹配问题）
+    title = re.sub(r'\s+', '', title)
     
     return title.strip()
 

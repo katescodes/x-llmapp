@@ -732,35 +732,52 @@ export default function DocumentComponentManagement({
   const handleRemoveTemplateMount = async (nodeId: string) => {
     if (!projectId || !embedded) return;
     
-    if (!confirm('确定要删除此章节的范本挂载吗？')) return;
+    if (!confirm('确定要删除此章节的范本挂载吗？删除后可以使用AI重新生成内容。')) return;
     
     try {
       const response = await fetch(`/api/apps/tender/projects/${projectId}/directory/${nodeId}/template-mount`, {
         method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('token') || ''}`,
+        },
       });
       
       const data = await response.json();
       
       if (data.success) {
-        // 更新内容，清除 bodyMeta 中的 source 和 fragment_id
+        // ✅ 1. 清除 contents 状态
         setContents(prev => {
-          const content = prev[nodeId];
-          if (content) {
-            return {
-              ...prev,
-              [nodeId]: {
-                ...content,
-                bodyMeta: {
-                  ...content.bodyMeta,
-                  source: null,
-                  fragment_id: null,
-                },
-              },
-            };
-          }
-          return prev;
+          const newContents = { ...prev };
+          delete newContents[nodeId]; // 完全删除该节点的内容
+          return newContents;
         });
-        alert('范本挂载已删除');
+        
+        // ✅ 2. 更新 directory 状态，清除挂载标记
+        setDirectory((prevTree: DocumentNode[]) => {
+          const updateNode = (nodes: DocumentNode[]): DocumentNode[] => {
+            return nodes.map(node => {
+              if (node.id === nodeId) {
+                // 清除挂载状态
+                return {
+                  ...node,
+                  hasSnippet: false,
+                  snippetId: undefined,
+                };
+              }
+              // 递归更新子节点
+              if (node.children && node.children.length > 0) {
+                return {
+                  ...node,
+                  children: updateNode(node.children),
+                };
+              }
+              return node;
+            });
+          };
+          return updateNode(prevTree);
+        });
+        
+        alert('✅ 范本挂载已删除，您现在可以使用AI重新生成内容了');
       } else {
         alert(data.message || '删除失败');
       }

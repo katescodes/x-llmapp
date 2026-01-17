@@ -122,9 +122,31 @@ def create_project(req: ProjectCreateReq, request: Request, user=Depends(require
 
 @router.get("/projects", response_model=List[ProjectOut])
 def list_projects(request: Request, user=Depends(get_current_user_sync)):
-    """列出当前用户的所有项目"""
+    """列出当前用户的所有项目（管理员可查看所有项目）"""
     dao = TenderDAO(_get_pool(request))
-    return dao.list_projects(owner_id=user.user_id)
+    pool = _get_pool(request)
+    
+    # 检查用户是否是管理员
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT EXISTS(
+                    SELECT 1 
+                    FROM user_roles ur
+                    JOIN roles r ON ur.role_id = r.id
+                    WHERE ur.user_id = %s 
+                    AND r.code = 'admin'
+                    AND r.is_active = TRUE
+                )
+            """, (user.user_id,))
+            row = cur.fetchone()
+            is_admin = list(row.values())[0] if row else False
+    
+    # 管理员可以看到所有项目，普通用户只能看到自己的项目
+    if is_admin:
+        return dao.list_projects(owner_id=None)  # None表示查询所有项目
+    else:
+        return dao.list_projects(owner_id=user.user_id)
 
 
 class ProjectUpdateReq(BaseModel):
@@ -1626,48 +1648,70 @@ def remove_template_mount(
 ):
     """
     删除章节的范本挂载
-    - 清除 source="TEMPLATE_SAMPLE" 和 fragment_id
-    - 保留其他内容（如AI生成的内容）
+    - 删除 project_section_body 中的记录
+    - 清除 meta_json 中的 snippet_blocks 和 snippet_id
+    - 允许后续AI重新生成
     """
+    import json
     dao = TenderDAO(_get_pool(request))
+    pool = _get_pool(request)
     
     # 检查项目是否存在
     project = dao.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    # 获取当前章节正文
-    section_body = dao.get_section_body(project_id, node_id)
+    # 1. ✅ 直接删除 project_section_body 中的记录（source字段有NOT NULL约束）
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM project_section_body
+                WHERE project_id = %s AND node_id = %s
+                """,
+                (project_id, node_id)
+            )
+            conn.commit()
+            logger.info(f"[remove_template_mount] 已删除section_body记录: project_id={project_id}, node_id={node_id}")
     
-    if not section_body:
-        raise HTTPException(status_code=404, detail="Section body not found")
-    
-    # 检查是否有范本挂载
-    if section_body.get("source") != "TEMPLATE_SAMPLE" or not section_body.get("fragment_id"):
-        return {
-            "success": False,
-            "message": "该章节未挂载范本"
-        }
-    
-    # 删除范本挂载：将 source 和 fragment_id 清空
-    # 如果有 content_html，保留它但将 source 改为 None
-    content_html = section_body.get("content_html")
-    content_json = section_body.get("content_json")
-    
-    dao.upsert_section_body(
-        project_id=project_id,
-        node_id=node_id,
-        source=None,  # 清除 source
-        fragment_id=None,  # 清除 fragment_id
-        content_html=content_html,  # 保留原有内容
-        content_json=content_json,
-    )
+    # 2. ✅ 清除 tender_directory_nodes 中的 meta_json.snippet_blocks
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            # 获取当前 meta_json
+            cur.execute(
+                "SELECT meta_json FROM tender_directory_nodes WHERE project_id = %s AND id = %s",
+                (project_id, node_id)
+            )
+            row = cur.fetchone()
+            
+            if row:
+                meta_json = row.get("meta_json") or {}
+                if isinstance(meta_json, str):
+                    try:
+                        meta_json = json.loads(meta_json)
+                    except:
+                        meta_json = {}
+                
+                # 清除 snippet 相关字段
+                meta_json.pop("snippet_blocks", None)
+                meta_json.pop("snippet_id", None)
+                
+                # 更新数据库
+                cur.execute(
+                    """
+                    UPDATE tender_directory_nodes
+                    SET meta_json = %s::jsonb, updated_at = CURRENT_TIMESTAMP
+                    WHERE project_id = %s AND id = %s
+                    """,
+                    (json.dumps(meta_json, ensure_ascii=False), project_id, node_id)
+                )
+                conn.commit()
     
     logger.info(f"[remove_template_mount] 已删除范本挂载: project_id={project_id}, node_id={node_id}")
     
     return {
         "success": True,
-        "message": "已删除范本挂载"
+        "message": "已删除范本挂载，可以重新生成内容"
     }
 
 

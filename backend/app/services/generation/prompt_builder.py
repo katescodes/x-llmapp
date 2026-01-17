@@ -49,14 +49,14 @@ class PromptBuilder:
     
     # 基础配置
     BASE_TEMPERATURE = 0.7
-    BASE_MAX_TOKENS = 2000
+    BASE_MAX_TOKENS = 4000  # ✅ 增加到4000，生成更详细的内容
     
-    # 字数要求映射
+    # 字数要求映射 - ✅ 增加最小字数要求
     MIN_WORDS_MAP = {
-        1: 800,
-        2: 500,
-        3: 300,
-        4: 200
+        1: 1500,  # 一级标题要求更详细
+        2: 800,   # 二级标题增加要求
+        3: 500,   # 三级标题增加要求
+        4: 300    # 四级标题增加要求
     }
     
     def build(self, context: PromptContext) -> PromptOutput:
@@ -88,11 +88,15 @@ class PromptBuilder:
         temperature = self.BASE_TEMPERATURE
         max_tokens = self.BASE_MAX_TOKENS
         
-        # 根据层级调整token数
+        # 根据层级调整token数 - ✅ 增加各级标题的token限制
         if context.section_level == 1:
-            max_tokens = 3000
+            max_tokens = 6000  # 一级标题：更详细的内容
+        elif context.section_level == 2:
+            max_tokens = 5000  # 二级标题
+        elif context.section_level == 3:
+            max_tokens = 4000  # 三级标题
         elif context.section_level >= 4:
-            max_tokens = 1500
+            max_tokens = 3000  # 四级及以下标题
         
         return PromptOutput(
             system_prompt=system_prompt,

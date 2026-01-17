@@ -52,11 +52,21 @@ class HtmlToDocxInserter:
             if not para_html:
                 continue
             
-            # 检查是否是表格占位符
-            if para_html.startswith('__TABLE_') and para_html.endswith('__'):
-                table_idx = int(para_html[8:-2])
-                if 0 <= table_idx < len(tables):
-                    HtmlToDocxInserter._insert_table(dest_doc, tables[table_idx])
+            # ✅ 检查段落中是否包含表格占位符（使用正则表达式精确匹配）
+            table_placeholders = re.findall(r'__TABLE_(\d+)__', para_html)
+            
+            if table_placeholders:
+                # 如果段落只包含表格占位符（可能有多个，用换行分隔）
+                # 处理每个表格占位符
+                for table_idx_str in table_placeholders:
+                    table_idx = int(table_idx_str)
+                    if 0 <= table_idx < len(tables):
+                        HtmlToDocxInserter._insert_table(dest_doc, tables[table_idx])
+                
+                # 如果段落中还有其他内容，移除表格占位符后插入
+                remaining_text = re.sub(r'__TABLE_\d+__', '', para_html).strip()
+                if remaining_text:
+                    HtmlToDocxInserter._insert_paragraph(dest_doc, remaining_text)
             # 检查是否是列表项
             elif '<li>' in para_html or '<ul>' in para_html or '<ol>' in para_html:
                 HtmlToDocxInserter._insert_list(dest_doc, para_html)

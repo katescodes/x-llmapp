@@ -478,13 +478,13 @@ export default function TenderWorkspaceV2() {
   };
 
   // 编辑项目
-  const openEditProject = (proj: TenderProject) => {
+  const openEditProject = useCallback((proj: TenderProject) => {
     setEditingProject(proj);
     setEditProjectName(proj.name);
     setEditProjectDesc(proj.description || '');
-  };
+  }, []);
 
-  const saveEditProject = async () => {
+  const saveEditProject = useCallback(async () => {
     if (!editingProject || !editProjectName.trim()) {
       alert('项目名称不能为空');
       return;
@@ -499,7 +499,7 @@ export default function TenderWorkspaceV2() {
         headers: { 'Content-Type': 'application/json' },
       });
       
-      setProjects(projects.map(p => p.id === updated.id ? updated : p));
+      setProjects(prev => prev.map(p => p.id === updated.id ? updated : p));
       if (currentProject?.id === updated.id) {
         setCurrentProject(updated);
       }
@@ -508,10 +508,10 @@ export default function TenderWorkspaceV2() {
     } catch (err: any) {
       alert(`更新失败: ${err.message || err}`);
     }
-  };
+  }, [editingProject, editProjectName, editProjectDesc, currentProject]);
 
   // 删除项目
-  const openDeleteProject = async (proj: TenderProject) => {
+  const openDeleteProject = useCallback(async (proj: TenderProject) => {
     setDeletingProject(proj);
     try {
       const plan = await api.request(`/api/apps/tender/projects/${proj.id}/delete-plan`);
@@ -520,9 +520,9 @@ export default function TenderWorkspaceV2() {
       alert(`获取删除计划失败: ${err.message || err}`);
       setDeletingProject(null);
     }
-  };
+  }, []);
 
-  const confirmDeleteProject = async () => {
+  const confirmDeleteProject = useCallback(async () => {
     if (!deletingProject || !deletePlan) return;
     
     setIsDeleting(true);
@@ -535,7 +535,7 @@ export default function TenderWorkspaceV2() {
         headers: { 'Content-Type': 'application/json' },
       });
       
-      setProjects(projects.filter(p => p.id !== deletingProject.id));
+      setProjects(prev => prev.filter(p => p.id !== deletingProject.id));
       if (currentProject?.id === deletingProject.id) {
         setCurrentProject(null);
         localStorage.removeItem('tender_currentProjectId');
@@ -549,7 +549,7 @@ export default function TenderWorkspaceV2() {
     } finally {
       setIsDeleting(false);
     }
-  };
+  }, [deletingProject, deletePlan, currentProject, changeViewMode]);
 
   // 批量删除
   const handleBatchDelete = async () => {
@@ -1891,6 +1891,7 @@ export default function TenderWorkspaceV2() {
                     {isSelected && '✓'}
                   </div>
 
+                  {/* 项目信息区域 - 可点击打开详情 */}
                   <div
                     onClick={() => {
                       setCurrentProject(project);
@@ -1898,44 +1899,44 @@ export default function TenderWorkspaceV2() {
                       changeActiveTab(1);
                     }}
                     style={{ cursor: 'pointer', paddingRight: '32px' }}
-            >
-              <div style={{ 
-                fontSize: '18px', 
-                fontWeight: '600', 
-                color: '#e2e8f0', 
-                marginBottom: '12px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px'
-              }}>
-                <span style={{ fontSize: '20px' }}>📁</span>
-                {project.name}
-              </div>
-              {project.description && (
-                <div style={{ 
-                  fontSize: '14px', 
-                  color: '#94a3b8', 
-                  marginBottom: '16px',
-                  lineHeight: '1.5'
-                }}>
-                  {project.description}
-                </div>
-              )}
-              <div style={{ 
-                fontSize: '12px', 
-                color: '#64748b',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px'
-              }}>
-                <span>🕒</span>
-                {project.created_at && new Date(project.created_at).toLocaleDateString('zh-CN', {
-                  year: 'numeric',
-                  month: '2-digit',
-                  day: '2-digit'
-                })}
-              </div>
-            </div>
+                  >
+                    <div style={{ 
+                      fontSize: '18px', 
+                      fontWeight: '600', 
+                      color: '#e2e8f0', 
+                      marginBottom: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px'
+                    }}>
+                      <span style={{ fontSize: '20px' }}>📁</span>
+                      {project.name}
+                    </div>
+                    {project.description && (
+                      <div style={{ 
+                        fontSize: '14px', 
+                        color: '#94a3b8', 
+                        marginBottom: '16px',
+                        lineHeight: '1.5'
+                      }}>
+                        {project.description}
+                      </div>
+                    )}
+                    <div style={{ 
+                      fontSize: '12px', 
+                      color: '#64748b',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px'
+                    }}>
+                      <span>🕒</span>
+                      {project.created_at && new Date(project.created_at).toLocaleDateString('zh-CN', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit'
+                      })}
+                    </div>
+                  </div>
 
                   {/* 操作按钮 */}
                   <div style={{ 
@@ -1991,7 +1992,7 @@ export default function TenderWorkspaceV2() {
                     >
                       🗑️ 删除
                     </button>
-        </div>
+                  </div>
                 </div>
               );
             })}
@@ -2018,6 +2019,151 @@ export default function TenderWorkspaceV2() {
           }}>
             <div style={{ fontSize: '48px', marginBottom: '16px' }}>📂</div>
             <div>暂无项目，点击"新建项目"开始</div>
+          </div>
+        )}
+
+        {/* 编辑项目模态框 */}
+        {editingProject && (
+          <div className="modal-overlay" onClick={() => setEditingProject(null)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <h3 style={{ marginBottom: '16px', color: '#e2e8f0' }}>编辑项目</h3>
+              <div style={{ marginBottom: '12px' }}>
+                <label className="label-text" style={{ color: '#cbd5e1' }}>项目名称 *</label>
+                <input
+                  type="text"
+                  value={editProjectName}
+                  onChange={(e) => setEditProjectName(e.target.value)}
+                  placeholder="请输入项目名称"
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(148, 163, 184, 0.25)',
+                    borderRadius: '6px',
+                    color: '#e2e8f0',
+                    fontSize: '14px',
+                  }}
+                />
+              </div>
+              <div style={{ marginBottom: '16px' }}>
+                <label className="label-text" style={{ color: '#cbd5e1' }}>项目描述</label>
+                <textarea
+                  value={editProjectDesc}
+                  onChange={(e) => setEditProjectDesc(e.target.value)}
+                  placeholder="可选"
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    minHeight: '60px',
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(148, 163, 184, 0.25)',
+                    borderRadius: '6px',
+                    color: '#e2e8f0',
+                    fontSize: '14px',
+                    resize: 'vertical',
+                  }}
+                />
+              </div>
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => setEditingProject(null)}
+                  style={{
+                    padding: '8px 16px',
+                    background: 'rgba(148, 163, 184, 0.2)',
+                    border: '1px solid rgba(148, 163, 184, 0.3)',
+                    borderRadius: '6px',
+                    color: '#cbd5e1',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  取消
+                </button>
+                <button
+                  onClick={saveEditProject}
+                  style={{
+                    padding: '8px 16px',
+                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                    border: 'none',
+                    borderRadius: '6px',
+                    color: '#ffffff',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 删除项目模态框 */}
+        {deletingProject && deletePlan && (
+          <div className="modal-overlay" onClick={() => !isDeleting && setDeletingProject(null)}>
+            <div className="modal-content" style={{ maxWidth: '600px' }} onClick={(e) => e.stopPropagation()}>
+              <h3 style={{ marginBottom: '16px', color: '#dc3545' }}>⚠️ 删除项目</h3>
+              <div style={{ marginBottom: '16px', padding: '12px', background: 'rgba(252, 211, 77, 0.1)', border: '1px solid rgba(252, 211, 77, 0.3)', borderRadius: '6px', color: '#fbbf24' }}>
+                <strong>{deletePlan.warning}</strong>
+              </div>
+              
+              {deletePlan.items && deletePlan.items.length > 0 && (
+                <div style={{ marginBottom: '16px' }}>
+                  <h4 style={{ marginBottom: '8px', color: '#e2e8f0' }}>将删除以下资源：</h4>
+                  {deletePlan.items.map((item: any, idx: number) => (
+                    <div key={idx} style={{ padding: '8px', background: 'rgba(30, 41, 59, 0.6)', marginBottom: '8px', borderRadius: '6px', border: '1px solid rgba(148, 163, 184, 0.2)' }}>
+                      <div style={{ fontWeight: 'bold', marginBottom: '4px', color: '#e2e8f0' }}>
+                        {item.type}: {item.count} 个
+                      </div>
+                      {item.samples && item.samples.length > 0 && (
+                        <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                          示例: {item.samples.slice(0, 3).join(', ')}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              
+              <div style={{ marginBottom: '16px', padding: '12px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '6px', color: '#fca5a5' }}>
+                确定要删除项目 "<strong>{deletingProject.name}</strong>" 吗？此操作无法撤销！
+              </div>
+              
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                <button 
+                  onClick={() => setDeletingProject(null)}
+                  disabled={isDeleting}
+                  style={{
+                    padding: '8px 16px',
+                    background: 'rgba(148, 163, 184, 0.2)',
+                    border: '1px solid rgba(148, 163, 184, 0.3)',
+                    borderRadius: '6px',
+                    color: '#cbd5e1',
+                    fontSize: '14px',
+                    cursor: isDeleting ? 'not-allowed' : 'pointer',
+                    opacity: isDeleting ? 0.6 : 1,
+                  }}
+                >
+                  取消
+                </button>
+                <button 
+                  onClick={confirmDeleteProject}
+                  disabled={isDeleting}
+                  style={{
+                    padding: '8px 16px',
+                    background: '#dc3545',
+                    border: 'none',
+                    borderRadius: '6px',
+                    color: '#ffffff',
+                    fontSize: '14px',
+                    cursor: isDeleting ? 'not-allowed' : 'pointer',
+                    opacity: isDeleting ? 0.6 : 1,
+                  }}
+                >
+                  {isDeleting ? '删除中...' : '确认删除'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -3066,151 +3212,6 @@ export default function TenderWorkspaceV2() {
         )}
       </div>
 
-      {/* 编辑项目模态框 */}
-      {editingProject && (
-        <div className="modal-overlay" onClick={() => setEditingProject(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ marginBottom: '16px', color: '#e2e8f0' }}>编辑项目</h3>
-            <div style={{ marginBottom: '12px' }}>
-              <label className="label-text" style={{ color: '#cbd5e1' }}>项目名称 *</label>
-              <input
-                type="text"
-                value={editProjectName}
-                onChange={(e) => setEditProjectName(e.target.value)}
-                placeholder="请输入项目名称"
-                style={{
-                  width: '100%',
-                  padding: '10px',
-                  background: 'rgba(15, 23, 42, 0.6)',
-                  border: '1px solid rgba(148, 163, 184, 0.25)',
-                  borderRadius: '6px',
-                  color: '#e2e8f0',
-                  fontSize: '14px',
-                }}
-              />
-            </div>
-            <div style={{ marginBottom: '16px' }}>
-              <label className="label-text" style={{ color: '#cbd5e1' }}>项目描述</label>
-              <textarea
-                value={editProjectDesc}
-                onChange={(e) => setEditProjectDesc(e.target.value)}
-                placeholder="可选"
-                style={{
-                  width: '100%',
-                  padding: '10px',
-                  minHeight: '60px',
-                  background: 'rgba(15, 23, 42, 0.6)',
-                  border: '1px solid rgba(148, 163, 184, 0.25)',
-                  borderRadius: '6px',
-                  color: '#e2e8f0',
-                  fontSize: '14px',
-                  resize: 'vertical',
-                }}
-              />
-            </div>
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => setEditingProject(null)}
-                style={{
-                  padding: '8px 16px',
-                  background: 'rgba(148, 163, 184, 0.2)',
-                  border: '1px solid rgba(148, 163, 184, 0.3)',
-                  borderRadius: '6px',
-                  color: '#cbd5e1',
-                  fontSize: '14px',
-                  cursor: 'pointer',
-                }}
-              >
-                取消
-              </button>
-              <button
-                onClick={saveEditProject}
-                style={{
-                  padding: '8px 16px',
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  border: 'none',
-                  borderRadius: '6px',
-                  color: '#ffffff',
-                  fontSize: '14px',
-                  cursor: 'pointer',
-                }}
-              >
-                保存
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 删除项目模态框 */}
-      {deletingProject && deletePlan && (
-        <div className="modal-overlay" onClick={() => !isDeleting && setDeletingProject(null)}>
-          <div className="modal-content" style={{ maxWidth: '600px' }} onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ marginBottom: '16px', color: '#dc3545' }}>⚠️ 删除项目</h3>
-            <div style={{ marginBottom: '16px', padding: '12px', background: 'rgba(252, 211, 77, 0.1)', border: '1px solid rgba(252, 211, 77, 0.3)', borderRadius: '6px', color: '#fbbf24' }}>
-              <strong>{deletePlan.warning}</strong>
-            </div>
-            
-            {deletePlan.items && deletePlan.items.length > 0 && (
-              <div style={{ marginBottom: '16px' }}>
-                <h4 style={{ marginBottom: '8px', color: '#e2e8f0' }}>将删除以下资源：</h4>
-                {deletePlan.items.map((item: any, idx: number) => (
-                  <div key={idx} style={{ padding: '8px', background: 'rgba(30, 41, 59, 0.6)', marginBottom: '8px', borderRadius: '6px', border: '1px solid rgba(148, 163, 184, 0.2)' }}>
-                    <div style={{ fontWeight: 'bold', marginBottom: '4px', color: '#e2e8f0' }}>
-                      {item.type}: {item.count} 个
-                    </div>
-                    {item.samples && item.samples.length > 0 && (
-                      <div style={{ fontSize: '12px', color: '#94a3b8' }}>
-                        示例: {item.samples.slice(0, 3).join(', ')}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-            
-            <div style={{ marginBottom: '16px', padding: '12px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '6px', color: '#fca5a5' }}>
-              确定要删除项目 "<strong>{deletingProject.name}</strong>" 吗？此操作无法撤销！
-            </div>
-            
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <button 
-                onClick={() => setDeletingProject(null)}
-                disabled={isDeleting}
-                style={{
-                  padding: '8px 16px',
-                  background: 'rgba(148, 163, 184, 0.2)',
-                  border: '1px solid rgba(148, 163, 184, 0.3)',
-                  borderRadius: '6px',
-                  color: '#cbd5e1',
-                  fontSize: '14px',
-                  cursor: isDeleting ? 'not-allowed' : 'pointer',
-                  opacity: isDeleting ? 0.6 : 1,
-                }}
-              >
-                取消
-              </button>
-              <button 
-                onClick={confirmDeleteProject}
-                disabled={isDeleting}
-                style={{
-                  padding: '8px 16px',
-                  background: '#dc3545',
-                  border: 'none',
-                  borderRadius: '6px',
-                  color: '#ffffff',
-                  fontSize: '14px',
-                  cursor: isDeleting ? 'not-allowed' : 'pointer',
-                  opacity: isDeleting ? 0.6 : 1,
-                }}
-              >
-                {isDeleting ? '删除中...' : '确认删除'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      
       {/* 范文匹配确认面板 */}
       {showSnippetMatchPanel && snippetMatches.length > 0 && (
         <SnippetMatchPanel

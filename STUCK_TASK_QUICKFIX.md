@@ -90,3 +90,4 @@ docker exec localgpt-postgres psql -U localgpt -d localgpt -c "
 
 
 
+
